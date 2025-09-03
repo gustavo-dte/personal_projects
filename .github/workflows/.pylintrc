@@ -1,0 +1,44 @@
+[MASTER]
+# Disable Pylint for this directory
+disable=all
+
+[MESSAGES CONTROL]
+# Disable all pylint messages
+disable=all
+
+[REPORTS]
+# Don't generate reports
+reports=no
+
+[FORMAT]
+# Don't check formatting
+max-line-length=120
+
+[BASIC]
+# Don't check naming conventions
+good-names=*
+
+[DESIGN]
+# Don't check design issues
+max-args=99
+max-locals=99
+max-returns=99
+max-branches=99
+max-statements=99
+max-parents=99
+max-attributes=99
+max-public-methods=99
+max-bool-expr=99
+
+[CLASSES]
+# Don't check class issues
+valid-classmethod-first-arg=*
+valid-metaclass-classmethod-first-arg=*
+
+[IMPORTS]
+# Don't check import issues
+allow-any-import-level=*
+
+[EXCEPTIONS]
+# Don't check exception issues
+overgeneral-exceptions=*

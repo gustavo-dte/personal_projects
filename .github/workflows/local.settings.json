@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "DELTA_MINUTES": "2",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "PRIMARY_QUEUE_NAME": "<primary-queue-name>",
+    "PRIMARY_SERVICEBUS_CONN": "<primary-namespace-connection-string>",
+    "REPLICATION_TYPE": "primary_to_secondary",
+    "RTO_MINUTES": "10",
+    "SECONDARY_QUEUE_NAME": "<secondary-queue-name>",
+    "SECONDARY_SERVICEBUS_CONN": "<secondary-namespace-connection-string>"
+  }
+}
