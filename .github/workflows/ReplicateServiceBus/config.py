@@ -28,6 +28,11 @@ class ReplicationConfig:
     secondary_queue: str | None
     rto_minutes: int  # Recovery Time Objective in minutes
     delta_minutes: int  # Additional buffer time in minutes
+    
+    # Dead letter queue configuration for failed replication attempts
+    dead_letter_enabled: bool = True
+    max_delivery_count: int = 3  # Max attempts before sending to dead letter queue
+    dlq_time_to_live_minutes: int = 1440  # 24 hours in dead letter queue
 
     @classmethod
     def from_environment(cls) -> "ReplicationConfig":
@@ -50,33 +55,87 @@ class ReplicationConfig:
         if not replication_type_raw:
             raise ValueError(
                 "REPLICATION_TYPE environment variable is not set. "
-                "This setting is required to determine replication direction."
+                "This setting is required to determine replication direction. "
+                "Valid values: 'primary_to_secondary' or 'secondary_to_primary'"
             )
         
         replication_type = replication_type_raw.lower()
         allowed_types = ["primary_to_secondary", "secondary_to_primary"]
         if replication_type not in allowed_types:
             raise ValueError(
-                "Invalid REPLICATION_TYPE: {}. Must be one of: {}".format(
-                    replication_type, ', '.join(allowed_types)
-                )
+                f"Invalid REPLICATION_TYPE: '{replication_type_raw}'. "
+                f"Must be one of: {', '.join(allowed_types)}"
             )
 
-        # Now get the connection strings and queue names
-        # These might be None if not set, which we'll validate later
+        # Get the connection strings and queue names
+        # We'll validate these based on the replication direction
         primary_connection_string = os.environ.get("PRIMARY_SERVICEBUS_CONN")
         primary_queue_name = os.environ.get("PRIMARY_QUEUE_NAME")
         secondary_connection_string = os.environ.get("SECONDARY_SERVICEBUS_CONN")
         secondary_queue_name = os.environ.get("SECONDARY_QUEUE_NAME")
 
-        # Get the timing settings with sensible defaults
+        # Validate required environment variables based on replication type
+        missing_vars = []
+        if replication_type == "primary_to_secondary":
+            if not secondary_connection_string:
+                missing_vars.append("SECONDARY_SERVICEBUS_CONN")
+            if not secondary_queue_name:
+                missing_vars.append("SECONDARY_QUEUE_NAME")
+        elif replication_type == "secondary_to_primary":
+            if not primary_connection_string:
+                missing_vars.append("PRIMARY_SERVICEBUS_CONN")
+            if not primary_queue_name:
+                missing_vars.append("PRIMARY_QUEUE_NAME")
+                
+        if missing_vars:
+            raise ValueError(
+                f"Missing required environment variables for {replication_type}: "
+                f"{', '.join(missing_vars)}. These are required for the "
+                f"destination configuration."
+            )
+
+        # Get the timing settings with sensible defaults and validate them
         try:
-            recovery_time_minutes = int(os.environ.get("RTO_MINUTES", "10"))
-            buffer_minutes = int(os.environ.get("DELTA_MINUTES", "2"))
+            rto_minutes_str = os.environ.get("RTO_MINUTES", "10")
+            delta_minutes_str = os.environ.get("DELTA_MINUTES", "2")
+            
+            recovery_time_minutes = int(rto_minutes_str)
+            buffer_minutes = int(delta_minutes_str)
+            
+            # Validate reasonable ranges
+            if recovery_time_minutes <= 0:
+                raise ValueError("RTO_MINUTES must be a positive integer")
+            if buffer_minutes < 0:
+                raise ValueError("DELTA_MINUTES must be a non-negative integer")
+                
         except ValueError as conversion_error:
             raise ValueError(
-                "RTO_MINUTES and DELTA_MINUTES must be valid integer values"
+                f"Invalid timing configuration: {conversion_error}. "
+                "RTO_MINUTES and DELTA_MINUTES must be valid positive integers."
             ) from conversion_error
+
+        # Handle dead letter queue configuration from environment variables
+        try:
+            dlq_enabled_str = os.environ.get("DLQ_ENABLED", "true")
+            max_delivery_str = os.environ.get("MAX_DELIVERY_COUNT", "3")
+            dlq_ttl_minutes_str = os.environ.get("DLQ_TTL_MINUTES", "1440")
+            
+            dlq_enabled = dlq_enabled_str.lower() == "true"
+            max_delivery = int(max_delivery_str)
+            dlq_ttl_minutes = int(dlq_ttl_minutes_str)
+            
+            # Validate reasonable ranges
+            if max_delivery <= 0:
+                raise ValueError("MAX_DELIVERY_COUNT must be a positive integer")
+            if dlq_ttl_minutes <= 0:
+                raise ValueError("DLQ_TTL_MINUTES must be a positive integer")
+                
+        except ValueError as dlq_error:
+            raise ValueError(
+                f"Invalid dead letter queue configuration: {dlq_error}. "
+                "MAX_DELIVERY_COUNT and DLQ_TTL_MINUTES must be valid positive "
+                "integers, and DLQ_ENABLED must be 'true' or 'false'."
+            ) from dlq_error
 
         return cls(
             replication_type=replication_type,
@@ -86,6 +145,9 @@ class ReplicationConfig:
             secondary_queue=secondary_queue_name,
             rto_minutes=recovery_time_minutes,
             delta_minutes=buffer_minutes,
+            dead_letter_enabled=dlq_enabled,
+            max_delivery_count=max_delivery,
+            dlq_time_to_live_minutes=dlq_ttl_minutes,
         )
 
     @property
