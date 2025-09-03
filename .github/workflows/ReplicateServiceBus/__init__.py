@@ -14,24 +14,6 @@ from azure.core.exceptions import (
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.exceptions import ServiceBusError
 
-# Import retry functionality for handling transient failures
-try:
-    from tenacity import (
-        retry,
-        stop_after_attempt,
-        wait_exponential,
-        retry_if_exception_type,
-    )
-    TENACITY_AVAILABLE = True
-except ImportError:
-    # Graceful fallback if tenacity is not available
-    TENACITY_AVAILABLE = False
-    def retry(*args, **kwargs):
-        """Fallback decorator when tenacity is not available"""
-        def decorator(func):
-            return func
-        return decorator
-
 from .config import ReplicationConfig
 
 # Configure OpenTelemetry to use Azure Monitor with the

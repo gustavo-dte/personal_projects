@@ -7,7 +7,7 @@ variables and settings needed for replicating messages between Service Bus insta
 
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,10 @@ class ReplicationConfig:
             ) from dlq_error
 
         return cls(
-            replication_type=replication_type,
+            replication_type=cast(
+                "Literal['primary_to_secondary', 'secondary_to_primary']",
+                replication_type
+            ),
             primary_conn_str=primary_connection_string,
             primary_queue=primary_queue_name,
             secondary_conn_str=secondary_connection_string,
