@@ -55,3 +55,6 @@ _version.py
 
 # Local development
 .DS_Store
+
+#MD Files
+src/*.md

@@ -8,5 +8,5 @@
       "type": "serviceBusTrigger"
     }
   ],
-  "scriptFile": "__init__.py"
+  "scriptFile": "main.py"
 }
