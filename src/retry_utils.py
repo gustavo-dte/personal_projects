@@ -8,74 +8,73 @@ following the Twelve Factor App methodology with configurable retry parameters.
 import functools
 import logging
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from azure.core.exceptions import HttpResponseError, ServiceRequestError
 from azure.servicebus.exceptions import ServiceBusError
 
-from .constants import ALERT_SEVERITY_MEDIUM, ALERT_SEVERITY_HIGH
+from .constants import ALERT_SEVERITY_HIGH, ALERT_SEVERITY_MEDIUM
 from .exceptions import ReplicationError
 
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def exponential_backoff_retry(
-    max_attempts: int,
-    base_delay: float,
-    logger: logging.Logger
+    max_attempts: int, base_delay: float, logger: logging.Logger
 ) -> Callable[[F], F]:
     """
     Decorator that implements exponential backoff retry for transient failures.
-    
+
     This provides a configurable retry mechanism for handling transient Azure
     service failures with exponential backoff strategy.
-    
+
     Args:
         max_attempts: Maximum number of retry attempts
         base_delay: Base delay in seconds, exponentially increased
         logger: Logger instance for retry logging
-        
+
     Returns:
         Decorator function that wraps the target function with retry logic
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             last_exception = None
-            
+
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
                 except (ServiceRequestError, HttpResponseError, ServiceBusError) as e:
                     last_exception = e
                     if attempt < max_attempts - 1:  # Not the last attempt
-                        delay = base_delay * (2 ** attempt)  # Exponential backoff
+                        delay = base_delay * (2**attempt)  # Exponential backoff
                         log_retry_attempt(
                             logger=logger,
                             attempt=attempt + 1,
                             max_attempts=max_attempts,
                             delay=delay,
-                            error=e
+                            error=e,
                         )
                         time.sleep(delay)
                     else:
                         # Last attempt failed
                         log_retry_exhausted(
-                            logger=logger,
-                            max_attempts=max_attempts,
-                            final_error=e
+                            logger=logger, max_attempts=max_attempts, final_error=e
                         )
-            
+
             # Re-raise the last exception wrapped in ReplicationError
             if last_exception:
-                correlation_id = kwargs.get('correlation_id', 'unknown')
+                correlation_id = kwargs.get("correlation_id", "unknown")
                 raise ReplicationError(
                     f"All {max_attempts} retry attempts failed: {str(last_exception)}",
                     correlation_id=correlation_id,
-                    retry_count=max_attempts
+                    retry_count=max_attempts,
                 ) from last_exception
-        
+
         return wrapper  # type: ignore
+
     return decorator
 
 
@@ -84,11 +83,11 @@ def log_retry_attempt(
     attempt: int,
     max_attempts: int,
     delay: float,
-    error: Exception
+    error: Exception,
 ) -> None:
     """
     Log retry attempt information.
-    
+
     Args:
         logger: Logger instance
         attempt: Current attempt number
@@ -112,13 +111,11 @@ def log_retry_attempt(
 
 
 def log_retry_exhausted(
-    logger: logging.Logger,
-    max_attempts: int,
-    final_error: Exception
+    logger: logging.Logger, max_attempts: int, final_error: Exception
 ) -> None:
     """
     Log when all retry attempts are exhausted.
-    
+
     Args:
         logger: Logger instance
         max_attempts: Maximum number of attempts that were made

@@ -8,12 +8,12 @@ following the Twelve Factor App methodology by avoiding hardcoded values.
 from typing import Literal
 
 # Replication types
-REPLICATION_TYPE_PRIMARY_TO_SECONDARY: Literal[
+REPLICATION_TYPE_PRIMARY_TO_SECONDARY: Literal["primary_to_secondary"] = (
     "primary_to_secondary"
-] = "primary_to_secondary"
-REPLICATION_TYPE_SECONDARY_TO_PRIMARY: Literal[
+)
+REPLICATION_TYPE_SECONDARY_TO_PRIMARY: Literal["secondary_to_primary"] = (
     "secondary_to_primary"
-] = "secondary_to_primary"
+)
 
 # Environment variable names
 ENV_REPLICATION_TYPE = "REPLICATION_TYPE"

@@ -33,13 +33,13 @@ class RetryConfig(BaseModel):
         default=DEFAULT_MAX_RETRY_ATTEMPTS,
         ge=1,
         le=10,
-        description="Maximum number of retry attempts"
+        description="Maximum number of retry attempts",
     )
     base_delay: float = Field(
         default=DEFAULT_BASE_RETRY_DELAY,
         ge=0.1,
         le=60.0,
-        description="Base delay in seconds for exponential backoff"
+        description="Base delay in seconds for exponential backoff",
     )
 
 
@@ -47,20 +47,19 @@ class DeadLetterConfig(BaseModel):
     """Configuration for dead letter queue handling."""
 
     enabled: bool = Field(
-        default=DEFAULT_DLQ_ENABLED,
-        description="Enable dead letter queue processing"
+        default=DEFAULT_DLQ_ENABLED, description="Enable dead letter queue processing"
     )
     max_delivery_count: int = Field(
         default=DEFAULT_MAX_DELIVERY_COUNT,
         ge=1,
         le=100,
-        description="Maximum delivery attempts before dead lettering"
+        description="Maximum delivery attempts before dead lettering",
     )
     ttl_minutes: int = Field(
         default=DEFAULT_DLQ_TTL_MINUTES,
         ge=1,
         le=43200,  # 30 days
-        description="Time to live for messages in dead letter queue (minutes)"
+        description="Time to live for messages in dead letter queue (minutes)",
     )
 
 
@@ -78,20 +77,16 @@ class ReplicationConfig(BaseSettings):
 
     # Service Bus connection strings
     primary_conn_str: str | None = Field(
-        default=None,
-        description="Primary Service Bus connection string"
+        default=None, description="Primary Service Bus connection string"
     )
     primary_queue: str | None = Field(
-        default=None,
-        description="Primary Service Bus queue name"
+        default=None, description="Primary Service Bus queue name"
     )
     secondary_conn_str: str | None = Field(
-        default=None,
-        description="Secondary Service Bus connection string"
+        default=None, description="Secondary Service Bus connection string"
     )
     secondary_queue: str | None = Field(
-        default=None,
-        description="Secondary Service Bus queue name"
+        default=None, description="Secondary Service Bus queue name"
     )
 
     # Timing configuration
@@ -99,27 +94,26 @@ class ReplicationConfig(BaseSettings):
         default=DEFAULT_RTO_MINUTES,
         ge=1,
         le=1440,  # 24 hours
-        description="Recovery Time Objective in minutes"
+        description="Recovery Time Objective in minutes",
     )
     delta_minutes: int = Field(
         default=DEFAULT_DELTA_MINUTES,
         ge=0,
         le=1440,
-        description="Additional buffer time in minutes"
+        description="Additional buffer time in minutes",
     )
 
     # Nested configuration objects
     retry_config: RetryConfig = Field(
-        default_factory=RetryConfig,
-        description="Retry configuration"
+        default_factory=RetryConfig, description="Retry configuration"
     )
     dead_letter_config: DeadLetterConfig = Field(
-        default_factory=DeadLetterConfig,
-        description="Dead letter queue configuration"
+        default_factory=DeadLetterConfig, description="Dead letter queue configuration"
     )
 
     class Config:
         """Pydantic configuration."""
+
         env_prefix = ""
         case_sensitive = True
         env_nested_delimiter = "_"
@@ -140,7 +134,7 @@ class ReplicationConfig(BaseSettings):
         """Validate replication type is one of allowed values."""
         allowed_types = [
             REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            REPLICATION_TYPE_SECONDARY_TO_PRIMARY
+            REPLICATION_TYPE_SECONDARY_TO_PRIMARY,
         ]
         if v not in allowed_types:
             raise ValueError(
@@ -176,8 +170,9 @@ class ReplicationConfig(BaseSettings):
     @property
     def ttl_seconds(self) -> int:
         """Calculate the Time To Live for replicated messages in seconds."""
-        total_minutes = self.rto_minutes + self.delta_minutes
-        return total_minutes * SECONDS_PER_MINUTE
+        total_minutes: int = self.rto_minutes + self.delta_minutes
+        seconds: int = total_minutes * SECONDS_PER_MINUTE
+        return seconds  # type: ignore[no-any-return] # we know this is an int due to type hints
 
     @property
     def direction(self) -> str:

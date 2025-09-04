@@ -6,7 +6,7 @@ following the Twelve Factor App methodology.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .constants import ALERT_SEVERITY_HIGH, LOGGER_NAME
 
@@ -14,10 +14,10 @@ from .constants import ALERT_SEVERITY_HIGH, LOGGER_NAME
 def configure_logger() -> logging.Logger:
     """
     Configure and return the application logger.
-    
+
     Sets up Azure Monitor OpenTelemetry if available, otherwise falls back
     to standard logging configuration.
-    
+
     Returns:
         Configured logger instance
     """
@@ -46,8 +46,8 @@ def log_replication_start(
     correlation_id: str,
     direction: str,
     destination_queue: str,
-    message_id: Optional[str],
-    ttl_seconds: int
+    message_id: str | None,
+    ttl_seconds: int,
 ) -> None:
     """Log the start of message replication."""
     logger.debug(
@@ -67,11 +67,11 @@ def log_replication_success(
     correlation_id: str,
     direction: str,
     destination_queue: str,
-    original_message_id: Optional[str],
+    original_message_id: str | None,
     replicated_message_id: str,
     body_type: str,
     content_type: str,
-    body_size_bytes: int
+    body_size_bytes: int,
 ) -> None:
     """Log successful message replication."""
     logger.info(
@@ -98,7 +98,7 @@ def log_replication_error(
     direction: str,
     destination_queue: str,
     alert_severity: str = ALERT_SEVERITY_HIGH,
-    additional_context: Optional[Dict[str, Any]] = None
+    additional_context: dict[str, Any] | None = None,
 ) -> None:
     """Log replication error with structured context."""
     log_context = {
@@ -109,10 +109,10 @@ def log_replication_error(
         "destination_queue": destination_queue,
         "alert_severity": alert_severity,
     }
-    
+
     if additional_context:
         log_context.update(additional_context)
-    
+
     logger.error(
         f"Service Bus replication error: {error_type}",
         extra=log_context,
