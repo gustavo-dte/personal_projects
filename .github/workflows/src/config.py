@@ -28,7 +28,7 @@ class ReplicationConfig:
     secondary_queue: str | None
     rto_minutes: int  # Recovery Time Objective in minutes
     delta_minutes: int  # Additional buffer time in minutes
-    
+
     # Dead letter queue configuration for failed replication attempts
     dead_letter_enabled: bool = True
     max_delivery_count: int = 3  # Max attempts before sending to dead letter queue
@@ -38,14 +38,14 @@ class ReplicationConfig:
     def from_environment(cls) -> "ReplicationConfig":
         """
         Creates a configuration instance by reading environment variables.
-        
+
         This is the main way to create a ReplicationConfig instance. It reads all
         the necessary environment variables and validates them before creating
         the configuration object.
-        
+
         Returns:
             ReplicationConfig: A new configuration instance with all settings loaded
-            
+
         Raises:
             ValueError: If any required environment variables are missing or have
                        invalid values
@@ -58,7 +58,7 @@ class ReplicationConfig:
                 "This setting is required to determine replication direction. "
                 "Valid values: 'primary_to_secondary' or 'secondary_to_primary'"
             )
-        
+
         replication_type = replication_type_raw.lower()
         allowed_types = ["primary_to_secondary", "secondary_to_primary"]
         if replication_type not in allowed_types:
@@ -86,7 +86,7 @@ class ReplicationConfig:
                 missing_vars.append("PRIMARY_SERVICEBUS_CONN")
             if not primary_queue_name:
                 missing_vars.append("PRIMARY_QUEUE_NAME")
-                
+
         if missing_vars:
             raise ValueError(
                 f"Missing required environment variables for {replication_type}: "
@@ -98,16 +98,16 @@ class ReplicationConfig:
         try:
             rto_minutes_str = os.environ.get("RTO_MINUTES", "10")
             delta_minutes_str = os.environ.get("DELTA_MINUTES", "2")
-            
+
             recovery_time_minutes = int(rto_minutes_str)
             buffer_minutes = int(delta_minutes_str)
-            
+
             # Validate reasonable ranges
             if recovery_time_minutes <= 0:
                 raise ValueError("RTO_MINUTES must be a positive integer")
             if buffer_minutes < 0:
                 raise ValueError("DELTA_MINUTES must be a non-negative integer")
-                
+
         except ValueError as conversion_error:
             raise ValueError(
                 f"Invalid timing configuration: {conversion_error}. "
@@ -119,17 +119,17 @@ class ReplicationConfig:
             dlq_enabled_str = os.environ.get("DLQ_ENABLED", "true")
             max_delivery_str = os.environ.get("MAX_DELIVERY_COUNT", "3")
             dlq_ttl_minutes_str = os.environ.get("DLQ_TTL_MINUTES", "1440")
-            
+
             dlq_enabled = dlq_enabled_str.lower() == "true"
             max_delivery = int(max_delivery_str)
             dlq_ttl_minutes = int(dlq_ttl_minutes_str)
-            
+
             # Validate reasonable ranges
             if max_delivery <= 0:
                 raise ValueError("MAX_DELIVERY_COUNT must be a positive integer")
             if dlq_ttl_minutes <= 0:
                 raise ValueError("DLQ_TTL_MINUTES must be a positive integer")
-                
+
         except ValueError as dlq_error:
             raise ValueError(
                 f"Invalid dead letter queue configuration: {dlq_error}. "
@@ -140,7 +140,7 @@ class ReplicationConfig:
         return cls(
             replication_type=cast(
                 "Literal['primary_to_secondary', 'secondary_to_primary']",
-                replication_type
+                replication_type,
             ),
             primary_conn_str=primary_connection_string,
             primary_queue=primary_queue_name,
@@ -157,7 +157,7 @@ class ReplicationConfig:
     def ttl_seconds(self) -> int:
         """
         Calculates the Time To Live for replicated messages in seconds.
-        
+
         We add the RTO (Recovery Time Objective) and delta time together to give
         messages enough time to be processed before they expire.
 
@@ -171,7 +171,7 @@ class ReplicationConfig:
     def direction(self) -> str:
         """
         Returns a human-friendly description of the replication direction.
-        
+
         This is mainly used for logging to make it clear which direction
         the replication is happening.
 
@@ -186,7 +186,7 @@ class ReplicationConfig:
     def get_destination_config(self) -> tuple[str | None, str | None, str]:
         """
         Figures out the destination connection info based on replication type.
-        
+
         This method looks at the replication direction and returns the appropriate
         destination connection string and queue name.
 
@@ -195,23 +195,15 @@ class ReplicationConfig:
         """
         if self.replication_type == "primary_to_secondary":
             # We're replicating from primary to secondary
-            return (
-                self.secondary_conn_str,
-                self.secondary_queue,
-                self.direction
-            )
+            return (self.secondary_conn_str, self.secondary_queue, self.direction)
         else:  # secondary_to_primary
             # We're replicating from secondary to primary
-            return (
-                self.primary_conn_str,
-                self.primary_queue,
-                self.direction
-            )
+            return (self.primary_conn_str, self.primary_queue, self.direction)
 
     def validate_destination_config(self) -> None:
         """
         Makes sure we have all the connection info we need for the destination.
-        
+
         This validation method checks that the required connection string and
         queue name are available for whichever direction we're replicating to.
 
