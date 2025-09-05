@@ -1,9 +1,5 @@
 """
 Configuration handling for the Service Bus replication function.
-
-This module contains the Pydantic configuration models that handle all the environment
-variables and settings needed for replicating messages between Service Bus instances.
-Uses Twelve Factor App methodology with environment-based configuration.
 """
 
 from typing import Literal

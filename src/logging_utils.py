@@ -8,6 +8,8 @@ following the Twelve Factor App methodology.
 import logging
 from typing import Any
 
+from azure.monitor.opentelemetry import configure_azure_monitor
+
 from .constants import ALERT_SEVERITY_HIGH, LOGGER_NAME
 
 
@@ -15,29 +17,24 @@ def configure_logger() -> logging.Logger:
     """
     Configure and return the application logger.
 
-    Sets up Azure Monitor OpenTelemetry if available, otherwise falls back
-    to standard logging configuration.
+    Sets up Azure Monitor OpenTelemetry integration.
 
     Returns:
         Configured logger instance
     """
     try:
-        from azure.monitor.opentelemetry import configure_azure_monitor
-
         configure_azure_monitor(
             logger_name=LOGGER_NAME,
         )
         logger = logging.getLogger(LOGGER_NAME)
         logger.info("Azure Monitor OpenTelemetry configured successfully")
         return logger
-    except ImportError:
+    except OSError as monitor_error:  # Azure Monitor configuration issues
         logger = logging.getLogger(__name__)
-        logger.info("Azure Monitor OpenTelemetry not available, using standard logging")
-        return logger
-    except Exception as monitor_error:
-        logger = logging.getLogger(__name__)
-        logger.warning(f"Failed to configure Azure Monitor: {monitor_error}")
-        logger.info("Using standard logging without Application Insights integration")
+        logger.warning("Failed to configure Azure Monitor: %s", monitor_error)
+        logger.info(
+            "Using standard logging without Application Insights integration"
+        )
         return logger
 
 
@@ -74,7 +71,7 @@ def log_replication_success(
     body_size_bytes: int,
 ) -> None:
     """Log successful message replication."""
-    logger.info(
+    logger.debug(
         "Message replication successful",
         extra={
             "correlation_id": correlation_id,

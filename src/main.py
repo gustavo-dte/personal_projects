@@ -390,7 +390,7 @@ def orchestrate_replication(
             replication_config.get_destination_config()
         )
 
-        app_logger.info(
+        app_logger.debug(
             "Starting message replication process",
             extra={
                 "direction": direction,
