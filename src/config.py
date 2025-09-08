@@ -2,6 +2,8 @@
 Configuration handling for the Service Bus replication function.
 """
 
+from __future__ import annotations
+
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -19,7 +21,7 @@ from .constants import (
     REPLICATION_TYPE_SECONDARY_TO_PRIMARY,
     SECONDS_PER_MINUTE,
 )
-from .exceptions import ConfigError, ValidationError
+from .exceptions import ConfigError
 
 
 class RetryConfig(BaseModel):
@@ -142,18 +144,24 @@ class ReplicationConfig(BaseSettings):
     @model_validator(mode="after")
     def validate_connection_config(self):
         """Validate that required connection strings and queues are provided."""
-        missing_fields = []
+        # Map replication types to required environment variables
+        required_vars_map = {
+            REPLICATION_TYPE_PRIMARY_TO_SECONDARY: [
+                ("secondary_conn_str", "SECONDARY_SERVICEBUS_CONN"),
+                ("secondary_queue", "SECONDARY_QUEUE_NAME"),
+            ],
+            REPLICATION_TYPE_SECONDARY_TO_PRIMARY: [
+                ("primary_conn_str", "PRIMARY_SERVICEBUS_CONN"),
+                ("primary_queue", "PRIMARY_QUEUE_NAME"),
+            ],
+        }
 
-        if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
-            if not self.secondary_conn_str:
-                missing_fields.append("SECONDARY_SERVICEBUS_CONN")
-            if not self.secondary_queue:
-                missing_fields.append("SECONDARY_QUEUE_NAME")
-        elif self.replication_type == REPLICATION_TYPE_SECONDARY_TO_PRIMARY:
-            if not self.primary_conn_str:
-                missing_fields.append("PRIMARY_SERVICEBUS_CONN")
-            if not self.primary_queue:
-                missing_fields.append("PRIMARY_QUEUE_NAME")
+        # Use list comprehension to validate required fields
+        required_fields = required_vars_map.get(self.replication_type, [])
+        missing_fields = [
+            env_var for field_name, env_var in required_fields
+            if not getattr(self, field_name)
+        ]
 
         if missing_fields:
             raise ConfigError(
@@ -172,7 +180,7 @@ class ReplicationConfig(BaseSettings):
 
     @property
     def direction(self) -> str:
-        """Return a human-friendly description of the replication direction."""
+        """Return a readable description of the replication direction."""
         if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
             return "Primary → Secondary"
         else:
@@ -185,20 +193,13 @@ class ReplicationConfig(BaseSettings):
         Returns:
             Tuple of (connection_string, queue_name, direction_description)
 
-        Raises:
-            ValidationError: If destination configuration is invalid
+        Note:
+            Validation is handled by Pydantic validators during model instantiation,
+            so configuration is guaranteed to be valid when this method is called.
         """
         if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
-            if not self.secondary_conn_str or not self.secondary_queue:
-                raise ValidationError(
-                    "Secondary connection configuration is required for "
-                    "primary_to_secondary replication"
-                )
+            # Configuration already validated by Pydantic
             return (self.secondary_conn_str, self.secondary_queue, self.direction)
         else:
-            if not self.primary_conn_str or not self.primary_queue:
-                raise ValidationError(
-                    "Primary connection configuration is required for "
-                    "secondary_to_primary replication"
-                )
+            # Configuration already validated by Pydantic
             return (self.primary_conn_str, self.primary_queue, self.direction)

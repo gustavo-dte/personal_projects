@@ -33,6 +33,13 @@ check-terraform-resource-names = "hooks.check_terraform_resource_names:main"
 [tool.setuptools_scm]
 write_to = "hooks/_version.py"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.setuptools.package-dir]
+"" = "."
+
 [tool.ruff]
 line-length = 88
 indent-width = 4
@@ -91,7 +98,7 @@ docstring-code-format = false
 docstring-code-line-length = "dynamic"
 
 [tool.ruff.lint.isort]
-known-first-party = ["hooks"]
+known-first-party = ["src"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -122,10 +129,9 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 
 [tool.coverage.run]
-source = ["hooks"]
+source = ["src"]
 omit = [
     "tests/*",
-    "hooks/_version.py",
 ]
 
 [tool.coverage.report]

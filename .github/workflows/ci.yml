@@ -1,0 +1,243 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-mock
+
+    - name: Run pre-commit checks
+      uses: pre-commit/action@v3.0.0
+
+    - name: Run type checking with mypy
+      run: |
+        pip install mypy
+        mypy src/ --ignore-missing-imports
+
+    - name: Run tests with pytest
+      run: |
+        pytest tests/ --cov=src --cov-report=xml --cov-report=term-missing --cov-fail-under=85 -v
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install bandit[toml] safety
+
+    - name: Run security checks with bandit
+      run: |
+        bandit -r src/ -f json -o bandit-report.json || true
+        bandit -r src/ --severity-level medium
+
+    - name: Check for known security vulnerabilities with safety
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check
+
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install ruff
+
+    - name: Run ruff linting
+      run: |
+        ruff check src/ tests/ --output-format=github
+
+    - name: Run ruff formatting check
+      run: |
+        ruff format src/ tests/ --check
+
+    - name: Check import sorting
+      run: |
+        pip install isort
+        isort src/ tests/ --check-only --diff
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [test, security-scan, code-quality]
+    if: success()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - name: Install Azure Functions Core Tools
+      run: |
+        curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
+        sudo mv microsoft.gpg /etc/apt/trusted.gpg.d/microsoft.gpg
+        sudo sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/microsoft-ubuntu-$(lsb_release -cs)-prod $(lsb_release -cs) main" > /etc/apt/sources.list.d/dotnetdev.list'
+        sudo apt-get update
+        sudo apt-get install azure-functions-core-tools-4
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Validate function app structure
+      run: |
+        # Check for required files
+        test -f host.json || (echo "Missing host.json" && exit 1)
+        test -f requirements.txt || (echo "Missing requirements.txt" && exit 1)
+        test -d src/ || (echo "Missing src/ directory" && exit 1)
+        
+        # Validate host.json
+        python -c "import json; json.load(open('host.json'))" || (echo "Invalid host.json" && exit 1)
+        
+        echo "Function app structure validation passed"
+
+    - name: Create deployment package
+      run: |
+        # Create a clean deployment package
+        mkdir -p deployment
+        
+        # Copy source code
+        cp -r src/* deployment/
+        
+        # Copy configuration files
+        cp host.json deployment/
+        cp requirements.txt deployment/
+        cp local.settings.json.example deployment/local.settings.json 2>/dev/null || echo "No example settings file"
+        
+        # Create deployment artifact
+        cd deployment
+        zip -r ../function-app.zip .
+        
+    - name: Upload deployment artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: function-app-package
+        path: function-app.zip
+        retention-days: 30
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/develop'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-mock
+
+    - name: Run integration tests
+      run: |
+        # Run integration tests if they exist
+        if [ -d "tests/integration" ]; then
+          pytest tests/integration/ -v --tb=short
+        else
+          echo "No integration tests found, skipping..."
+        fi
+      env:
+        # These would be set as repository secrets in a real environment
+        TEST_SERVICE_BUS_CONNECTION_STRING: ${{ secrets.TEST_SERVICE_BUS_CONNECTION_STRING }}
+        TEST_DESTINATION_CONNECTION_STRING: ${{ secrets.TEST_DESTINATION_CONNECTION_STRING }}
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test, security-scan, code-quality, build]
+    if: always()
+    
+    steps:
+    - name: Notify on success
+      if: needs.test.result == 'success' && needs.security-scan.result == 'success' && needs.code-quality.result == 'success' && needs.build.result == 'success'
+      run: |
+        echo "✅ All CI checks passed successfully!"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Commit: ${{ github.sha }}"
+        echo "Author: ${{ github.actor }}"
+
+    - name: Notify on failure
+      if: needs.test.result == 'failure' || needs.security-scan.result == 'failure' || needs.code-quality.result == 'failure' || needs.build.result == 'failure'
+      run: |
+        echo "❌ CI checks failed!"
+        echo "Test: ${{ needs.test.result }}"
+        echo "Security: ${{ needs.security-scan.result }}"
+        echo "Code Quality: ${{ needs.code-quality.result }}"
+        echo "Build: ${{ needs.build.result }}"
+        exit 1

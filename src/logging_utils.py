@@ -6,6 +6,7 @@ following the Twelve Factor App methodology.
 """
 
 import logging
+import os
 from typing import Any
 
 from azure.monitor.opentelemetry import configure_azure_monitor
@@ -17,25 +18,43 @@ def configure_logger() -> logging.Logger:
     """
     Configure and return the application logger.
 
-    Sets up Azure Monitor OpenTelemetry integration.
+    Sets up Azure Monitor OpenTelemetry integration if the appropriate
+    connection string or instrumentation key is available. Falls back
+    to standard logging for development and testing environments.
 
     Returns:
         Configured logger instance
     """
-    try:
-        configure_azure_monitor(
-            logger_name=LOGGER_NAME,
-        )
-        logger = logging.getLogger(LOGGER_NAME)
-        logger.info("Azure Monitor OpenTelemetry configured successfully")
-        return logger
-    except OSError as monitor_error:  # Azure Monitor configuration issues
-        logger = logging.getLogger(__name__)
-        logger.warning("Failed to configure Azure Monitor: %s", monitor_error)
+    logger = logging.getLogger(LOGGER_NAME)
+    
+    # Check if Azure Monitor configuration is available
+    has_app_insights_connection = (
+        os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") or
+        os.getenv("APPINSIGHTS_INSTRUMENTATIONKEY")
+    )
+    
+    if has_app_insights_connection:
+        try:
+            configure_azure_monitor(
+                logger_name=LOGGER_NAME,
+            )
+            logger.info("Azure Monitor OpenTelemetry configured successfully")
+        except (ValueError, OSError) as monitor_error:
+            logger.warning("Failed to configure Azure Monitor: %s", monitor_error)
+            logger.info(
+                "Using standard logging without Application Insights integration"
+            )
+    else:
         logger.info(
-            "Using standard logging without Application Insights integration"
+            "No Application Insights configuration found, using standard logging"
         )
-        return logger
+        # Configure basic logging for development/testing
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+    
+    return logger
 
 
 def log_replication_start(

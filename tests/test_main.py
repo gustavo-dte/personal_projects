@@ -5,26 +5,29 @@ These tests demonstrate how the refactored code is now easily testable
 with proper separation of concerns and isolated functions.
 """
 
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
 from azure.core.exceptions import ClientAuthenticationError
 from pydantic import ValidationError as PydanticValidationError
 
-from .config import DeadLetterConfig, ReplicationConfig, RetryConfig
-from .constants import (
+from src.config import DeadLetterConfig, ReplicationConfig, RetryConfig
+from src.constants import (
     DEFAULT_DELTA_MINUTES,
     DEFAULT_RTO_MINUTES,
+    DIRECTION_PRIMARY_TO_SECONDARY,
     REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
+    TEST_SERVICEBUS_CONNECTION_STRING,
 )
-from .exceptions import ConfigError, ValidationError
-from .main import (
+from src.exceptions import ConfigError, ValidationError
+from src.main import (
     handle_authentication_error,
     load_and_validate_config,
     orchestrate_replication,
     send_message_to_destination,
 )
-from .message_utils import (
+from src.message_utils import (
     create_enhanced_properties,
     generate_correlation_id,
     generate_replicated_message_id,
@@ -163,12 +166,15 @@ class TestErrorHandling:
         """Test handling of authentication errors."""
         error = ClientAuthenticationError("Auth failed")
         correlation_id = "test-id"
-        direction = "Primary → Secondary"
+        direction = DIRECTION_PRIMARY_TO_SECONDARY
         destination_queue = "test-queue"
+        
+        # Create a logger for testing
+        logger = logging.getLogger("test-logger")
 
         with pytest.raises(ClientAuthenticationError) as exc_info:
             handle_authentication_error(
-                error, correlation_id, direction, destination_queue
+                error, correlation_id, direction, destination_queue, logger
             )
 
         assert "Failed to authenticate with Service Bus" in str(exc_info.value)
@@ -185,7 +191,7 @@ class TestReplicationOrchestration:
         mock_config.get_destination_config.return_value = (
             "conn_str",
             "queue_name",
-            "Primary → Secondary",
+            DIRECTION_PRIMARY_TO_SECONDARY,
         )
         mock_config.ttl_seconds = 600
         mock_config.retry_config.max_attempts = 3
@@ -218,7 +224,7 @@ class TestReplicationConfig:
         """Test creation of valid configuration."""
         config_data = {
             "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": "Endpoint=sb://test.servicebus.windows.net/",
+            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
             "secondary_queue": "test-queue",
             "rto_minutes": DEFAULT_RTO_MINUTES,
             "delta_minutes": DEFAULT_DELTA_MINUTES,
@@ -227,7 +233,7 @@ class TestReplicationConfig:
         config = ReplicationConfig(**config_data)
 
         assert config.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY
-        assert config.secondary_conn_str == "Endpoint=sb://test.servicebus.windows.net/"
+        assert config.secondary_conn_str == TEST_SERVICEBUS_CONNECTION_STRING
         assert config.secondary_queue == "test-queue"
         assert isinstance(config.retry_config, RetryConfig)
         assert isinstance(config.dead_letter_config, DeadLetterConfig)
@@ -236,7 +242,7 @@ class TestReplicationConfig:
         """Test TTL seconds calculation."""
         config_data = {
             "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": "Endpoint=sb://test.servicebus.windows.net/",
+            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
             "secondary_queue": "test-queue",
             "rto_minutes": 10,
             "delta_minutes": 2,
@@ -250,28 +256,28 @@ class TestReplicationConfig:
         """Test direction property formatting."""
         config_data = {
             "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": "Endpoint=sb://test.servicebus.windows.net/",
+            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
             "secondary_queue": "test-queue",
         }
 
         config = ReplicationConfig(**config_data)
 
-        assert config.direction == "Primary → Secondary"
+        assert config.direction == DIRECTION_PRIMARY_TO_SECONDARY
 
     def test_config_get_destination_config(self):
         """Test getting destination configuration."""
         config_data = {
             "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": "Endpoint=sb://test.servicebus.windows.net/",
+            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
             "secondary_queue": "test-queue",
         }
 
         config = ReplicationConfig(**config_data)
         conn_str, queue_name, direction = config.get_destination_config()
 
-        assert conn_str == "Endpoint=sb://test.servicebus.windows.net/"
+        assert conn_str == TEST_SERVICEBUS_CONNECTION_STRING
         assert queue_name == "test-queue"
-        assert direction == "Primary → Secondary"
+        assert direction == DIRECTION_PRIMARY_TO_SECONDARY
 
 
 # Integration test example
@@ -287,10 +293,17 @@ class TestIntegration:
         # Setup mocks
         mock_client = Mock()
         mock_sender = Mock()
-        mock_client.get_queue_sender.return_value.__enter__.return_value = mock_sender
-        mock_client_class.from_connection_string.return_value.__enter__.return_value = (
-            mock_client
-        )
+        
+        # Mock the context manager properly
+        mock_sender_context = Mock()
+        mock_sender_context.__enter__ = Mock(return_value=mock_sender)
+        mock_sender_context.__exit__ = Mock(return_value=False)
+        mock_client.get_queue_sender.return_value = mock_sender_context
+        
+        mock_client_context = Mock()
+        mock_client_context.__enter__ = Mock(return_value=mock_client)
+        mock_client_context.__exit__ = Mock(return_value=False)
+        mock_client_class.from_connection_string.return_value = mock_client_context
 
         mock_message = Mock()
 

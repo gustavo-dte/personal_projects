@@ -11,6 +11,7 @@ This module implements Service Bus message replication with the following improv
 - Separation of concerns
 """
 
+import logging
 from typing import Any
 
 import azure.functions as func
@@ -30,10 +31,18 @@ from .constants import (
     ALERT_SEVERITY_CRITICAL,
     ALERT_SEVERITY_HIGH,
 )
+from .error_handlers import (
+    handle_authentication_error,
+    handle_azure_error,
+    handle_http_response_error,
+    handle_resource_not_found_error,
+    handle_service_bus_error,
+    handle_service_request_error,
+    handle_unexpected_error,
+)
 from .exceptions import ConfigError, ReplicationError, ValidationError
 from .logging_utils import (
     configure_logger,
-    log_replication_error,
     log_replication_start,
     log_replication_success,
 )
@@ -111,6 +120,15 @@ def send_message_to_destination(
     Raises:
         Various Azure exceptions depending on what goes wrong during sending
     """
+    app_logger.debug(
+        "Sending message to destination queue",
+        extra={
+            "correlation_id": correlation_id,
+            "destination_queue": destination_queue_name,
+            "message_id": getattr(message, "message_id", None),
+        },
+    )
+
     with ServiceBusClient.from_connection_string(
         destination_connection_string
     ) as client:
@@ -118,140 +136,152 @@ def send_message_to_destination(
             queue_sender.send_messages(message)
 
 
-def handle_authentication_error(
-    error: ClientAuthenticationError,
+def _create_retry_send_function(
+    source_message: func.ServiceBusMessage,
+    destination_connection_string: str,
+    destination_queue_name: str,
+    ttl_seconds: int,
+    direction: str,
+    correlation_id: str,
+    retry_decorator: Any,
+) -> Any:
+    """
+    Create a retry-enabled send function with proper logging.
+
+    This extracted function reduces complexity by separating the retry logic
+    and success logging from the main replication flow.
+
+    Args:
+        source_message: The original Service Bus message
+        destination_connection_string: Destination connection string
+        destination_queue_name: Name of destination queue
+        ttl_seconds: Time-to-live for message
+        direction: Replication direction description
+        correlation_id: Tracking correlation ID
+        retry_decorator: Configured retry decorator
+
+    Returns:
+        Decorated function ready for execution
+    """
+
+    @retry_decorator
+    def send_with_retry(**kwargs: Any) -> None:
+        # Create the replicated message
+        replicated_message = create_replicated_message(
+            source_message=source_message,
+            correlation_id=correlation_id,
+            ttl_seconds=ttl_seconds,
+        )
+
+        # Send to destination
+        send_message_to_destination(
+            destination_connection_string=destination_connection_string,
+            destination_queue_name=destination_queue_name,
+            message=replicated_message,
+            correlation_id=correlation_id,
+        )
+
+        # Log successful replication
+        _log_successful_replication(
+            source_message,
+            replicated_message,
+            correlation_id,
+            direction,
+            destination_queue_name,
+        )
+
+    return send_with_retry
+
+
+def _log_successful_replication(
+    source_message: func.ServiceBusMessage,
+    replicated_message: func.ServiceBusMessage,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_queue_name: str,
 ) -> None:
-    """Handle authentication errors with appropriate logging and re-raising."""
-    log_replication_error(
+    """
+    Log successful message replication with detailed metrics.
+
+    This extracted function reduces complexity by isolating logging logic
+    and makes the success logging reusable.
+
+    Args:
+        source_message: Original message
+        replicated_message: New replicated message
+        correlation_id: Tracking correlation ID
+        direction: Replication direction description
+        destination_queue_name: Name of destination queue
+    """
+    source_body = source_message.get_body()
+    log_replication_success(
         logger=app_logger,
         correlation_id=correlation_id,
-        error_type="authentication_error",
-        error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
-        alert_severity=ALERT_SEVERITY_CRITICAL,
+        destination_queue=destination_queue_name,
+        original_message_id=source_message.message_id,
+        replicated_message_id=replicated_message.message_id,
+        body_type=type(source_body).__name__,
+        content_type=replicated_message.content_type or "unknown",
+        body_size_bytes=len(replicated_message.get_body())
+        if replicated_message.get_body()
+        else 0,
     )
-    raise ClientAuthenticationError(
-        f"Failed to authenticate with Service Bus: {error}"
-    ) from error
 
 
-def handle_resource_not_found_error(
-    error: ResourceNotFoundError,
+def _handle_replication_exceptions(
+    send_function: Any,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_queue_name: str,
+    logger: logging.Logger,
 ) -> None:
-    """Handle resource not found errors with appropriate logging and re-raising."""
-    log_replication_error(
-        logger=app_logger,
-        correlation_id=correlation_id,
-        error_type="resource_not_found",
-        error_message=str(error),
-        direction=direction,
-        destination_queue=destination_queue,
-        alert_severity=ALERT_SEVERITY_HIGH,
-    )
-    raise ResourceNotFoundError(
-        f"Could not find destination queue '{destination_queue}': {error}"
-    ) from error
+    """
+    Execute send function with comprehensive exception handling.
 
+    This extracted function reduces the main function's cyclomatic complexity
+    by centralizing all exception handling logic.
 
-def handle_service_request_error(
-    error: ServiceRequestError,
-    correlation_id: str,
-    direction: str,
-    destination_queue: str,
-) -> None:
-    """Handle service request errors with appropriate logging and re-raising."""
-    log_replication_error(
-        logger=app_logger,
-        correlation_id=correlation_id,
-        error_type="service_request_error",
-        error_message=str(error),
-        direction=direction,
-        destination_queue=destination_queue,
-        alert_severity=ALERT_SEVERITY_HIGH,
-    )
-    raise ServiceRequestError(f"Service Bus request failed: {error}") from error
+    Args:
+        send_function: The retry-enabled send function to execute
+        correlation_id: Tracking correlation ID
+        direction: Replication direction description
+        destination_queue_name: Name of destination queue
+        logger: Logger instance for error handling
 
-
-def handle_service_bus_error(
-    error: ServiceBusError, correlation_id: str, direction: str, destination_queue: str
-) -> None:
-    """Handle Service Bus specific errors with appropriate logging and re-raising."""
-    log_replication_error(
-        logger=app_logger,
-        correlation_id=correlation_id,
-        error_type="servicebus_error",
-        error_message=str(error),
-        direction=direction,
-        destination_queue=destination_queue,
-        alert_severity=ALERT_SEVERITY_HIGH,
-    )
-    raise ServiceBusError(f"Service Bus operation failed: {error}") from error
-
-
-def handle_http_response_error(
-    error: HttpResponseError,
-    correlation_id: str,
-    direction: str,
-    destination_queue: str,
-) -> None:
-    """Handle HTTP response errors with appropriate logging and re-raising."""
-    additional_context = {"status_code": getattr(error, "status_code", None)}
-    log_replication_error(
-        logger=app_logger,
-        correlation_id=correlation_id,
-        error_type="http_response_error",
-        error_message=str(error),
-        direction=direction,
-        destination_queue=destination_queue,
-        alert_severity=ALERT_SEVERITY_HIGH,
-        additional_context=additional_context,
-    )
-    raise HttpResponseError(
-        f"HTTP request failed during message replication: {error}"
-    ) from error
-
-
-def handle_azure_error(
-    error: AzureError, correlation_id: str, direction: str, destination_queue: str
-) -> None:
-    """Handle general Azure errors with appropriate logging and re-raising."""
-    log_replication_error(
-        logger=app_logger,
-        correlation_id=correlation_id,
-        error_type="azure_error",
-        error_message=str(error),
-        direction=direction,
-        destination_queue=destination_queue,
-        alert_severity=ALERT_SEVERITY_HIGH,
-    )
-    raise AzureError(
-        f"Azure service error during message replication: {error}"
-    ) from error
-
-
-def handle_unexpected_error(
-    error: Exception, correlation_id: str, direction: str, destination_queue: str
-) -> None:
-    """Handle unexpected errors with appropriate logging and re-raising."""
-    log_replication_error(
-        logger=app_logger,
-        correlation_id=correlation_id,
-        error_type="unexpected_error",
-        error_message=str(error),
-        direction=direction,
-        destination_queue=destination_queue,
-        alert_severity=ALERT_SEVERITY_CRITICAL,
-    )
-    raise RuntimeError(
-        f"Unexpected error occurred during message replication: {error}"
-    ) from error
+    Raises:
+        Various Azure exceptions after proper error handling
+    """
+    try:
+        send_function(correlation_id=correlation_id)
+    except ClientAuthenticationError as auth_error:
+        handle_authentication_error(
+            auth_error, correlation_id, direction, destination_queue_name, logger
+        )
+    except ResourceNotFoundError as resource_error:
+        handle_resource_not_found_error(
+            resource_error, correlation_id, direction, destination_queue_name, logger
+        )
+    except ServiceRequestError as request_error:
+        handle_service_request_error(
+            request_error, correlation_id, direction, destination_queue_name, logger
+        )
+    except ServiceBusError as sb_error:
+        handle_service_bus_error(
+            sb_error, correlation_id, direction, destination_queue_name, logger
+        )
+    except HttpResponseError as http_error:
+        handle_http_response_error(
+            http_error, correlation_id, direction, destination_queue_name, logger
+        )
+    except AzureError as azure_error:
+        handle_azure_error(
+            azure_error, correlation_id, direction, destination_queue_name, logger
+        )
+    except Exception as unexpected_error:
+        handle_unexpected_error(
+            unexpected_error, correlation_id, direction, destination_queue_name, logger
+        )
 
 
 def replicate_message_to_destination(
@@ -266,15 +296,16 @@ def replicate_message_to_destination(
     """
     Replicate a Service Bus message to the destination queue with retry logic.
 
-    This function handles the actual message replication logic with comprehensive
-    error handling and retry capabilities.
+    This function orchestrates the message replication process by coordinating
+    correlation ID generation, logging, retry configuration, and error handling.
+    Complexity has been reduced through function extraction following SRP.
 
     Args:
         source_message: The original Service Bus message to replicate
         destination_connection_string: Connection string for destination Service Bus
         destination_queue_name: Name of the destination queue
         ttl_seconds: Time-to-live for the replicated message in seconds
-        direction: Human-friendly description of replication direction
+        direction: Readable description of replication direction
         max_retry_attempts: Maximum number of retry attempts
         base_retry_delay: Base delay for exponential backoff
 
@@ -299,72 +330,25 @@ def replicate_message_to_destination(
         max_attempts=max_retry_attempts, base_delay=base_retry_delay, logger=app_logger
     )
 
-    # Apply retry logic to the send operation
-    @retry_decorator
-    def send_with_retry(**kwargs: Any) -> None:
-        # Create the replicated message
-        replicated_message = create_replicated_message(
-            source_message=source_message,
-            correlation_id=correlation_id,
-            ttl_seconds=ttl_seconds,
-        )
+    # Create retry-enabled send function
+    send_with_retry = _create_retry_send_function(
+        source_message=source_message,
+        destination_connection_string=destination_connection_string,
+        destination_queue_name=destination_queue_name,
+        ttl_seconds=ttl_seconds,
+        direction=direction,
+        correlation_id=correlation_id,
+        retry_decorator=retry_decorator,
+    )
 
-        # Send to destination
-        send_message_to_destination(
-            destination_connection_string=destination_connection_string,
-            destination_queue_name=destination_queue_name,
-            message=replicated_message,
-            correlation_id=correlation_id,
-        )
-
-        # Log successful replication
-        source_body = source_message.get_body()
-        log_replication_success(
-            logger=app_logger,
-            correlation_id=correlation_id,
-            direction=direction,
-            destination_queue=destination_queue_name,
-            original_message_id=source_message.message_id,
-            replicated_message_id=replicated_message.message_id,
-            body_type=type(source_body).__name__,
-            content_type=replicated_message.content_type or "unknown",
-            body_size_bytes=len(replicated_message.get_body())
-            if replicated_message.get_body()
-            else 0,
-        )
-
-    try:
-        # Execute the send operation with retry logic
-        send_with_retry(correlation_id=correlation_id)
-
-    except ClientAuthenticationError as auth_error:
-        handle_authentication_error(
-            auth_error, correlation_id, direction, destination_queue_name
-        )
-    except ResourceNotFoundError as resource_error:
-        handle_resource_not_found_error(
-            resource_error, correlation_id, direction, destination_queue_name
-        )
-    except ServiceRequestError as request_error:
-        handle_service_request_error(
-            request_error, correlation_id, direction, destination_queue_name
-        )
-    except ServiceBusError as sb_error:
-        handle_service_bus_error(
-            sb_error, correlation_id, direction, destination_queue_name
-        )
-    except HttpResponseError as http_error:
-        handle_http_response_error(
-            http_error, correlation_id, direction, destination_queue_name
-        )
-    except AzureError as azure_error:
-        handle_azure_error(
-            azure_error, correlation_id, direction, destination_queue_name
-        )
-    except Exception as unexpected_error:
-        handle_unexpected_error(
-            unexpected_error, correlation_id, direction, destination_queue_name
-        )
+    # Execute with comprehensive error handling
+    _handle_replication_exceptions(
+        send_function=send_with_retry,
+        correlation_id=correlation_id,
+        direction=direction,
+        destination_queue_name=destination_queue_name,
+        logger=app_logger,
+    )
 
 
 def orchestrate_replication(
