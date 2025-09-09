@@ -26,7 +26,7 @@ def handle_authentication_error(
     error: ClientAuthenticationError,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_topic: str,
     logger: logging.Logger,
 ) -> None:
     """Handle authentication errors with appropriate logging and re-raising."""
@@ -36,7 +36,7 @@ def handle_authentication_error(
         error_type="authentication_error",
         error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
+        destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_CRITICAL,
     )
     raise ClientAuthenticationError(
@@ -48,7 +48,7 @@ def handle_resource_not_found_error(
     error: ResourceNotFoundError,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_topic: str,
     logger: logging.Logger,
 ) -> None:
     """Handle resource not found errors with appropriate logging and re-raising."""
@@ -58,11 +58,11 @@ def handle_resource_not_found_error(
         error_type="resource_not_found",
         error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
+        destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_HIGH,
     )
     raise ResourceNotFoundError(
-        f"Could not find destination queue '{destination_queue}': {error}"
+        f"Could not find destination topic '{destination_topic}': {error}"
     ) from error
 
 
@@ -70,7 +70,7 @@ def handle_service_request_error(
     error: ServiceRequestError,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_topic: str,
     logger: logging.Logger,
 ) -> None:
     """Handle service request errors with appropriate logging and re-raising."""
@@ -80,7 +80,7 @@ def handle_service_request_error(
         error_type="service_request_error",
         error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
+        destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_HIGH,
     )
     raise ServiceRequestError(f"Service Bus request failed: {error}") from error
@@ -90,7 +90,7 @@ def handle_service_bus_error(
     error: ServiceBusError,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_topic: str,
     logger: logging.Logger,
 ) -> None:
     """Handle Service Bus specific errors with appropriate logging and re-raising."""
@@ -101,7 +101,7 @@ def handle_service_bus_error(
         error_type="service_bus_error",
         error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
+        destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_HIGH,
         additional_context=additional_context,
     )
@@ -112,7 +112,7 @@ def handle_http_response_error(
     error: HttpResponseError,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_topic: str,
     logger: logging.Logger,
 ) -> None:
     """Handle HTTP response errors with appropriate logging and re-raising."""
@@ -122,7 +122,7 @@ def handle_http_response_error(
         error_type="http_response_error",
         error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
+        destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_HIGH,
     )
     raise HttpResponseError(f"HTTP request failed: {error}") from error
@@ -132,7 +132,7 @@ def handle_azure_error(
     error: AzureError,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_topic: str,
     logger: logging.Logger,
 ) -> None:
     """Handle general Azure errors with appropriate logging and re-raising."""
@@ -142,7 +142,7 @@ def handle_azure_error(
         error_type="azure_error",
         error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
+        destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_HIGH,
     )
     raise AzureError(f"Azure operation failed: {error}") from error
@@ -152,7 +152,7 @@ def handle_unexpected_error(
     error: Exception,
     correlation_id: str,
     direction: str,
-    destination_queue: str,
+    destination_topic: str,
     logger: logging.Logger,
 ) -> None:
     """Handle unexpected errors with appropriate logging and re-raising."""
@@ -162,7 +162,7 @@ def handle_unexpected_error(
         error_type="unexpected_error",
         error_message=str(error),
         direction=direction,
-        destination_queue=destination_queue,
+        destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_CRITICAL,
     )
     raise ReplicationError(

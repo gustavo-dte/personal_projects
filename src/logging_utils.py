@@ -26,13 +26,12 @@ def configure_logger() -> logging.Logger:
         Configured logger instance
     """
     logger = logging.getLogger(LOGGER_NAME)
-    
+
     # Check if Azure Monitor configuration is available
-    has_app_insights_connection = (
-        os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") or
-        os.getenv("APPINSIGHTS_INSTRUMENTATIONKEY")
-    )
-    
+    has_app_insights_connection = os.getenv(
+        "APPLICATIONINSIGHTS_CONNECTION_STRING"
+    ) or os.getenv("APPINSIGHTS_INSTRUMENTATIONKEY")
+
     if has_app_insights_connection:
         try:
             configure_azure_monitor(
@@ -51,9 +50,9 @@ def configure_logger() -> logging.Logger:
         # Configure basic logging for development/testing
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
-    
+
     return logger
 
 
@@ -65,7 +64,11 @@ def log_replication_start(
     message_id: str | None,
     ttl_seconds: int,
 ) -> None:
-    """Log the start of message replication."""
+    """Log the start of message replication.
+
+    Note: Parameter name kept as 'destination_queue' for backward compatibility with
+    existing log analysis tools, but represents destination topic name.
+    """
     logger.debug(
         "Starting message replication",
         extra={
@@ -89,7 +92,11 @@ def log_replication_success(
     content_type: str,
     body_size_bytes: int,
 ) -> None:
-    """Log successful message replication."""
+    """Log successful message replication.
+
+    Note: Parameter name kept as 'destination_queue' for backward compatibility with
+    existing log analysis tools, but represents destination topic name.
+    """
     logger.debug(
         "Message replication successful",
         extra={
@@ -116,7 +123,11 @@ def log_replication_error(
     alert_severity: str = ALERT_SEVERITY_HIGH,
     additional_context: dict[str, Any] | None = None,
 ) -> None:
-    """Log replication error with structured context."""
+    """Log replication error with structured context.
+
+    Note: Parameter name kept as 'destination_queue' for backward compatibility with
+    existing log analysis tools, but represents destination topic name.
+    """
     log_context = {
         "correlation_id": correlation_id,
         "error_type": error_type,

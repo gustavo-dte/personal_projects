@@ -67,6 +67,9 @@ class ReplicationConfig(BaseSettings):
 
     This Pydantic settings model automatically loads configuration from
     environment variables following the Twelve Factor App methodology.
+
+    Note: Field names are kept as 'primary_queue' and 'secondary_queue' for
+    backward compatibility, but they now represent topic names.
     """
 
     replication_type: Literal["primary_to_secondary", "secondary_to_primary"] = Field(
@@ -78,13 +81,13 @@ class ReplicationConfig(BaseSettings):
         default=None, description="Primary Service Bus connection string"
     )
     primary_queue: str | None = Field(
-        default=None, description="Primary Service Bus queue name"
+        default=None, description="Primary Service Bus topic name"
     )
     secondary_conn_str: str | None = Field(
         default=None, description="Secondary Service Bus connection string"
     )
     secondary_queue: str | None = Field(
-        default=None, description="Secondary Service Bus queue name"
+        default=None, description="Secondary Service Bus topic name"
     )
 
     # Timing configuration
@@ -119,9 +122,9 @@ class ReplicationConfig(BaseSettings):
         fields = {
             "replication_type": {"env": "REPLICATION_TYPE"},
             "primary_conn_str": {"env": "PRIMARY_SERVICEBUS_CONN"},
-            "primary_queue": {"env": "PRIMARY_QUEUE_NAME"},
+            "primary_queue": {"env": "PRIMARY_TOPIC_NAME"},
             "secondary_conn_str": {"env": "SECONDARY_SERVICEBUS_CONN"},
-            "secondary_queue": {"env": "SECONDARY_QUEUE_NAME"},
+            "secondary_queue": {"env": "SECONDARY_TOPIC_NAME"},
             "rto_minutes": {"env": "RTO_MINUTES"},
             "delta_minutes": {"env": "DELTA_MINUTES"},
         }
@@ -148,18 +151,19 @@ class ReplicationConfig(BaseSettings):
         required_vars_map = {
             REPLICATION_TYPE_PRIMARY_TO_SECONDARY: [
                 ("secondary_conn_str", "SECONDARY_SERVICEBUS_CONN"),
-                ("secondary_queue", "SECONDARY_QUEUE_NAME"),
+                ("secondary_queue", "SECONDARY_TOPIC_NAME"),
             ],
             REPLICATION_TYPE_SECONDARY_TO_PRIMARY: [
                 ("primary_conn_str", "PRIMARY_SERVICEBUS_CONN"),
-                ("primary_queue", "PRIMARY_QUEUE_NAME"),
+                ("primary_queue", "PRIMARY_TOPIC_NAME"),
             ],
         }
 
         # Use list comprehension to validate required fields
         required_fields = required_vars_map.get(self.replication_type, [])
         missing_fields = [
-            env_var for field_name, env_var in required_fields
+            env_var
+            for field_name, env_var in required_fields
             if not getattr(self, field_name)
         ]
 
@@ -191,15 +195,25 @@ class ReplicationConfig(BaseSettings):
         Get destination connection information based on replication type.
 
         Returns:
-            Tuple of (connection_string, queue_name, direction_description)
+            Tuple of (connection_string, topic_name, direction_description)
 
         Note:
             Validation is handled by Pydantic validators during model instantiation,
             so configuration is guaranteed to be valid when this method is called.
+
+        Raises:
+            AssertionError: If any required configuration is missing, which should never
+                           happen due to Pydantic validation.
         """
         if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
-            # Configuration already validated by Pydantic
+            assert self.secondary_conn_str is not None, (
+                "Secondary connection string is required"
+            )
+            assert self.secondary_queue is not None, "Secondary topic name is required"
             return (self.secondary_conn_str, self.secondary_queue, self.direction)
         else:
-            # Configuration already validated by Pydantic
+            assert self.primary_conn_str is not None, (
+                "Primary connection string is required"
+            )
+            assert self.primary_queue is not None, "Primary topic name is required"
             return (self.primary_conn_str, self.primary_queue, self.direction)

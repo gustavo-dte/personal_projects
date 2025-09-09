@@ -104,16 +104,16 @@ def load_and_validate_config() -> ReplicationConfig:
 
 def send_message_to_destination(
     destination_connection_string: str,
-    destination_queue_name: str,
+    destination_topic_name: str,
     message: ServiceBusMessage,
     correlation_id: str,
 ) -> None:
     """
-    Send a message to the destination Service Bus queue.
+    Send a message to the destination Service Bus topic.
 
     Args:
         destination_connection_string: Connection string for destination Service Bus
-        destination_queue_name: Name of the destination queue
+        destination_topic_name: Name of the destination topic
         message: The ServiceBusMessage to send
         correlation_id: Correlation ID for tracking
 
@@ -121,10 +121,10 @@ def send_message_to_destination(
         Various Azure exceptions depending on what goes wrong during sending
     """
     app_logger.debug(
-        "Sending message to destination queue",
+        "Sending message to destination topic",
         extra={
             "correlation_id": correlation_id,
-            "destination_queue": destination_queue_name,
+            "destination_topic": destination_topic_name,
             "message_id": getattr(message, "message_id", None),
         },
     )
@@ -132,14 +132,14 @@ def send_message_to_destination(
     with ServiceBusClient.from_connection_string(
         destination_connection_string
     ) as client:
-        with client.get_queue_sender(queue_name=destination_queue_name) as queue_sender:
-            queue_sender.send_messages(message)
+        with client.get_topic_sender(topic_name=destination_topic_name) as topic_sender:
+            topic_sender.send_messages(message)
 
 
 def _create_retry_send_function(
     source_message: func.ServiceBusMessage,
     destination_connection_string: str,
-    destination_queue_name: str,
+    destination_topic_name: str,
     ttl_seconds: int,
     direction: str,
     correlation_id: str,
@@ -154,7 +154,7 @@ def _create_retry_send_function(
     Args:
         source_message: The original Service Bus message
         destination_connection_string: Destination connection string
-        destination_queue_name: Name of destination queue
+        destination_topic_name: Name of destination topic
         ttl_seconds: Time-to-live for message
         direction: Replication direction description
         correlation_id: Tracking correlation ID
@@ -176,7 +176,7 @@ def _create_retry_send_function(
         # Send to destination
         send_message_to_destination(
             destination_connection_string=destination_connection_string,
-            destination_queue_name=destination_queue_name,
+            destination_topic_name=destination_topic_name,
             message=replicated_message,
             correlation_id=correlation_id,
         )
@@ -187,7 +187,7 @@ def _create_retry_send_function(
             replicated_message,
             correlation_id,
             direction,
-            destination_queue_name,
+            destination_topic_name,
         )
 
     return send_with_retry
@@ -198,7 +198,7 @@ def _log_successful_replication(
     replicated_message: func.ServiceBusMessage,
     correlation_id: str,
     direction: str,
-    destination_queue_name: str,
+    destination_topic_name: str,
 ) -> None:
     """
     Log successful message replication with detailed metrics.
@@ -211,14 +211,14 @@ def _log_successful_replication(
         replicated_message: New replicated message
         correlation_id: Tracking correlation ID
         direction: Replication direction description
-        destination_queue_name: Name of destination queue
+        destination_topic_name: Name of destination topic
     """
     source_body = source_message.get_body()
     log_replication_success(
         logger=app_logger,
         correlation_id=correlation_id,
         direction=direction,
-        destination_queue=destination_queue_name,
+        destination_queue=destination_topic_name,
         original_message_id=source_message.message_id,
         replicated_message_id=replicated_message.message_id,
         body_type=type(source_body).__name__,
@@ -233,7 +233,7 @@ def _handle_replication_exceptions(
     send_function: Any,
     correlation_id: str,
     direction: str,
-    destination_queue_name: str,
+    destination_topic_name: str,
     logger: logging.Logger,
 ) -> None:
     """
@@ -246,7 +246,7 @@ def _handle_replication_exceptions(
         send_function: The retry-enabled send function to execute
         correlation_id: Tracking correlation ID
         direction: Replication direction description
-        destination_queue_name: Name of destination queue
+        destination_topic_name: Name of destination topic
         logger: Logger instance for error handling
 
     Raises:
@@ -256,45 +256,45 @@ def _handle_replication_exceptions(
         send_function(correlation_id=correlation_id)
     except ClientAuthenticationError as auth_error:
         handle_authentication_error(
-            auth_error, correlation_id, direction, destination_queue_name, logger
+            auth_error, correlation_id, direction, destination_topic_name, logger
         )
     except ResourceNotFoundError as resource_error:
         handle_resource_not_found_error(
-            resource_error, correlation_id, direction, destination_queue_name, logger
+            resource_error, correlation_id, direction, destination_topic_name, logger
         )
     except ServiceRequestError as request_error:
         handle_service_request_error(
-            request_error, correlation_id, direction, destination_queue_name, logger
+            request_error, correlation_id, direction, destination_topic_name, logger
         )
     except ServiceBusError as sb_error:
         handle_service_bus_error(
-            sb_error, correlation_id, direction, destination_queue_name, logger
+            sb_error, correlation_id, direction, destination_topic_name, logger
         )
     except HttpResponseError as http_error:
         handle_http_response_error(
-            http_error, correlation_id, direction, destination_queue_name, logger
+            http_error, correlation_id, direction, destination_topic_name, logger
         )
     except AzureError as azure_error:
         handle_azure_error(
-            azure_error, correlation_id, direction, destination_queue_name, logger
+            azure_error, correlation_id, direction, destination_topic_name, logger
         )
     except Exception as unexpected_error:
         handle_unexpected_error(
-            unexpected_error, correlation_id, direction, destination_queue_name, logger
+            unexpected_error, correlation_id, direction, destination_topic_name, logger
         )
 
 
 def replicate_message_to_destination(
     source_message: func.ServiceBusMessage,
     destination_connection_string: str,
-    destination_queue_name: str,
+    destination_topic_name: str,
     ttl_seconds: int,
     direction: str,
     max_retry_attempts: int,
     base_retry_delay: float,
 ) -> None:
     """
-    Replicate a Service Bus message to the destination queue with retry logic.
+    Replicate a Service Bus message to the destination topic with retry logic.
 
     This function orchestrates the message replication process by coordinating
     correlation ID generation, logging, retry configuration, and error handling.
@@ -320,7 +320,7 @@ def replicate_message_to_destination(
         logger=app_logger,
         correlation_id=correlation_id,
         direction=direction,
-        destination_queue=destination_queue_name,
+        destination_queue=destination_topic_name,
         message_id=source_message.message_id,
         ttl_seconds=ttl_seconds,
     )
@@ -334,7 +334,7 @@ def replicate_message_to_destination(
     send_with_retry = _create_retry_send_function(
         source_message=source_message,
         destination_connection_string=destination_connection_string,
-        destination_queue_name=destination_queue_name,
+        destination_topic_name=destination_topic_name,
         ttl_seconds=ttl_seconds,
         direction=direction,
         correlation_id=correlation_id,
@@ -346,7 +346,7 @@ def replicate_message_to_destination(
         send_function=send_with_retry,
         correlation_id=correlation_id,
         direction=direction,
-        destination_queue_name=destination_queue_name,
+        destination_topic_name=destination_topic_name,
         logger=app_logger,
     )
 
@@ -370,7 +370,7 @@ def orchestrate_replication(
     """
     try:
         # Extract destination configuration
-        dest_connection_string, dest_queue_name, direction = (
+        dest_connection_string, dest_topic_name, direction = (
             replication_config.get_destination_config()
         )
 
@@ -386,7 +386,7 @@ def orchestrate_replication(
         replicate_message_to_destination(
             source_message=source_message,
             destination_connection_string=dest_connection_string,
-            destination_queue_name=dest_queue_name,
+            destination_topic_name=dest_topic_name,
             ttl_seconds=replication_config.ttl_seconds,
             direction=direction,
             max_retry_attempts=replication_config.retry_config.max_attempts,

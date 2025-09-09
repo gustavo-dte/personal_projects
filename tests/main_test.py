@@ -168,7 +168,7 @@ class TestErrorHandling:
         correlation_id = "test-id"
         direction = DIRECTION_PRIMARY_TO_SECONDARY
         destination_queue = "test-queue"
-        
+
         # Create a logger for testing
         logger = logging.getLogger("test-logger")
 
@@ -293,13 +293,13 @@ class TestIntegration:
         # Setup mocks
         mock_client = Mock()
         mock_sender = Mock()
-        
+
         # Mock the context manager properly
         mock_sender_context = Mock()
         mock_sender_context.__enter__ = Mock(return_value=mock_sender)
         mock_sender_context.__exit__ = Mock(return_value=False)
         mock_client.get_queue_sender.return_value = mock_sender_context
-        
+
         mock_client_context = Mock()
         mock_client_context.__enter__ = Mock(return_value=mock_client)
         mock_client_context.__exit__ = Mock(return_value=False)

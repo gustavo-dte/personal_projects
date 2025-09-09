@@ -4,7 +4,8 @@
       "connection": "PRIMARY_SERVICEBUS_CONN",
       "direction": "in",
       "name": "msg",
-      "queueName": "%PRIMARY_QUEUE_NAME%",
+      "topicName": "%PRIMARY_TOPIC_NAME%",
+      "subscriptionName": "%PRIMARY_SUBSCRIPTION_NAME%",
       "type": "serviceBusTrigger"
     }
   ],
