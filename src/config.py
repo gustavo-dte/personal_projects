@@ -112,6 +112,15 @@ class ReplicationConfig(BaseSettings):
         default_factory=DeadLetterConfig, description="Dead letter queue configuration"
     )
 
+    # Application Insights / Azure Monitor configuration
+    app_insights_connection_string: str | None = Field(
+        default=None, description="Application Insights connection string for telemetry"
+    )
+    app_insights_instrumentation_key: str | None = Field(
+        default=None,
+        description="Application Insights instrumentation key for telemetry"
+    )
+
     class Config:
         """Pydantic configuration."""
 
@@ -127,6 +136,12 @@ class ReplicationConfig(BaseSettings):
             "secondary_queue": {"env": "SECONDARY_TOPIC_NAME"},
             "rto_minutes": {"env": "RTO_MINUTES"},
             "delta_minutes": {"env": "DELTA_MINUTES"},
+            "app_insights_connection_string": {
+                "env": "APPLICATIONINSIGHTS_CONNECTION_STRING"
+            },
+            "app_insights_instrumentation_key": {
+                "env": "APPINSIGHTS_INSTRUMENTATIONKEY"
+            },
         }
 
     @field_validator("replication_type")
@@ -202,18 +217,37 @@ class ReplicationConfig(BaseSettings):
             so configuration is guaranteed to be valid when this method is called.
 
         Raises:
-            AssertionError: If any required configuration is missing, which should never
-                           happen due to Pydantic validation.
+            ConfigError: If any required configuration is missing, which should never
+                        happen due to Pydantic validation but is checked for safety.
         """
         if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
-            assert self.secondary_conn_str is not None, (
-                "Secondary connection string is required"
-            )
-            assert self.secondary_queue is not None, "Secondary topic name is required"
+            if self.secondary_conn_str is None:
+                raise ConfigError(
+                    "Secondary connection string is required for "
+                    "primary_to_secondary replication"
+                )
+            if self.secondary_queue is None:
+                raise ConfigError(
+                    "Secondary topic name is required for "
+                    "primary_to_secondary replication"
+                )
             return (self.secondary_conn_str, self.secondary_queue, self.direction)
         else:
-            assert self.primary_conn_str is not None, (
-                "Primary connection string is required"
-            )
-            assert self.primary_queue is not None, "Primary topic name is required"
+            if self.primary_conn_str is None:
+                raise ConfigError(
+                    "Primary connection string is required for "
+                    "secondary_to_primary replication"
+                )
+            if self.primary_queue is None:
+                raise ConfigError(
+                    "Primary topic name is required for "
+                    "secondary_to_primary replication"
+                )
             return (self.primary_conn_str, self.primary_queue, self.direction)
+
+    @property
+    def has_app_insights_config(self) -> bool:
+        """Check if Application Insights configuration is available."""
+        return bool(
+            self.app_insights_connection_string or self.app_insights_instrumentation_key
+        )

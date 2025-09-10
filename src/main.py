@@ -49,8 +49,21 @@ from .logging_utils import (
 from .message_utils import create_replicated_message, generate_correlation_id
 from .retry_utils import exponential_backoff_retry
 
-# Configure the application logger
+# Configure the initial logger (will be reconfigured with config later)
 app_logger = configure_logger()
+
+
+def configure_application_logging(config: ReplicationConfig) -> logging.Logger:
+    """
+    Configure application logging with proper configuration.
+
+    Args:
+        config: ReplicationConfig instance with Application Insights settings
+
+    Returns:
+        Configured logger instance
+    """
+    return configure_logger(config)
 
 
 def load_and_validate_config() -> ReplicationConfig:
@@ -422,10 +435,14 @@ def main(msg: func.ServiceBusMessage) -> None:
         # Load and validate configuration
         config = load_and_validate_config()
 
+        # Reconfigure logger with proper Application Insights settings
+        logger = configure_application_logging(config)
+        logger.info("Logger reconfigured with Application Insights settings")
+
         # Orchestrate the replication process
         orchestrate_replication(source_message=msg, replication_config=config)
 
-        app_logger.info("Service Bus replication function completed successfully")
+        logger.info("Service Bus replication function completed successfully")
 
     except (ConfigError, ValidationError, ReplicationError) as known_error:
         app_logger.error(

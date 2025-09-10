@@ -6,31 +6,44 @@ following the Twelve Factor App methodology.
 """
 
 import logging
-import os
 from typing import Any
 
 from azure.monitor.opentelemetry import configure_azure_monitor
 
+from .config import ReplicationConfig
 from .constants import ALERT_SEVERITY_HIGH, LOGGER_NAME
 
 
-def configure_logger() -> logging.Logger:
+def configure_logger(config: ReplicationConfig | None = None) -> logging.Logger:
     """
     Configure and return the application logger.
 
     Sets up Azure Monitor OpenTelemetry integration if the appropriate
-    connection string or instrumentation key is available. Falls back
-    to standard logging for development and testing environments.
+    connection string or instrumentation key is available in the configuration.
+    Falls back to standard logging for development and testing environments.
+
+    Args:
+        config: Optional ReplicationConfig instance with Application Insights settings.
+                If not provided, will create a new config instance to load from
+                environment.
 
     Returns:
         Configured logger instance
     """
     logger = logging.getLogger(LOGGER_NAME)
 
+    # Load configuration if not provided
+    if config is None:
+        try:
+            config = ReplicationConfig()
+        except Exception:
+            # If config loading fails, use standard logging
+            config = None
+
     # Check if Azure Monitor configuration is available
-    has_app_insights_connection = os.getenv(
-        "APPLICATIONINSIGHTS_CONNECTION_STRING"
-    ) or os.getenv("APPINSIGHTS_INSTRUMENTATIONKEY")
+    has_app_insights_connection = (
+        config and config.has_app_insights_config
+    ) if config else False
 
     if has_app_insights_connection:
         try:

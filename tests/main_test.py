@@ -18,8 +18,8 @@ from src.constants import (
     DEFAULT_RTO_MINUTES,
     DIRECTION_PRIMARY_TO_SECONDARY,
     REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-    TEST_SERVICEBUS_CONNECTION_STRING,
 )
+from tests.test_constants import TEST_SERVICEBUS_CONNECTION_STRING
 from src.exceptions import ConfigError, ValidationError
 from src.main import (
     handle_authentication_error,
@@ -310,7 +310,7 @@ class TestIntegration:
         # Execute
         send_message_to_destination(
             destination_connection_string="test_conn_str",
-            destination_queue_name="test_queue",
+            destination_topic_name="test_queue",
             message=mock_message,
             correlation_id="test_id",
         )

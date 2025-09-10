@@ -19,9 +19,6 @@ REPLICATION_TYPE_SECONDARY_TO_PRIMARY: Literal["secondary_to_primary"] = (
 DIRECTION_PRIMARY_TO_SECONDARY = "Primary → Secondary"
 DIRECTION_SECONDARY_TO_PRIMARY = "Secondary → Primary"
 
-# Test connection strings (for testing purposes only)
-TEST_SERVICEBUS_CONNECTION_STRING = "Endpoint=sb://test.servicebus.windows.net/"
-
 # Environment variable names
 ENV_REPLICATION_TYPE = "REPLICATION_TYPE"
 ENV_PRIMARY_SERVICEBUS_CONN = "PRIMARY_SERVICEBUS_CONN"
