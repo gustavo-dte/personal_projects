@@ -16,7 +16,7 @@ The application works as an Azure Function that gets triggered when messages arr
 ## How It Works
 
 1. A message arrives in your primary Service Bus topic
-2. The Azure Function is triggered automatically 
+2. The Azure Function is triggered automatically
 3. The function reads the message and creates a copy
 4. The copy is sent to your secondary Service Bus topic in another region
 5. The replicated message gets a configurable TTL (Time To Live) based on your RTO requirements
@@ -78,13 +78,13 @@ Before you start, you'll need:
    ```bash
    # Create virtual environment
    python -m venv venv
-   
+
    # Activate it (Windows)
    venv\Scripts\activate
-   
+
    # Activate it (Linux/Mac)
    source venv/bin/activate
-   
+
    # Install dependencies
    pip install -r requirements.txt
    ```
@@ -115,7 +115,7 @@ REPLICATION_TYPE=primary_to_secondary
 PRIMARY_SERVICEBUS_CONN="Endpoint=sb://your-primary-sb.servicebus.windows.net/;SharedAccessKeyName=..."
 PRIMARY_TOPIC_NAME="your-source-topic"
 
-# Secondary Service Bus (destination) - REQUIRED for primary_to_secondary mode  
+# Secondary Service Bus (destination) - REQUIRED for primary_to_secondary mode
 SECONDARY_SERVICEBUS_CONN="Endpoint=sb://your-secondary-sb.servicebus.windows.net/;SharedAccessKeyName=..."
 SECONDARY_TOPIC_NAME="your-destination-topic"
 ```
@@ -136,7 +136,7 @@ SECONDARY_TOPIC_NAME="your-source-topic"
 # Recovery Time Objective in minutes (default: 10)
 RTO_MINUTES=30
 
-# Additional buffer time in minutes (default: 2)  
+# Additional buffer time in minutes (default: 2)
 DELTA_MINUTES=5
 ```
 
@@ -213,10 +213,10 @@ The workflow runs automatically when:
 
 1. **Test** - Runs the full test suite with pytest
 2. **Security Scan** - Uses Bandit to scan for security vulnerabilities
-3. **Code Quality** - Runs linting and code analysis
-4. **Build** - Validates the application builds correctly
-5. **Integration Test** - Tests Service Bus integration (when credentials provided)
-6. **Notify** - Sends notifications about build status
+3. **Code Quality** - Runs linting and code analysis with ruff
+4. **Build** - Validates the application structure and creates deployment artifacts
+5. **Integration Test** - Currently skipped (no integration tests directory exists)
+6. **Notify** - Simple console logging of build status (not real notifications)
 
 #### **Using GitHub Actions for Manual Deployment**
 
@@ -280,7 +280,7 @@ PROD_SECONDARY_SERVICEBUS_CONN
 PROD_SECONDARY_TOPIC_NAME
 PROD_APPLICATIONINSIGHTS_CONNECTION_STRING
 
-# Staging Environment  
+# Staging Environment
 STAGING_SECONDARY_SERVICEBUS_CONN
 STAGING_SECONDARY_TOPIC_NAME
 STAGING_APPLICATIONINSIGHTS_CONNECTION_STRING
@@ -310,7 +310,7 @@ from azure.servicebus import ServiceBusClient, ServiceBusMessage
 async def send_test_message():
     conn_str = "your-primary-connection-string"
     topic_name = "your-source-topic"
-    
+
     async with ServiceBusClient.from_connection_string(conn_str) as client:
         sender = client.get_topic_sender(topic_name)
         message = ServiceBusMessage("Test message for replication")
@@ -397,7 +397,7 @@ When message sending fails, the function:
 The application provides detailed logging for troubleshooting:
 
 - **Info logs**: Normal operation, successful replications
-- **Warning logs**: Retry attempts, configuration issues  
+- **Warning logs**: Retry attempts, configuration issues
 - **Error logs**: Failed operations, authentication problems
 
 View logs in:
@@ -428,7 +428,7 @@ The project uses several tools for code quality:
 # Format code
 ruff format src/ tests/
 
-# Lint code  
+# Lint code
 ruff check src/ tests/
 
 # Type checking

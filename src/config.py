@@ -4,10 +4,10 @@ Configuration handling for the Service Bus replication function.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast  # noqa: F401
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import (
     DEFAULT_BASE_RETRY_DELAY,
@@ -17,6 +17,8 @@ from .constants import (
     DEFAULT_MAX_DELIVERY_COUNT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
     DEFAULT_RTO_MINUTES,
+    DIRECTION_PRIMARY_TO_SECONDARY,
+    DIRECTION_SECONDARY_TO_PRIMARY,
     REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
     REPLICATION_TYPE_SECONDARY_TO_PRIMARY,
     SECONDS_PER_MINUTE,
@@ -73,32 +75,44 @@ class ReplicationConfig(BaseSettings):
     """
 
     replication_type: Literal["primary_to_secondary", "secondary_to_primary"] = Field(
-        description="Direction of message replication"
+        default="primary_to_secondary",
+        alias="REPLICATION_TYPE",
+        description="Direction of message replication",
     )
 
     # Service Bus connection strings
     primary_conn_str: str | None = Field(
-        default=None, description="Primary Service Bus connection string"
+        default=None,
+        alias="PRIMARY_SERVICEBUS_CONN",
+        description="Primary Service Bus connection string",
     )
     primary_queue: str | None = Field(
-        default=None, description="Primary Service Bus topic name"
+        default=None,
+        alias="PRIMARY_TOPIC_NAME",
+        description="Primary Service Bus topic name",
     )
     secondary_conn_str: str | None = Field(
-        default=None, description="Secondary Service Bus connection string"
+        default=None,
+        alias="SECONDARY_SERVICEBUS_CONN",
+        description="Secondary Service Bus connection string",
     )
     secondary_queue: str | None = Field(
-        default=None, description="Secondary Service Bus topic name"
+        default=None,
+        alias="SECONDARY_TOPIC_NAME",
+        description="Secondary Service Bus topic name",
     )
 
     # Timing configuration
     rto_minutes: int = Field(
         default=DEFAULT_RTO_MINUTES,
+        alias="RTO_MINUTES",
         ge=1,
         le=1440,  # 24 hours
         description="Recovery Time Objective in minutes",
     )
     delta_minutes: int = Field(
         default=DEFAULT_DELTA_MINUTES,
+        alias="DELTA_MINUTES",
         ge=0,
         le=1440,
         description="Additional buffer time in minutes",
@@ -114,35 +128,22 @@ class ReplicationConfig(BaseSettings):
 
     # Application Insights / Azure Monitor configuration
     app_insights_connection_string: str | None = Field(
-        default=None, description="Application Insights connection string for telemetry"
+        default=None,
+        alias="APPLICATIONINSIGHTS_CONNECTION_STRING",
+        description="Application Insights connection string for telemetry",
     )
     app_insights_instrumentation_key: str | None = Field(
         default=None,
-        description="Application Insights instrumentation key for telemetry"
+        alias="APPINSIGHTS_INSTRUMENTATIONKEY",
+        description="Application Insights instrumentation key for telemetry",
     )
 
-    class Config:
-        """Pydantic configuration."""
-
-        env_prefix = ""
-        case_sensitive = True
-        env_nested_delimiter = "_"
-        # Map environment variables to nested fields
-        fields = {
-            "replication_type": {"env": "REPLICATION_TYPE"},
-            "primary_conn_str": {"env": "PRIMARY_SERVICEBUS_CONN"},
-            "primary_queue": {"env": "PRIMARY_TOPIC_NAME"},
-            "secondary_conn_str": {"env": "SECONDARY_SERVICEBUS_CONN"},
-            "secondary_queue": {"env": "SECONDARY_TOPIC_NAME"},
-            "rto_minutes": {"env": "RTO_MINUTES"},
-            "delta_minutes": {"env": "DELTA_MINUTES"},
-            "app_insights_connection_string": {
-                "env": "APPLICATIONINSIGHTS_CONNECTION_STRING"
-            },
-            "app_insights_instrumentation_key": {
-                "env": "APPINSIGHTS_INSTRUMENTATIONKEY"
-            },
-        }
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        case_sensitive=True,
+        env_nested_delimiter="_",
+        extra="forbid",
+    )
 
     @field_validator("replication_type")
     @classmethod
@@ -194,16 +195,14 @@ class ReplicationConfig(BaseSettings):
     def ttl_seconds(self) -> int:
         """Calculate the Time To Live for replicated messages in seconds."""
         total_minutes: int = self.rto_minutes + self.delta_minutes
-        seconds: int = total_minutes * SECONDS_PER_MINUTE
-        return seconds  # type: ignore[no-any-return] # we know this is an int due to type hints
+        return total_minutes * SECONDS_PER_MINUTE
 
     @property
     def direction(self) -> str:
         """Return a readable description of the replication direction."""
         if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
-            return "Primary → Secondary"
-        else:
-            return "Secondary → Primary"
+            return DIRECTION_PRIMARY_TO_SECONDARY
+        return DIRECTION_SECONDARY_TO_PRIMARY
 
     def get_destination_config(self) -> tuple[str, str, str]:
         """
@@ -221,29 +220,17 @@ class ReplicationConfig(BaseSettings):
                         happen due to Pydantic validation but is checked for safety.
         """
         if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
-            if self.secondary_conn_str is None:
-                raise ConfigError(
-                    "Secondary connection string is required for "
-                    "primary_to_secondary replication"
-                )
-            if self.secondary_queue is None:
-                raise ConfigError(
-                    "Secondary topic name is required for "
-                    "primary_to_secondary replication"
-                )
-            return (self.secondary_conn_str, self.secondary_queue, self.direction)
-        else:
-            if self.primary_conn_str is None:
-                raise ConfigError(
-                    "Primary connection string is required for "
-                    "secondary_to_primary replication"
-                )
-            if self.primary_queue is None:
-                raise ConfigError(
-                    "Primary topic name is required for "
-                    "secondary_to_primary replication"
-                )
-            return (self.primary_conn_str, self.primary_queue, self.direction)
+            return (
+                cast(str, self.secondary_conn_str),
+                cast(str, self.secondary_queue),
+                self.direction,
+            )
+
+        return (
+            cast(str, self.primary_conn_str),
+            cast(str, self.primary_queue),
+            self.direction,
+        )
 
     @property
     def has_app_insights_config(self) -> bool:

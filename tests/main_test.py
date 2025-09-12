@@ -19,7 +19,6 @@ from src.constants import (
     DIRECTION_PRIMARY_TO_SECONDARY,
     REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
 )
-from tests.test_constants import TEST_SERVICEBUS_CONNECTION_STRING
 from src.exceptions import ConfigError, ValidationError
 from src.main import (
     handle_authentication_error,
@@ -33,6 +32,7 @@ from src.message_utils import (
     generate_replicated_message_id,
     process_message_body,
 )
+from tests.constants_test import TEST_SERVICEBUS_CONNECTION_STRING
 
 
 class TestConfigurationLoading:
@@ -203,7 +203,7 @@ class TestReplicationOrchestration:
         call_args = mock_replicate.call_args
         assert call_args[1]["source_message"] == mock_message
         assert call_args[1]["destination_connection_string"] == "conn_str"
-        assert call_args[1]["destination_queue_name"] == "queue_name"
+        assert call_args[1]["destination_topic_name"] == "queue_name"
 
     def test_orchestrate_replication_validation_error(self):
         """Test replication orchestration with validation error."""
@@ -223,11 +223,11 @@ class TestReplicationConfig:
     def test_config_creation_valid(self):
         """Test creation of valid configuration."""
         config_data = {
-            "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
-            "secondary_queue": "test-queue",
-            "rto_minutes": DEFAULT_RTO_MINUTES,
-            "delta_minutes": DEFAULT_DELTA_MINUTES,
+            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
+            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
+            "SECONDARY_TOPIC_NAME": "test-queue",
+            "RTO_MINUTES": DEFAULT_RTO_MINUTES,
+            "DELTA_MINUTES": DEFAULT_DELTA_MINUTES,
         }
 
         config = ReplicationConfig(**config_data)
@@ -241,11 +241,11 @@ class TestReplicationConfig:
     def test_config_ttl_seconds_calculation(self):
         """Test TTL seconds calculation."""
         config_data = {
-            "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
-            "secondary_queue": "test-queue",
-            "rto_minutes": 10,
-            "delta_minutes": 2,
+            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
+            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
+            "SECONDARY_TOPIC_NAME": "test-queue",
+            "RTO_MINUTES": 10,
+            "DELTA_MINUTES": 2,
         }
 
         config = ReplicationConfig(**config_data)
@@ -255,9 +255,9 @@ class TestReplicationConfig:
     def test_config_direction_property(self):
         """Test direction property formatting."""
         config_data = {
-            "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
-            "secondary_queue": "test-queue",
+            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
+            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
+            "SECONDARY_TOPIC_NAME": "test-queue",
         }
 
         config = ReplicationConfig(**config_data)
@@ -267,9 +267,9 @@ class TestReplicationConfig:
     def test_config_get_destination_config(self):
         """Test getting destination configuration."""
         config_data = {
-            "replication_type": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "secondary_conn_str": TEST_SERVICEBUS_CONNECTION_STRING,
-            "secondary_queue": "test-queue",
+            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
+            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
+            "SECONDARY_TOPIC_NAME": "test-queue",
         }
 
         config = ReplicationConfig(**config_data)
@@ -298,7 +298,7 @@ class TestIntegration:
         mock_sender_context = Mock()
         mock_sender_context.__enter__ = Mock(return_value=mock_sender)
         mock_sender_context.__exit__ = Mock(return_value=False)
-        mock_client.get_queue_sender.return_value = mock_sender_context
+        mock_client.get_topic_sender.return_value = mock_sender_context
 
         mock_client_context = Mock()
         mock_client_context.__enter__ = Mock(return_value=mock_client)
@@ -319,7 +319,7 @@ class TestIntegration:
         mock_client_class.from_connection_string.assert_called_once_with(
             "test_conn_str"
         )
-        mock_client.get_queue_sender.assert_called_once_with(queue_name="test_queue")
+        mock_client.get_topic_sender.assert_called_once_with(topic_name="test_queue")
         mock_sender.send_messages.assert_called_once_with(mock_message)
 
 

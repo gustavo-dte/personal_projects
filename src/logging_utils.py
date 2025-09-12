@@ -42,8 +42,8 @@ def configure_logger(config: ReplicationConfig | None = None) -> logging.Logger:
 
     # Check if Azure Monitor configuration is available
     has_app_insights_connection = (
-        config and config.has_app_insights_config
-    ) if config else False
+        (config and config.has_app_insights_config) if config else False
+    )
 
     if has_app_insights_connection:
         try:

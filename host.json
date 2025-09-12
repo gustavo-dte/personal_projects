@@ -1,4 +1,5 @@
 {
+  "version": "2.0",
   "logging": {
     "applicationInsights": {
       "samplingSettings": {
@@ -6,5 +7,21 @@
       }
     }
   },
-  "version": "2.0"
+  "functionTimeout": "00:05:00",
+  "retry": {
+    "strategy": "exponentialBackoff",
+    "maxRetryCount": 3,
+    "minimumInterval": "00:00:05",
+    "maximumInterval": "00:00:30"
+  },
+  "extensions": {
+    "serviceBus": {
+      "prefetchCount": 100,
+      "messageHandlerOptions": {
+        "autoComplete": true,
+        "maxConcurrentCalls": 1,
+        "maxAutoRenewDuration": "00:05:00"
+      }
+    }
+  }
 }
