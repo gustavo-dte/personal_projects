@@ -17,9 +17,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        token: ${{ github.token }}
-        fetch-depth: 0
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
@@ -40,17 +37,8 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-cov pytest-mock
 
-    - name: Configure git for token authentication
-      run: |
-        git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
-
     - name: Run pre-commit checks
       uses: pre-commit/action@v3.0.0
-      env:
-        # Token for accessing private repositories in pre-commit hooks
-        PRE_COMMIT_HOME: ~/.cache/pre-commit
-      with:
-        token: ${{ github.token }}
 
     - name: Run type checking with mypy
       run: |
@@ -74,9 +62,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        token: ${{ github.token }}
-        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -239,7 +224,7 @@ jobs:
     - name: Notify on success
       if: needs.test.result == 'success' && needs.security-scan.result == 'success' && needs.code-quality.result == 'success' && needs.build.result == 'success'
       run: |
-        echo "✅ All CI checks passed successfully!"
+        echo "All CI checks passed successfully!"
         echo "Branch: ${{ github.ref_name }}"
         echo "Commit: ${{ github.sha }}"
         echo "Author: ${{ github.actor }}"
@@ -247,7 +232,7 @@ jobs:
     - name: Notify on failure
       if: needs.test.result == 'failure' || needs.security-scan.result == 'failure' || needs.code-quality.result == 'failure' || needs.build.result == 'failure'
       run: |
-        echo "❌ CI checks failed!"
+        echo "CI checks failed!"
         echo "Test: ${{ needs.test.result }}"
         echo "Security: ${{ needs.security-scan.result }}"
         echo "Code Quality: ${{ needs.code-quality.result }}"
