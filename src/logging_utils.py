@@ -5,6 +5,8 @@ This module provides centralized logging configuration and utility functions
 following the Twelve Factor App methodology.
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 

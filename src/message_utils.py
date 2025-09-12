@@ -5,6 +5,8 @@ This module contains functions for processing and transforming Service Bus messa
 during replication, following separation of concerns principle.
 """
 
+from __future__ import annotations
+
 import datetime
 from typing import Any, cast
 from uuid import UUID

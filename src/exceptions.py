@@ -5,6 +5,8 @@ This module defines custom exception classes following proper exception hierarch
 and naming conventions for different types of errors in the replication system.
 """
 
+from __future__ import annotations
+
 
 class ServiceBusReplicationError(Exception):
     """Base exception for all Service Bus replication related errors."""
