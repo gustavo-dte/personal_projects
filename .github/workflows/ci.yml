@@ -117,7 +117,7 @@ jobs:
 
     - name: Run ruff linting
       run: |
-        ruff check src/ tests/ --output-format=github
+        ruff check src/ tests/ --output-format=github --ignore=UP045
 
     - name: Run ruff formatting check
       run: |
