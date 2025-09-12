@@ -4,7 +4,7 @@ Configuration handling for the Service Bus replication function.
 
 from __future__ import annotations
 
-from typing import Literal, cast  # noqa: F401
+from typing import Literal, Optional, Union, cast  # noqa: F401
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -81,22 +81,22 @@ class ReplicationConfig(BaseSettings):
     )
 
     # Service Bus connection strings
-    primary_conn_str: str | None = Field(
+    primary_conn_str: Optional[str] = Field(
         default=None,
         alias="PRIMARY_SERVICEBUS_CONN",
         description="Primary Service Bus connection string",
     )
-    primary_queue: str | None = Field(
+    primary_queue: Optional[str] = Field(
         default=None,
         alias="PRIMARY_TOPIC_NAME",
         description="Primary Service Bus topic name",
     )
-    secondary_conn_str: str | None = Field(
+    secondary_conn_str: Optional[str] = Field(
         default=None,
         alias="SECONDARY_SERVICEBUS_CONN",
         description="Secondary Service Bus connection string",
     )
-    secondary_queue: str | None = Field(
+    secondary_queue: Optional[str] = Field(
         default=None,
         alias="SECONDARY_TOPIC_NAME",
         description="Secondary Service Bus topic name",
@@ -127,12 +127,12 @@ class ReplicationConfig(BaseSettings):
     )
 
     # Application Insights / Azure Monitor configuration
-    app_insights_connection_string: str | None = Field(
+    app_insights_connection_string: Optional[str] = Field(
         default=None,
         alias="APPLICATIONINSIGHTS_CONNECTION_STRING",
         description="Application Insights connection string for telemetry",
     )
-    app_insights_instrumentation_key: str | None = Field(
+    app_insights_instrumentation_key: Optional[str] = Field(
         default=None,
         alias="APPINSIGHTS_INSTRUMENTATIONKEY",
         description="Application Insights instrumentation key for telemetry",
