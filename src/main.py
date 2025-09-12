@@ -187,7 +187,7 @@ def _create_retry_send_function(
 
 def _log_successful_replication(
     source_message: func.ServiceBusMessage,
-    replicated_message: func.ServiceBusMessage,
+    replicated_message: ServiceBusMessage,  # azure.servicebus.ServiceBusMessage
     correlation_id: str,
     direction: str,
     destination_topic_name: str,
@@ -212,11 +212,11 @@ def _log_successful_replication(
         direction=direction,
         destination_queue=destination_topic_name,
         original_message_id=source_message.message_id,
-        replicated_message_id=replicated_message.message_id,
+        replicated_message_id=replicated_message.message_id or "unknown",
         body_type=type(source_body).__name__,
         content_type=replicated_message.content_type or "unknown",
-        body_size_bytes=len(replicated_message.get_body())
-        if replicated_message.get_body()
+        body_size_bytes=len(str(replicated_message.body))
+        if replicated_message.body
         else 0,
     )
 

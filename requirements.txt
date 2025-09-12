@@ -26,8 +26,12 @@ pytest-cov>=5.0.0,<6.0.0
 ruff>=0.7.0,<1.0.0
 mypy>=1.11.0,<2.0.0
 
-# Security scanning
+# Security fixes for known vulnerabilities
+# setuptools: Fix for CVE-2022-40897, CVE-2025-47273, CVE-2024-6345
+setuptools>=78.1.1,<79.0.0
+# black: Fix for CVE-2024-21503
+black>=24.3.0,<25.0.0
+
+# Security scanning tools
 bandit[toml]>=1.7.0,<2.0.0
 safety>=3.2.0,<4.0.0
-bandit>=1.7.0,<2.0.0
-safety>=2.3.0,<3.0.0

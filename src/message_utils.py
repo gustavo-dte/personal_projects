@@ -6,7 +6,8 @@ during replication, following separation of concerns principle.
 """
 
 import datetime
-from typing import Any
+from typing import Any, cast
+from uuid import UUID
 
 import azure.functions as func
 from azure.servicebus import ServiceBusMessage
@@ -153,7 +154,10 @@ def create_replicated_message(
     return ServiceBusMessage(
         processed_body,
         time_to_live=message_ttl,
-        application_properties=enhanced_properties,
+        application_properties=cast(
+            dict[str | bytes, int | float | bytes | bool | str | UUID],
+            enhanced_properties,
+        ),
         content_type=final_content_type,
         correlation_id=correlation_id,
         subject=getattr(source_message, "subject", None),
