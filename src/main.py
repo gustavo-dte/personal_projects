@@ -7,24 +7,34 @@ import logging
 from typing import Any
 
 import azure.functions as func
-from azure.core.exceptions import (AzureError, ClientAuthenticationError,
-                                   HttpResponseError, ResourceNotFoundError,
-                                   ServiceRequestError)
+from azure.core.exceptions import (
+    AzureError,
+    ClientAuthenticationError,
+    HttpResponseError,
+    ResourceNotFoundError,
+    ServiceRequestError,
+)
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.exceptions import ServiceBusError
 from pydantic import ValidationError as PydanticValidationError
 
 from .config import ReplicationConfig
 from .constants import ALERT_SEVERITY_CRITICAL, ALERT_SEVERITY_HIGH
-from .error_handlers import (handle_authentication_error, handle_azure_error,
-                             handle_http_response_error,
-                             handle_resource_not_found_error,
-                             handle_service_bus_error,
-                             handle_service_request_error,
-                             handle_unexpected_error)
+from .error_handlers import (
+    handle_authentication_error,
+    handle_azure_error,
+    handle_http_response_error,
+    handle_resource_not_found_error,
+    handle_service_bus_error,
+    handle_service_request_error,
+    handle_unexpected_error,
+)
 from .exceptions import ConfigError, ReplicationError, ValidationError
-from .logging_utils import (configure_logger, log_replication_start,
-                            log_replication_success)
+from .logging_utils import (
+    configure_logger,
+    log_replication_start,
+    log_replication_success,
+)
 from .message_utils import create_replicated_message, generate_correlation_id
 from .retry_utils import exponential_backoff_retry
 
