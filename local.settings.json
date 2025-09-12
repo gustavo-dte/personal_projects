@@ -4,11 +4,15 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "DELTA_MINUTES": "2",
     "FUNCTIONS_WORKER_RUNTIME": "python",
-    "PRIMARY_QUEUE_NAME": "<primary-queue-name>",
     "PRIMARY_SERVICEBUS_CONN": "<primary-namespace-connection-string>",
+    "PRIMARY_TOPIC_NAME": "<primary-topic-name>",
+    "PRIMARY_SUBSCRIPTION_NAME": "<primary-subscription-name>",
     "REPLICATION_TYPE": "primary_to_secondary",
     "RTO_MINUTES": "10",
-    "SECONDARY_QUEUE_NAME": "<secondary-queue-name>",
-    "SECONDARY_SERVICEBUS_CONN": "<secondary-namespace-connection-string>"
+    "SECONDARY_SERVICEBUS_CONN": "<secondary-namespace-connection-string>",
+    "SECONDARY_TOPIC_NAME": "<secondary-topic-name>",
+    "SOURCE_CONNECTION_STRING": "<source-connection-string>",
+    "TARGET_CONNECTION_STRING": "<target-connection-string>",
+    "QUEUE_NAME": "<queue-name-for-basic-operations>"
   }
 }
