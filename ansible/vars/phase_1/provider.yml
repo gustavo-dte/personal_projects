@@ -1,0 +1,11 @@
+---
+# Provider and Terraform Cloud configuration for dev
+tf_provider:
+  version: "~>4.0"
+  use_cli: false
+  skip_provider_registration: true
+
+tf_required_version: ">=1.12.2"
+tf_cloud:
+  organization: "DTE-Cloud-Platform"
+  workspace_name: "<update>"

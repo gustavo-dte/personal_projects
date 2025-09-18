@@ -1,0 +1,12 @@
+---
+# Default variables for common role
+
+# Azure verification settings
+# Note: Verification behavior is automatically determined by which parameters are provided:
+# - If only target_resource_group is provided: validates resource group only
+# - If both target_resource_group and target_subscription_id are provided: validates both
+target_subscription_id: ""
+target_resource_group: ""
+
+# Common API versions (can be overridden)
+api_version_migrate: "2020-01-01"

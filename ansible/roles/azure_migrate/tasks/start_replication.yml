@@ -1,0 +1,151 @@
+---
+# Start migration replication using Azure CLI (az migrate servers replicate start)
+
+- name: Verify prerequisites for start_replication
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: azure_verify_prerequisites
+
+- name: Assert additional required variables for start_replication
+  ansible.builtin.assert:
+    that:
+      - (azure_migrate_project_name | default('')) | length > 0
+      - (vm_name | default('')) | length > 0
+      - (target_resource_group | default('')) | length > 0
+      - (target_subscription_id | default('')) | length > 0
+      - (target_network_id | default('')) | length > 0
+      - (target_subnet_name | default('')) | length > 0
+      - (os_disk_scsi_id | default('')) | length > 0
+    fail_msg: |
+      Required variables missing. Please provide:
+      - azure_migrate_project_name: {{ azure_migrate_project_name | default('NOT SET') }}
+      - azure_migrate_project_resource_group: {{ azure_migrate_project_resource_group | default('NOT SET') }}
+      - vm_name: {{ vm_name | default('NOT SET') }}
+      - target_resource_group: {{ target_resource_group | default('NOT SET') }}
+      - target_subscription_id: {{ target_subscription_id | default('NOT SET') }}
+      - target_network_id: {{ target_network_id | default('NOT SET') }}
+      - target_subnet_name: {{ target_subnet_name | default('NOT SET') }}
+      - os_disk_scsi_id: {{ os_disk_scsi_id | default('NOT SET') }}
+
+- name: Generate target VM name if not specified
+  ansible.builtin.set_fact:
+    generated_target_vm_name: "vm-{{ os_prefix }}-{{ vm_env }}-{{ app_name_camel }}"
+  vars:
+    # Extract OS prefix (dca/lnx) from source VM name
+    os_prefix: "{{ vm_name | regex_search('^(dca|lnx)', '\\1') | first | default('vm') }}"
+    # Get environment from VM spec
+    vm_env: "{{ vm_spec.env | default('prod') }}"
+    # Get app_name from VM spec or extract from source VM name
+    app_name_raw: "{{ vm_spec.app_name | default(vm_name | regex_replace('^(dca|lnx)-?', '')) }}"
+    # Convert to camelCase: split by hyphens/underscores, capitalize each word except first
+    app_name_parts: "{{ app_name_raw | regex_replace('[_-]', ' ') | split() }}"
+    app_name_camel: "{{ app_name_parts[0] | lower }}{{ app_name_parts[1:] | map('capitalize') | join('') }}"
+  when: (target_vm_name | default('')) | length == 0
+
+- name: Set final target VM name
+  ansible.builtin.set_fact:
+    final_target_vm_name: "{{ target_vm_name | default(generated_target_vm_name) }}"
+
+- name: Display target VM name decision
+  ansible.builtin.debug:
+    msg:
+      - "Source VM: {{ vm_name }}"
+      - "Target VM: {{ final_target_vm_name }}"
+      - "{{ 'Using user-specified name' if (target_vm_name | default('')) | length > 0 else 'Using generated name' }}"
+
+- name: Check if replication already exists for VM
+  block:
+    - name: Check replication status for single VM
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/get_replication_status.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -VMNamesJson '["{{ vm_name }}"]'
+        -ReplicationThreshold 0
+        -SubscriptionId {{ target_subscription_id | default('') }}
+      register: existing_replication_check
+      changed_when: false
+
+    - name: Parse replication status and set flags
+      ansible.builtin.set_fact:
+        existing_replication_results: "{{ replication_json }}"
+        vm_already_replicating: "{{
+          replication_json | length > 0 and
+          replication_json[0].ReplicationStatus not in ['Not Found', 'Error']
+        }}"
+      vars:
+        replication_json: "{{ (existing_replication_check.stdout | regex_search('\\[.*\\]$', multiline=True) | default('[]')) | from_json }}"
+
+  rescue:
+    - name: Fail when replication status check fails
+      ansible.builtin.fail:
+        msg: |
+          Failed to check replication status for VM '{{ vm_name }}'.
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          To prevent duplicate replication, the operation has been stopped.
+          Please verify Azure connectivity and retry.
+
+- name: Start replication using PowerShell file
+  block:
+    - name: Run start_replication.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/start_replication.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -MachineName {{ vm_name }}
+        -TargetResourceGroup {{ target_resource_group }}
+        -SubscriptionId {{ target_subscription_id | default('') }}
+        -TargetVMName {{ final_target_vm_name }}
+        -OSDiskScsiId {{ os_disk_scsi_id }}
+        -TargetNetworkId {{ target_network_id }}
+        -TargetSubnetName {{ target_subnet_name }}
+        {{ ('-TargetVMSize ' ~ target_vm_size) if (target_vm_size | default('') | length) > 0 else '' }}
+        {{ ('-LicenseType ' ~ target_license_type) if (target_license_type | default('') | length) > 0 else '' }}
+        {{ ('-TargetDiskType ' ~ target_disk_type) if (target_disk_type | default('') | length) > 0 else '' }}
+        {{ '-SkipOSVersionCheck' if (skip_os_version_check | default(false)) else '' }}
+        {{ ('-MinWindowsBuild ' ~ min_os_versions.windows_server_build) if not (skip_os_version_check | default(false)) else '' }}
+        {{ ('-MinRHELVersion ' ~ min_os_versions.rhel_major) if not (skip_os_version_check | default(false)) else '' }}
+      register: replication_output
+      changed_when: replication_output.rc == 0
+  when: not vm_already_replicating
+  rescue:
+    - name: Replication failed
+      ansible.builtin.fail:
+        msg:
+          - "❌ Replication failed for VM '{{ vm_name }}'"
+          - "Error: {{ (replication_output.stdout | default('')) | regex_search('ERROR:.*') | default('Unknown error occurred') }}"
+          - "Full output: {{ replication_output.stdout | default('') }}"
+          - "Stderr: {{ replication_output.stderr | default('') }}"
+
+- name: Set output for VM that already has replication
+  ansible.builtin.set_fact:
+    replication_output:
+      stdout: "INFO: Replication already exists for '{{ vm_name }}'. Status: {{ existing_replication_results[0].ReplicationStatus | default('Unknown') }}. Skipping replication start."
+      rc: 0
+      changed: false
+  when: vm_already_replicating
+
+- name: Log replication operation
+  ansible.builtin.debug:
+    msg: "Triggering log write for {{ vm_name }}"
+  vars:
+    log_prefix: "AzMigrate_StartReplication_"
+    log_title: "Start Replication"
+    operation_output: "{{ replication_output }}"
+  notify: write_operation_log
+
+- name: Flush handlers to write log now
+  ansible.builtin.meta: flush_handlers
+
+- name: Display replication result
+  ansible.builtin.debug:
+    msg:
+      - "VM '{{ vm_name }}': {{ 'Already configured' if vm_already_replicating else 'Replication started' }}"
+      - "Changed: {{ replication_output.changed | default(false) }} | RC: {{ replication_output.rc | default('N/A') }}"
+
+- name: Show detailed replication CLI output
+  ansible.builtin.debug:
+    var: replication_output
+  when: ansible_verbosity >= 1

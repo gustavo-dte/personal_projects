@@ -1,0 +1,28 @@
+---
+# Playbook to start Azure Migrate replication for VMs using the azure_migrate role
+# This playbook loads VMs from the manifest and starts replication for each VM,
+# with idempotent handling to skip VMs that already have replication enabled
+
+- name: Start migration replication
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  pre_tasks:
+    - name: Show Azure account
+      block:
+        - name: Run 'az account show'
+          ansible.builtin.command: az account show -o table
+          changed_when: false
+      rescue:
+        - name: Exit playbook when 'az account show' fails
+          ansible.builtin.fail:
+            msg: "az account show failed; exiting"
+
+  vars:
+    migration_action: start_replication
+  roles:
+    - role: azure_migrate
+  post_tasks:
+    - name: Replication request output
+      ansible.builtin.debug:
+        var: replication_output

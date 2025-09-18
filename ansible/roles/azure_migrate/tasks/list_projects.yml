@@ -1,0 +1,69 @@
+---
+# List Azure Migrate projects tasks
+
+# Verify prerequisites (resource group only for list_projects)
+- name: Verify prerequisites for list_projects
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: azure_verify_prerequisites
+
+- name: Execute Azure Migrate projects listing with error handling
+  block:
+    - name: List Azure Migrate projects in resource group
+      azure.azcollection.azure_rm_resource_info:
+        resource_group: "{{ target_resource_group }}"
+        provider: Migrate
+        resource_type: migrateprojects
+        api_version: "{{ api_version_migrate }}"
+      register: migrate_projects_response
+
+    - name: Show full Azure Migrate API response
+      ansible.builtin.debug:
+        var: migrate_projects_response
+
+    - name: Normalize migrate projects list
+      ansible.builtin.set_fact:
+        migrate_projects_list: >-
+          {{
+            (
+              (migrate_projects_response.response if (migrate_projects_response.response is sequence) else (migrate_projects_response.response.value | default([])))
+              | selectattr('id', 'defined')
+              | list
+            )
+          }}
+
+    - name: Show Azure Migrate projects count
+      ansible.builtin.debug:
+        msg: "Found {{ (migrate_projects_list | default([])) | length }} Azure Migrate project(s)"
+
+    - name: Display Azure Migrate project details
+      ansible.builtin.debug:
+        msg:
+          - "Project Name: {{ (item.id | default('') | regex_search('/migrate[Pp]rojects/([^/]+)', '\\1')) | default('unknown') }}"
+          - "Location: {{ item.location | default('unknown') }}"
+          - "Type: {{ item.type | default('unknown') }}"
+          - "Id: {{ item.id | default('unknown') }}"
+      loop: "{{ migrate_projects_list | default([]) }}"
+
+  rescue:
+    - name: Handle Azure Migrate API failure
+      ansible.builtin.debug:
+        msg: "Failed to list Azure Migrate projects: {{ ansible_failed_result.msg | default('Unknown error') }}"
+
+    - name: Set failed response for logging
+      ansible.builtin.set_fact:
+        migrate_projects_response: "{{ ansible_failed_result }}"
+
+  always:
+    - name: Trigger log write for list_projects (success or failure)
+      ansible.builtin.debug:
+        msg: "Triggering log write for list_projects"
+      vars:
+        log_prefix: "AzMigrate_ListProjects_"
+        log_title: "List Projects"
+        operation_output: "{{ migrate_projects_response }}"
+        include_vm_name: false  # Don't include VM name for project listing operations
+      notify: write_operation_log
+
+    - name: Flush handlers to write log now
+      ansible.builtin.meta: flush_handlers

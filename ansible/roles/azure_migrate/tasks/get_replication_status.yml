@@ -1,0 +1,116 @@
+---
+# Check Azure Migrate replication status for VMs using PowerShell
+
+- name: Prepare VM names list from manifest
+  ansible.builtin.set_fact:
+    vm_names_from_manifest: "{{ manifest.vms | map(attribute='name') | list }}"
+
+- name: Check which VMs exist in target resource group
+  block:
+    - name: List VMs in target resource group
+      ansible.builtin.command: >-
+        az vm list --resource-group {{ manifest.target_resource_group }} --query "[].name" --output tsv
+      register: existing_vms_output
+      changed_when: false
+  rescue:
+    - name: Handle VM list failure
+      ansible.builtin.set_fact:
+        existing_vms_output:
+          stdout_lines: []
+
+    - name: Log VM list error
+      ansible.builtin.debug:
+        msg: "Warning: Could not list VMs in resource group {{ manifest.target_resource_group }}. Proceeding with empty VM list."
+
+- name: Set existing VMs list
+  ansible.builtin.set_fact:
+    existing_vms: "{{ existing_vms_output.stdout_lines | default([]) }}"
+
+- name: Filter VMs that exist in both manifest and target resource group
+  ansible.builtin.set_fact:
+    vms_to_check: "{{ vm_names_from_manifest | intersect(existing_vms) }}"
+
+
+- name: Check Azure Migrate replication status using PowerShell
+  block:
+    - name: Run get_replication_status.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/get_replication_status.ps1
+        -ProjectName {{ manifest.azure_migrate_project_name }}
+        -ProjectResourceGroup {{ manifest.azure_migrate_project_resource_group | default(manifest.target_resource_group) }}
+        -VMNamesJson '{{ vms_to_check | to_json }}'
+        -ReplicationThreshold {{ replication_threshold }}
+        -SubscriptionId {{ manifest.target_subscription_id | default('') }}
+      register: replication_status_output
+      changed_when: false
+  rescue:
+    - name: Handle replication status check failure
+      ansible.builtin.set_fact:
+        replication_status_results: []
+
+    - name: Build error results for each VM
+      ansible.builtin.set_fact:
+        replication_status_results: "{{ replication_status_results + [error_status] }}"
+      loop: "{{ vms_to_check }}"
+      vars:
+        error_status:
+          VMName: "{{ item }}"
+          ReplicationPercentage: 0
+          MeetsThreshold: false
+          ReplicationStatus: "Error"
+          Error: "Failed to retrieve replication status"
+
+    - name: Log replication status check error
+      ansible.builtin.debug:
+        msg: "Replication status check encountered errors. Check the logs above for details."
+  always:
+    - name: Trigger log write for replication status check
+      ansible.builtin.debug:
+        msg: "Triggering log write for replication status check"
+      vars:
+        log_prefix: "AzMigrate_GetReplicationStatus_"
+        log_title: "Check Replication Status"
+        operation_output: "{{ replication_status_output | default({}) }}"
+        include_vm_name: false  # Don't include VM name for multi-VM operations
+      notify: write_operation_log
+    - name: Flush handlers to write log now
+      ansible.builtin.meta: flush_handlers
+
+- name: Parse replication status results
+  ansible.builtin.set_fact:
+    replication_status_results: "{{ (replication_status_output.stdout | regex_search('\\[.*\\]$', multiline=True) | default('[]')) | from_json }}"
+  when:
+    - replication_status_output is defined
+    - replication_status_output.stdout is defined
+
+- name: Filter VMs that meet replication threshold
+  ansible.builtin.set_fact:
+    vms_ready_for_backup: "{{ replication_status_results | selectattr('MeetsThreshold', 'equalto', true) | map(attribute='VMName') | list }}"
+  when: replication_status_results is defined
+
+- name: Display replication status summary
+  ansible.builtin.debug:
+    msg:
+      - "=== AZURE MIGRATE REPLICATION STATUS RESULTS ==="
+      - "VMs from manifest: {{ vm_names_from_manifest | length }}"
+      - "VMs checked: {{ vms_to_check | length }}"
+      - "Meeting threshold ({{ replication_threshold }}%): {{ (replication_status_results | default([])) | selectattr('MeetsThreshold', 'equalto', true) | list | length }}"
+      - "Ready for backup: {{ (vms_ready_for_backup | default([])) | length }}"
+      - "Errors: {{ (replication_status_results | default([])) | selectattr('ReplicationStatus', 'equalto', 'Error') | list | length }}"
+
+- name: Display detailed replication results for each VM
+  ansible.builtin.debug:
+    msg:
+      - "VM: {{ item.VMName }}"
+      - "Replication %: {{ item.ReplicationPercentage }}%"
+      - "Status: {{ item.ReplicationStatus }}"
+      - "Meets Threshold: {{ item.MeetsThreshold }}"
+      - "Ready for Backup: {{ item.VMName in (vms_ready_for_backup | default([])) }}"
+      - "{{ ('Error: ' ~ item.Error) if item.Error else 'No errors' }}"
+  loop: "{{ replication_status_results | default([]) }}"
+
+- name: Show replication status CLI output
+  ansible.builtin.debug:
+    var: replication_status_output
+  when: replication_status_output is defined

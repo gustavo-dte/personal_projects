@@ -1,0 +1,66 @@
+name: Ansible-List-Migrate-Projects
+
+# This workflow lists the Azure Migrate projects in a resource group
+# It uses the Azure Migrate project name to list the projects
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: "Azure Resource Group name to list resources from"
+        required: true
+      subscription_id:
+        description: "Override Azure Subscription ID (optional)"
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  list-migrate-projects:
+    runs-on: [self-hosted, vm-migrate, container]
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Ansible and Azure SDKs
+        uses: ./.github/actions/prereq
+        with:
+          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
+          collections_requirements: ansible/requirements.yml
+
+      - name: Azure Login
+        uses: ./.github/actions/azure-login
+        with:
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set subscription (optional override)
+        if: ${{ inputs.subscription_id != '' }}
+        run: |
+          az account set -s "${{ inputs.subscription_id }}"
+
+      - name: Display configuration
+        run: |
+          echo "✅ Configuration ready!"
+          echo "📁 Resource group: ${{ inputs.resource_group }}"
+          echo "📋 Listing Azure Migrate projects..."
+
+      - name: Run playbook - list migrate projects
+        run: |
+          ansible-playbook ansible/playbooks/list-migrate-projects.yml \
+            -e "resource_group=${{ inputs.resource_group }}" \
+            -e "subscription_id=${SUBSCRIPTION_ID}"
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: list-projects-logs
+          path: ansible/logs/AzMigrate_ListProjects_*.log
+          if-no-files-found: warn
+          retention-days: 90

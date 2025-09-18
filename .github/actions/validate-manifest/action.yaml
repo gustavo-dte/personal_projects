@@ -1,0 +1,69 @@
+name: Validate Ansible Manifest
+description: "Validates that the specified manifest directory and file exist"
+
+inputs:
+  manifest:
+    description: "Manifest name (directory in ansible/vars/)"
+    required: true
+  vars_path:
+    description: "Path to vars directory"
+    required: false
+    default: "ansible/vars"
+
+outputs:
+  manifest_path:
+    description: "Full path to the validated manifest file"
+    value: ${{ steps.validate.outputs.manifest_path }}
+  manifest_dir:
+    description: "Full path to the validated manifest directory"
+    value: ${{ steps.validate.outputs.manifest_dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate manifest
+      id: validate
+      shell: bash
+      run: |
+        VARS_PATH="${{ inputs.vars_path }}"
+        MANIFEST="${{ inputs.manifest }}"
+        MANIFEST_DIR="${VARS_PATH}/${MANIFEST}"
+        MANIFEST_FILE="${MANIFEST_DIR}/manifest.yml"
+
+        echo "🔍 Validating manifest: ${MANIFEST}"
+        echo "📁 Looking in directory: ${MANIFEST_DIR}"
+
+        # Validate manifest directory exists
+        if [ ! -d "${MANIFEST_DIR}" ]; then
+          echo "❌ ERROR: Manifest directory '${MANIFEST_DIR}' does not exist"
+          echo ""
+          echo "📋 Available manifests:"
+          if [ -d "${VARS_PATH}" ]; then
+            ls -la "${VARS_PATH}" | grep "^d" | awk '{print "  - " $9}' | grep -v "^\s*-\s*\.$" | grep -v "^\s*-\s*\.\.$" || echo "  (none found)"
+          else
+            echo "  (vars directory not found)"
+          fi
+          exit 1
+        fi
+
+        # Validate manifest.yml file exists
+        if [ ! -f "${MANIFEST_FILE}" ]; then
+          echo "❌ ERROR: Manifest file '${MANIFEST_FILE}' does not exist"
+          echo ""
+          echo "📁 Contents of ${MANIFEST_DIR}:"
+          ls -la "${MANIFEST_DIR}" || echo "  (directory is empty or unreadable)"
+          exit 1
+        fi
+
+        # Validate manifest.yml is readable and contains YAML
+        if ! head -n 1 "${MANIFEST_FILE}" >/dev/null 2>&1; then
+          echo "❌ ERROR: Manifest file '${MANIFEST_FILE}' is not readable"
+          exit 1
+        fi
+
+        echo "✅ Manifest validation successful!"
+        echo "📄 Using manifest file: ${MANIFEST_FILE}"
+
+        # Set outputs
+        echo "manifest_path=${MANIFEST_FILE}" >> $GITHUB_OUTPUT
+        echo "manifest_dir=${MANIFEST_DIR}" >> $GITHUB_OUTPUT

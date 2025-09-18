@@ -1,0 +1,62 @@
+---
+# Common handlers for writing operation logs
+
+- name: Ensure logs directory exists (local)
+  listen: write_operation_log
+  ansible.builtin.file:
+    path: "{{ logs_dir }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  changed_when: false
+
+- name: Compute GitHub run number and timestamp (local)
+  listen: write_operation_log
+  ansible.builtin.set_fact:
+    gh_run_number: "{{ lookup('env', 'GITHUB_RUN_NUMBER') | default('', true) }}"
+    timestamp_compact: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+  delegate_to: localhost
+  changed_when: false
+
+- name: Compute effective log filename
+  listen: write_operation_log
+  ansible.builtin.set_fact:
+    effective_log_filename: >-
+      {{
+        (log_prefix | default('')) ~
+        ([
+          ((include_vm_name | default(false) | bool) and (vm_name is defined and (vm_name | length) > 0)) | ternary(vm_name, ''),
+          ((gh_run_number is defined and (gh_run_number | length) > 0)) | ternary('run' ~ gh_run_number, ''),
+          timestamp_compact
+        ] | select('length') | join('_')) ~ '.log'
+      }}
+  delegate_to: localhost
+  changed_when: false
+
+- name: Write log to file (local)
+  listen: write_operation_log
+  ansible.builtin.copy:
+    dest: "{{ logs_dir }}/{{ effective_log_filename }}"
+    mode: '0644'
+    content: |
+      === {{ log_title | default('Operation') }} Output ===
+      {% if operation_output.stdout is defined %}
+      STDOUT:
+      {{ operation_output.stdout | default('') }}
+
+      STDERR:
+      {{ operation_output.stderr | default('') }}
+      {% else %}
+      OUTPUT (structured):
+      {{ operation_output | to_nice_yaml }}
+      {% endif %}
+      === End ===
+  delegate_to: localhost
+  when: operation_output is defined
+  changed_when: false
+
+- name: Show path to saved log file
+  listen: write_operation_log
+  ansible.builtin.debug:
+    msg: "Log saved to {{ logs_dir }}/{{ effective_log_filename }}"
+  when: operation_output is defined

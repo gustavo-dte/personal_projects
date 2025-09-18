@@ -1,0 +1,27 @@
+---
+# List Azure Migrate projects for testing purposes
+- name: List Azure Migrate projects
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  pre_tasks:
+    - name: Show Azure account
+      block:
+        - name: Run 'az account show'
+          ansible.builtin.command: az account show -o table
+          changed_when: false
+      rescue:
+        - name: Exit playbook when 'az account show' fails
+          ansible.builtin.fail:
+            msg: "az account show failed; exiting"
+  vars:
+    migration_action: list_projects
+    # Map common inputs to role variables
+    target_resource_group: "{{ resource_group | default('') }}"
+    target_subscription_id: "{{ subscription_id | default('') }}"
+  roles:
+    - role: azure_migrate
+  post_tasks:
+    - name: Show projects count
+      ansible.builtin.debug:
+        msg: "Projects found: {{ (migrate_projects_list | default([])) | length }}"

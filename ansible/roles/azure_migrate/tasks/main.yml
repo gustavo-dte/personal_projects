@@ -1,0 +1,56 @@
+---
+- name: Load migration manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+
+- name: Assert migration_action is valid
+  ansible.builtin.assert:
+    that:
+      - migration_action in migration_actions
+    fail_msg: "❌ migration_action must be one of: {{ migration_actions | join(', ') }}"
+
+
+- name: Include start replication tasks
+  ansible.builtin.include_tasks: start_replication.yml
+  when: migration_action == 'start_replication'
+  loop: "{{ manifest.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest.azure_migrate_project_name | default(azure_migrate_project_name | default('')) }}"
+    azure_migrate_project_resource_group: "{{ manifest.azure_migrate_project_resource_group | default(azure_migrate_project_resource_group | default('')) }}"
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest.target_resource_group | default(target_resource_group | default(''))) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest.target_subscription_id | default(target_subscription_id | default(''))) }}"
+    target_network_id: "{{ vm_spec.target_network_id | default(manifest.target_network_id | default('')) }}"
+    target_subnet_name: "{{ vm_spec.target_subnet_name | default(manifest.target_subnet_name | default('')) }}"
+    target_vm_size: "{{ vm_spec.target_vm_size | default(manifest.target_vm_size | default('')) }}"
+    target_license_type: "{{ vm_spec.target_license_type | default(manifest.target_license_type | default('')) }}"
+    target_disk_type: "{{ vm_spec.target_disk_type | default(manifest.target_disk_type | default('')) }}"
+    target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
+    os_disk_scsi_id: "{{ vm_spec.os_disk_scsi_id | default(manifest.os_disk_scsi_id | default(os_disk_scsi_id)) }}"
+
+- name: Include cutover tasks
+  ansible.builtin.include_tasks: cutover.yml
+  when: migration_action == 'cutover'
+  loop: "{{ manifest.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest.azure_migrate_project_name | default(azure_migrate_project_name | default('')) }}"
+    azure_migrate_project_resource_group: "{{ manifest.azure_migrate_project_resource_group | default(azure_migrate_project_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest.target_subscription_id | default(target_subscription_id | default(''))) }}"
+    target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
+    shutdown_source_vm: "{{ vm_spec.shutdown_source_vm | default(manifest.shutdown_source_vm | default(false)) }}"
+
+- name: Include list projects tasks
+  ansible.builtin.include_tasks: list_projects.yml
+  when: migration_action == 'list_projects'
+
+- name: Include get replication status tasks
+  ansible.builtin.include_tasks: get_replication_status.yml
+  when: migration_action == 'get_replication_status'

@@ -1,0 +1,142 @@
+---
+# Enable Azure Backup protection for VMs using Azure Collections
+# Expects 'vms_ready_for_backup' from azure_migrate/get_replication_status.yml
+
+- name: Set VMs to process (only those that meet replication threshold)
+  ansible.builtin.set_fact:
+    vms_to_process: "{{ vms_ready_for_backup | default([]) }}"
+
+- name: Validate replication status was checked
+  ansible.builtin.assert:
+    that:
+      - vms_ready_for_backup is defined
+    fail_msg: |
+      The variable 'vms_ready_for_backup' is not defined.
+      This usually means the replication status check was skipped or failed.
+      The backup role requires replication status to be checked first.
+  when: vms_to_process | length == 0 and vms_ready_for_backup is not defined
+
+- name: Skip backup protection if no VMs are ready
+  ansible.builtin.debug:
+    msg: "No VMs meet the replication threshold ({{ replication_threshold }}%). Skipping backup protection enablement."
+  when: vms_to_process | length == 0
+
+- name: Build ARM resource IDs for VMs with per-VM backup configuration
+  ansible.builtin.set_fact:
+    vm_backup_configs: "{{ vm_backup_configs | default([]) + [vm_config] }}"
+  loop: "{{ vms_to_process }}"
+  vars:
+    vm_data: "{{ manifest.vms | selectattr('name', 'equalto', item) | first }}"
+    # Use VM-specific backup settings if defined, otherwise use global defaults
+    vm_recovery_vault_name: "{{ vm_data.backup.recovery_vault_name | default(recovery_vault_name) }}"
+    vm_backup_policy_name: "{{ vm_data.backup.backup_policy_name | default(backup_policy_name) }}"
+    vm_config:
+      vm_name: "{{ item }}"
+      recovery_vault_name: "{{ vm_recovery_vault_name }}"
+      backup_policy_name: "{{ vm_backup_policy_name }}"
+      backup_policy_id: "/subscriptions/{{ manifest.target_subscription_id }}/resourceGroups/{{ manifest.target_resource_group }}/providers/Microsoft.RecoveryServices/vaults/{{ vm_recovery_vault_name }}/backupPolicies/{{ vm_backup_policy_name }}"
+      vm_resource_id: "/subscriptions/{{ manifest.target_subscription_id }}/resourceGroups/{{ manifest.target_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ item }}"
+
+- name: Enable Azure Backup protection for each VM
+  block:
+    - name: Enable backup protection using Azure Collections
+      azure.azcollection.azure_rm_backupazurevm:
+        resource_group: "{{ manifest.target_resource_group }}"
+        recovery_vault_name: "{{ item.recovery_vault_name }}"
+        resource_id: "{{ item.vm_resource_id }}"
+        backup_policy_id: "{{ item.backup_policy_id }}"
+        state: create
+        subscription_id: "{{ manifest.target_subscription_id }}"
+      register: backup_protection_results_raw
+      loop: "{{ vm_backup_configs | default([]) }}"
+      loop_control:
+        loop_var: item
+
+    - name: Initialize protection results
+      ansible.builtin.set_fact:
+        backup_protection_results: []
+
+    - name: Build protection results for each VM
+      ansible.builtin.set_fact:
+        backup_protection_results: "{{ backup_protection_results + [vm_result] }}"
+      loop: "{{ backup_protection_results_raw.results }}"
+      vars:
+        vm_name: "{{ item.item.vm_name }}"
+        recovery_vault_name: "{{ item.item.recovery_vault_name }}"
+        backup_policy_name: "{{ item.item.backup_policy_name }}"
+        has_error: "{{ item.failed | default(false) }}"
+        protection_enabled: "{{ item.changed | default(false) }}"
+        already_protected: "{{ not protection_enabled and not has_error }}"
+        vm_result:
+          vm_name: "{{ vm_name }}"
+          recovery_vault_name: "{{ recovery_vault_name }}"
+          backup_policy_name: "{{ backup_policy_name }}"
+          already_protected: "{{ already_protected }}"
+          protection_enabled: "{{ protection_enabled }}"
+          status: "{{ 'Error' if has_error else ('Protection Enabled' if protection_enabled else 'Already Protected') }}"
+          error: "{{ item.msg | default('') if has_error else '' }}"
+          backup_item_id: "{{ item.id | default('') }}"
+
+  rescue:
+    - name: Initialize error results
+      ansible.builtin.set_fact:
+        backup_protection_results: []
+
+    - name: Build error results for each VM
+      ansible.builtin.set_fact:
+        backup_protection_results: "{{ backup_protection_results + [error_result] }}"
+      loop: "{{ vm_backup_configs | default([]) }}"
+      vars:
+        error_result:
+          vm_name: "{{ item.vm_name }}"
+          recovery_vault_name: "{{ item.recovery_vault_name }}"
+          backup_policy_name: "{{ item.backup_policy_name }}"
+          already_protected: false
+          protection_enabled: false
+          status: "Error"
+          error: "Failed to process VM backup protection"
+          backup_item_id: ""
+
+    - name: Log overall failure
+      ansible.builtin.debug:
+        msg: "Backup protection process encountered errors. Check individual VM results for details."
+  always:
+    - name: Trigger log write for backup protection
+      ansible.builtin.debug:
+        msg: "Triggering log write for backup protection enablement"
+      vars:
+        log_prefix: "AzBackup_EnableBackupProtection_"
+        log_title: "Enable Backup Protection"
+        operation_output: "{{ backup_protection_results_raw | default({}) }}"
+        include_vm_name: false  # Don't include VM name for multi-VM operations
+      notify: write_operation_log
+    - name: Flush handlers to write log now
+      ansible.builtin.meta: flush_handlers
+  when: vm_backup_configs | default([]) | length > 0
+
+- name: Display backup protection summary
+  ansible.builtin.debug:
+    msg:
+      - "=== AZURE BACKUP PROTECTION RESULTS ==="
+      - "VMs processed: {{ vms_to_process | length }}"
+      - "Protection enabled: {{ (backup_protection_results | default([])) | selectattr('protection_enabled', 'equalto', true) | list | length }}"
+      - "Already protected: {{ (backup_protection_results | default([])) | selectattr('already_protected', 'equalto', true) | list | length }}"
+      - "Errors: {{ (backup_protection_results | default([])) | selectattr('status', 'equalto', 'Error') | list | length }}"
+
+- name: Display detailed results for each VM
+  ansible.builtin.debug:
+    msg:
+      - "VM: {{ item.vm_name }}"
+      - "Recovery Vault: {{ item.recovery_vault_name }}"
+      - "Backup Policy: {{ item.backup_policy_name }}"
+      - "Status: {{ item.status }}"
+      - "Already Protected: {{ item.already_protected }}"
+      - "Protection Enabled: {{ item.protection_enabled }}"
+      - "Backup Item ID: {{ item.backup_item_id if item.backup_item_id else 'N/A' }}"
+      - "{{ ('Error: ' ~ item.error) if item.error else 'No errors' }}"
+  loop: "{{ backup_protection_results | default([]) }}"
+
+- name: Show raw Azure Collection results
+  ansible.builtin.debug:
+    var: backup_protection_results_raw
+  when: backup_protection_results_raw is defined

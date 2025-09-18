@@ -1,0 +1,88 @@
+---
+# Common Azure prerequisite verification task
+
+- name: Assert required variables for Azure verification
+  ansible.builtin.assert:
+    that:
+      # Always require resource group
+      - (target_resource_group | default('')) | length > 0
+    fail_msg: >-
+      Required variable missing: target_resource_group is always required.
+
+- name: Validate Azure subscription ID format (when provided)
+  ansible.builtin.assert:
+    that:
+      # Azure subscription ID should be a valid GUID format (8-4-4-4-12 characters)
+      - target_subscription_id | regex_search('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+    fail_msg: >-
+      Invalid Azure subscription ID format: '{{ target_subscription_id | default('') }}'.
+      Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (GUID format)
+  when: target_subscription_id is defined and (target_subscription_id | default('')) | length > 0
+
+- name: Verify Azure subscription exists (when subscription ID is provided)
+  block:
+    - name: Check if target subscription exists
+      azure.azcollection.azure_rm_subscription_info:
+        subscription_id: "{{ target_subscription_id }}"
+      register: subscription_info
+
+    - name: Assert subscription exists and is enabled
+      ansible.builtin.assert:
+        that:
+          - subscription_info.subscriptions is defined
+          - subscription_info.subscriptions | length > 0
+          - subscription_info.subscriptions[0].state == 'Enabled'
+        fail_msg: >-
+          Target subscription '{{ target_subscription_id }}' does not exist or is not enabled.
+          Current state: {{ subscription_info.subscriptions[0].state | default('unknown') }}
+
+    - name: Display subscription verification success
+      ansible.builtin.debug:
+        msg: >-
+          ✓ Subscription verification passed:
+          {{ subscription_info.subscriptions[0].display_name | default(target_subscription_id) }}
+          ({{ subscription_info.subscriptions[0].state | default('unknown') }})
+
+  rescue:
+    - name: Handle subscription verification failure
+      ansible.builtin.fail:
+        msg: >-
+          Failed to verify subscription '{{ target_subscription_id }}':
+          {{ ansible_failed_result.msg | default('Subscription not found or inaccessible') }}
+
+  when: target_subscription_id is defined and (target_subscription_id | default('')) | length > 0
+
+- name: Verify Azure resource group exists
+  block:
+    - name: Check if target resource group exists
+      azure.azcollection.azure_rm_resourcegroup_info:
+        name: "{{ target_resource_group }}"
+      register: resource_group_info
+
+    - name: Assert resource group exists
+      ansible.builtin.assert:
+        that:
+          - resource_group_info.resourcegroups is defined
+          - resource_group_info.resourcegroups | length > 0
+        fail_msg: >-
+          Target resource group '{{ target_resource_group }}' does not exist in the current subscription context.
+
+    - name: Display resource group verification success
+      ansible.builtin.debug:
+        msg: >-
+          ✓ Resource group verification passed:
+          {{ resource_group_info.resourcegroups[0].name }}
+          in {{ resource_group_info.resourcegroups[0].location }}
+
+  rescue:
+    - name: Handle resource group verification failure
+      ansible.builtin.fail:
+        msg: >-
+          Failed to verify resource group '{{ target_resource_group }}':
+          {{ ansible_failed_result.msg | default('Resource group not found or inaccessible') }}
+
+- name: Azure prerequisites verification completed
+  ansible.builtin.debug:
+    msg: >-
+      ✓ All Azure prerequisites verified successfully.
+      {{ 'Subscription: ' ~ target_subscription_id ~ ', ' if (target_subscription_id is defined and (target_subscription_id | default('')) | length > 0) else '' }}Resource Group: {{ target_resource_group }}

@@ -1,106 +1,49 @@
-# Cloud Application ServiceBus Replication
+# Cloud Platform VM Migration
 
-> **Beta**: This project is under active development. Features and APIs may change.
+This repository contains Ansible playbooks and roles for Azure VM migration operations, including Azure Migrate replication management and Azure Backup protection orchestration.
 
 ## Overview
 
-Cloud Application ServiceBus Replication provides a robust solution for replicating messages across Azure ServiceBus instances, enabling reliable cloud-native communication and disaster recovery for enterprise applications.
+This project provides automated workflows for:
+- **Azure Migrate Operations**: Start replication, check replication status, perform migration cutover, list migrate projects
+- **Azure Backup Protection**: Enable backup protection for VMs based on replication readiness
+- **OS Version Validation**: Ensure VMs meet minimum OS requirements (Windows Server 2019+, RHEL 8+)
+- **Manifest-driven Configuration**: Manage multiple VMs through manifest files
 
-## Features
+## Key Features
 
-- 🔄 **Message Replication**: Seamlessly replicate messages between ServiceBus namespaces.
-- ⚡ **High Availability**: Designed for fault tolerance and business continuity.
-- 🔒 **Secure by Default**: Follows Azure security best practices.
-- 🛠️ **Extensible**: Easily integrate with existing cloud workflows.
-- 🧪 **Pre-commit & CI/CD**: Automated checks and workflows for code quality.
+- **Idempotent Operations**: Safe to re-run - skips already configured VMs
+- **Manifest-driven Configuration**: Centralized VM and environment management
+- **Smart Backup Orchestration**: Only enables backup for VMs meeting replication thresholds
+- **OS Compatibility Validation**: Configurable minimum OS version checks
+- **Comprehensive Logging**: Detailed logs with GitHub Actions artifact upload
 
-## Getting Started
+## Quick Start
 
-### Prerequisites
+1. **Prerequisites**: Install Ansible, Azure CLI, PowerShell 7, and Azure PowerShell modules
+2. **Authentication**: Run `az login` or configure service principal/managed identity
+3. **Configuration**: Update `ansible/vars/phase_1/manifest.yml` with your environment details
+4. **Execute**: Run playbooks directly or use GitHub Actions workflows
 
-- Python 3.11+
-- Azure ServiceBus access
-- [Poetry](https://python-poetry.org/) or [pip](https://pip.pypa.io/en/stable/)
+## Main Components
 
-### Installation
+- **`ansible/playbooks/`**: Ready-to-use playbooks for migration operations
+- **`ansible/roles/`**: Reusable roles (azure_migrate, azure_backup, common)
+- **`ansible/vars/`**: Manifest-specific configuration
+- **`.github/workflows/`**: GitHub Actions for automated execution
 
-```fish
-# Clone the repository
-git clone https://github.com/dteenergy/cloud-application-servicebus-replication.git
-cd cloud-application-servicebus-replication
+## Contributing
 
-# (Optional) Create and activate a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+To contribute to this project, you'll need to install several development tools and configure your environment. Please see our **[Contributing Guide](docs/CONTRIBUTING.md)** for:
 
-# Install dependencies
-pip install -r requirements.txt  # or use Poetry
-```
+- Required software installation (Ansible, Azure CLI, PowerShell, pre-commit)
+- Development environment setup for Windows and macOS
+- Pre-commit hook configuration
 
-### Configuration
+### 💡 Need Help?
 
-- Update your Azure credentials and ServiceBus settings in your environment or configuration files as needed.
+- Check the [Contributing Guide](docs/CONTRIBUTING.md) for detailed instructions
+- Review the [Ansible README](ansible/README.md) for playbook usage examples
+- Contact the development team if you encounter setup difficulties
 
-## Usage
-
-```fish
-# Run the main application
-python src/main.py
-```
-
-## Development
-
-### Pre-commit Hooks
-
-This project uses [pre-commit](https://pre-commit.com/) for code quality checks. To set up:
-
-```fish
-pip install pre-commit
-pre-commit install
-pre-commit run --all-files
-```
-
-### Linting & Formatting
-
-- [Ruff](https://github.com/astral-sh/ruff): Fast Python linter & formatter
-- [mypy](http://mypy-lang.org/): Static type checker
-
-```fish
-ruff src/
-mypy src/
-```
-
-### Testing
-
-Add your tests in the `tests/` directory and run them using your preferred test runner.
-
-## CI/CD
-
-GitHub Actions automate checks for every push and pull request:
-
-- Pre-commit validation
-- Author assignment
-- Secure secrets management
-
-## Project Structure
-
-```
-cloud-application-servicebus-replication/
-├── src/
-│   └── main.py
-├── pyproject.toml
-├── .pre-commit-config.yaml
-├── .github/
-│   └── workflows/
-│       ├── on-pull-request.yaml
-│       └── on-push.yaml
-└── README.md
-```
-
-## Resources
-
-- [Azure ServiceBus Documentation](https://learn.microsoft.com/en-us/azure/service-bus-messaging/)
-- [DTE Energy GitHub](https://github.com/dteenergy)
-
-> [!TIP]
-> For questions or support, open an issue in this repository.
+**Note:** All contributions must pass our automated checks including Ansible linting, YAML validation, and security scans before being merged.

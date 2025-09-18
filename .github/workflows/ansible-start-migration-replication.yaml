@@ -1,0 +1,63 @@
+name: Ansible-Start-Migration-Replication
+
+# This workflow starts a migration replication using an existing Azure Migrate project
+# It uses the Azure Migrate project name to start the replication
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  start-migration-replication:
+    runs-on: [self-hosted, vm-migrate, container]
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: Setup Ansible and Azure SDKs
+        uses: ./.github/actions/prereq
+        with:
+          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
+          collections_requirements: ansible/requirements.yml
+
+      - name: Azure Login
+        uses: ./.github/actions/azure-login
+        with:
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Display configuration
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🚀 Starting migration replication..."
+
+      - name: Run playbook - start migration replication
+        run: |
+          ansible-playbook ansible/playbooks/start-migration-replication.yml \
+            -e "manifest=${{ inputs.manifest }}"
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-replication-logs
+          path: ansible/logs/AzMigrate_StartReplication_*.log
+          if-no-files-found: warn
+          retention-days: 90

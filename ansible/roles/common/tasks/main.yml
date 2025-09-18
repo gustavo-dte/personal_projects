@@ -1,0 +1,11 @@
+---
+# Main tasks file for common role
+# This file can be used to include other common tasks
+
+- name: Include manifest loading tasks
+  ansible.builtin.include_tasks: load_manifest.yml
+  when: load_manifest | default(false)
+
+- name: Include Azure prerequisite verification tasks
+  ansible.builtin.include_tasks: azure_verify_prerequisites.yml
+  when: verify_azure_prerequisites | default(false)

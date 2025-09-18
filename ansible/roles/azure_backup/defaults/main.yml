@@ -1,0 +1,10 @@
+---
+# Default behavior and action
+backup_action: "enable_backup_protection"
+backup_actions:
+  - enable_backup_protection
+
+
+# Paths
+# Default logs directory resolves to the repository's ansible/logs folder
+logs_dir: "{{ (role_path | dirname | dirname) }}/logs"

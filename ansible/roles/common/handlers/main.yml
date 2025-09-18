@@ -1,0 +1,6 @@
+---
+# Main handlers file for common role
+# This file includes other handler files for better organization
+
+- name: Include logging handlers
+  ansible.builtin.include: logging.yml

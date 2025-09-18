@@ -1,0 +1,95 @@
+name: Ansible-Migration-Cutover
+
+# This workflow performs migration cutover for VMs using Azure Migrate
+# WARNING: This operation is irreversible and creates target VMs in Azure
+# Ensure replication is complete before running this workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      confirmation:
+        description: "Type 'CONFIRM' to proceed with cutover (irreversible operation)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  migration-cutover:
+    runs-on: [self-hosted, vm-migrate, container]
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate confirmation
+        run: |
+          if [ "${{ inputs.confirmation }}" != "CONFIRM" ]; then
+            echo "Invalid confirmation. You must type 'CONFIRM' to proceed."
+            echo "This is a safety measure for irreversible operations."
+            exit 1
+          fi
+          echo "Confirmation validated. Proceeding with cutover."
+
+      - name: Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: Setup Ansible and Azure SDKs
+        uses: ./.github/actions/prereq
+        with:
+          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
+          collections_requirements: ansible/requirements.yml
+
+      - name: Azure Login
+        uses: ./.github/actions/azure-login
+        with:
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Display cutover warning and configuration
+        run: |
+          echo "WARNING: MIGRATION CUTOVER OPERATION"
+          echo "This will create target VMs in Azure and complete migration"
+          echo "This operation is IRREVERSIBLE once started"
+          echo ""
+          echo "Configuration validated"
+          echo "Using manifest: ${{ inputs.manifest }}"
+          echo "Starting migration cutover..."
+
+      - name: Run playbook - migration cutover
+        run: |
+          ansible-playbook ansible/playbooks/migration-cutover.yml \
+            -e "manifest=${{ inputs.manifest }}"
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-cutover-logs
+          path: ansible/logs/AzMigrate_Cutover_*.log
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Post-cutover guidance
+        if: success()
+        run: |
+          echo "Migration cutover workflow completed"
+          echo ""
+          echo "Next steps:"
+          echo "1. Monitor migration jobs in Azure portal"
+          echo "2. Verify target VMs are created"
+          echo "3. Test target VM functionality"
+          echo "4. Shutdown source VMs if needed"
+          echo "5. Update DNS and networking"
+          echo ""
+          echo "Check uploaded logs for detailed results"

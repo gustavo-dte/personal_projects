@@ -1,0 +1,20 @@
+---
+# Common manifest loading task
+# Loads the migration manifest from the vars directory based on manifest name
+
+- name: Assert manifest is provided
+  ansible.builtin.assert:
+    that:
+      - manifest is defined
+      - (manifest | default('')) | length > 0
+    fail_msg: "❌ manifest is required. Please specify the environment manifest to load (e.g., 'phase_1', 'phase_2', 'phase_3')."
+
+- name: Load migration manifest
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../vars/{{ manifest }}/manifest.yml"
+    name: manifest
+
+- name: Display loaded manifest
+  ansible.builtin.debug:
+    msg: "📄 Loaded manifest for environment: {{ manifest }}"
+    verbosity: 1

@@ -1,0 +1,39 @@
+## Manifest for migration replication (phase_1)
+
+# Global defaults
+azure_migrate_project_name: azure-migrate-automation
+azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
+target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
+target_resource_group: rg-cu-corpapps-dev
+os_disk_scsi_id: scsi0:0
+
+# Azure Backup defaults
+recovery_vault_name: cloud-platform-prod-cu-backup-vault
+backup_policy_name: DefaultPolicy
+replication_threshold: 80
+
+# Network configuration
+target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
+target_subnet_name: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet/subnets/main
+
+# VM configuration
+target_vm_size: Standard_D4s_v5
+target_license_type: NoLicenseType
+target_disk_type: Standard_LRS
+
+# List of VMs to replicate
+vms:
+  - name: dca-dev7048
+    description: "Server created to test migration pipeline"
+    target_vm_size: Standard_D2s_v5
+    target_license_type: Windows_Server
+    target_disk_type: Standard_LRS
+    portfolio: Test-Portfolio
+    tier: 4
+    env: dev
+    app_name: test-app
+
+    backup:
+      recovery_vault_name: cloud-platform-prod-cu-backup-vault
+      backup_policy_name: DefaultPolicy
+      replication_threshold: 80

@@ -1,0 +1,6 @@
+---
+# Optional Terraform backend configuration overrides for dev
+# Leave as local by default; adjust as needed.
+tf_backend:
+  type: "local"
+  config: {}

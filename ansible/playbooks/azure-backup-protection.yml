@@ -1,0 +1,13 @@
+---
+# Playbook to enable Azure Backup protection for VMs using the azure_backup role
+# This playbook loads VMs from the manifest, checks Azure Migrate replication status,
+# and enables Azure Backup protection only for VMs that meet the replication threshold
+
+- name: Enable Azure Backup Protection for VMs
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: azure_backup
+      vars:
+        backup_action: enable_backup_protection      # Action to perform
+        manifest: "{{ manifest }}"      # load manifest from vars directory

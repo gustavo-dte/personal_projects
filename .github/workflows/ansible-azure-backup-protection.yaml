@@ -1,0 +1,77 @@
+name: Ansible-Azure-Backup-Protection
+
+# This workflow enables Azure Backup protection for VMs based on Azure Migrate replication status
+# It checks replication status first, then enables backup protection only for VMs meeting the threshold
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  azure-backup-protection:
+    runs-on: [self-hosted, vm-migrate, container]
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: Setup Ansible and Azure SDKs
+        uses: ./.github/actions/prereq
+        with:
+          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
+          collections_requirements: ansible/requirements.yml
+
+      - name: Azure Login
+        uses: ./.github/actions/azure-login
+        with:
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set subscription (optional override)
+        if: ${{ inputs.subscription_id != '' }}
+        run: |
+          az account set -s "${{ inputs.subscription_id }}"
+
+      - name: Display workflow configuration
+        run: |
+          echo "✅ Workflow configuration:"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "ℹ️  Backup configuration will be loaded from manifest file"
+
+      - name: Run playbook - Azure Backup Protection
+        run: |
+          ansible-playbook ansible/playbooks/azure-backup-protection.yml \
+            -e "manifest=${{ inputs.manifest }}"
+
+      - name: Upload Replication Status Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replication-status-logs
+          path: ansible/logs/AzMigrate_GetReplicationStatus_*.log
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload Backup Protection Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-protection-logs
+          path: ansible/logs/AzBackup_EnableBackupProtection_*.log
+          if-no-files-found: warn
+          retention-days: 90

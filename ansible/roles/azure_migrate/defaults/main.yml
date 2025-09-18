@@ -1,0 +1,28 @@
+---
+# Behavior
+migration_action: "start_replication"
+migration_actions:
+  - start_replication
+  - cutover
+  - list_projects
+  - get_replication_status
+
+# Optional inputs (extend as needed for replication parameters)
+vm_name: "all"  # specific VM name or 'all' for all VMs
+replication_policy_name: "DefaultPolicy"
+api_version_migrate: "2020-05-01" # latest supported version for Azure Migrate
+os_disk_scsi_id: "scsi0:0"  # Default SCSI ID for OS disk identification
+
+# Azure Migrate replication status threshold (for get_replication_status action)
+replication_threshold: 80  # Percentage threshold for Azure Migrate replication completion
+
+
+# OS version validation (enforces minimum OS versions by default)
+skip_os_version_check: false
+min_os_versions:
+  windows_server_build: 17763  # Windows Server 2019 build number
+  rhel_major: 8               # RHEL major version
+
+# Paths
+# Default logs directory resolves to the repository's ansible/logs folder
+logs_dir: "{{ (role_path | dirname | dirname) }}/logs"
