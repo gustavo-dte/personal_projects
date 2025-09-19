@@ -33,20 +33,6 @@
     target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
     os_disk_scsi_id: "{{ vm_spec.os_disk_scsi_id | default(manifest.os_disk_scsi_id | default(os_disk_scsi_id)) }}"
 
-- name: Include cutover tasks
-  ansible.builtin.include_tasks: cutover.yml
-  when: migration_action == 'cutover'
-  loop: "{{ manifest.vms | default([]) }}"
-  loop_control:
-    loop_var: vm_spec
-  vars:
-    vm_name: "{{ vm_spec.name }}"
-    azure_migrate_project_name: "{{ manifest.azure_migrate_project_name | default(azure_migrate_project_name | default('')) }}"
-    azure_migrate_project_resource_group: "{{ manifest.azure_migrate_project_resource_group | default(azure_migrate_project_resource_group | default('')) }}"
-    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest.target_subscription_id | default(target_subscription_id | default(''))) }}"
-    target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
-    shutdown_source_vm: "{{ vm_spec.shutdown_source_vm | default(manifest.shutdown_source_vm | default(false)) }}"
-
 - name: Include list projects tasks
   ansible.builtin.include_tasks: list_projects.yml
   when: migration_action == 'list_projects'

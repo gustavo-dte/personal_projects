@@ -5,10 +5,6 @@ inputs:
   manifest:
     description: "Manifest name (directory in ansible/vars/)"
     required: true
-  vars_path:
-    description: "Path to vars directory"
-    required: false
-    default: "ansible/vars"
 
 outputs:
   manifest_path:
@@ -24,46 +20,47 @@ runs:
     - name: Validate manifest
       id: validate
       shell: bash
+      env:
+        VARS_PATH: "ansible/vars"
       run: |
-        VARS_PATH="${{ inputs.vars_path }}"
         MANIFEST="${{ inputs.manifest }}"
-        MANIFEST_DIR="${VARS_PATH}/${MANIFEST}"
-        MANIFEST_FILE="${MANIFEST_DIR}/manifest.yml"
+
+        # Security: Validate manifest name (alphanumeric, hyphens, underscores only)
+        if [[ ! "${MANIFEST}" =~ ^[a-zA-Z0-9_-]+$ ]] || [[ -z "${MANIFEST}" ]] || [[ ${#MANIFEST} -gt 50 ]]; then
+          echo "❌ ERROR: Invalid manifest name. Use only alphanumeric characters, hyphens, and underscores (max 50 chars)."
+          echo "   Provided: '${MANIFEST}'"
+          exit 1
+        fi
 
         echo "🔍 Validating manifest: ${MANIFEST}"
-        echo "📁 Looking in directory: ${MANIFEST_DIR}"
 
-        # Validate manifest directory exists
-        if [ ! -d "${MANIFEST_DIR}" ]; then
-          echo "❌ ERROR: Manifest directory '${MANIFEST_DIR}' does not exist"
-          echo ""
+        # Construct safe paths
+        VARS_PATH_ABS=$(realpath "${VARS_PATH}")
+        MANIFEST_DIR_ABS=$(realpath "${VARS_PATH_ABS}/${MANIFEST}")
+        MANIFEST_FILE_ABS="${MANIFEST_DIR_ABS}/manifest.yml"
+
+        # Security: Ensure path stays within vars directory (prevents path traversal)
+        if [[ "${MANIFEST_DIR_ABS}" != "${VARS_PATH_ABS}"/* ]]; then
+          echo "❌ ERROR: Path traversal detected."
+          exit 1
+        fi
+
+        # Validate files exist
+        if [ ! -d "${MANIFEST_DIR_ABS}" ]; then
+          echo "❌ ERROR: Manifest directory '${MANIFEST_DIR_ABS}' does not exist"
           echo "📋 Available manifests:"
-          if [ -d "${VARS_PATH}" ]; then
-            ls -la "${VARS_PATH}" | grep "^d" | awk '{print "  - " $9}' | grep -v "^\s*-\s*\.$" | grep -v "^\s*-\s*\.\.$" || echo "  (none found)"
-          else
-            echo "  (vars directory not found)"
-          fi
+          ls -la "${VARS_PATH_ABS}" 2>/dev/null | grep "^d" | awk '{print "  - " $9}' | grep -v "^\s*-\s*\.$" | grep -v "^\s*-\s*\.\.$" || echo "  (none found)"
           exit 1
         fi
 
-        # Validate manifest.yml file exists
-        if [ ! -f "${MANIFEST_FILE}" ]; then
-          echo "❌ ERROR: Manifest file '${MANIFEST_FILE}' does not exist"
-          echo ""
-          echo "📁 Contents of ${MANIFEST_DIR}:"
-          ls -la "${MANIFEST_DIR}" || echo "  (directory is empty or unreadable)"
-          exit 1
-        fi
-
-        # Validate manifest.yml is readable and contains YAML
-        if ! head -n 1 "${MANIFEST_FILE}" >/dev/null 2>&1; then
-          echo "❌ ERROR: Manifest file '${MANIFEST_FILE}' is not readable"
+        if [ ! -f "${MANIFEST_FILE_ABS}" ]; then
+          echo "❌ ERROR: Manifest file '${MANIFEST_FILE_ABS}' does not exist"
           exit 1
         fi
 
         echo "✅ Manifest validation successful!"
-        echo "📄 Using manifest file: ${MANIFEST_FILE}"
+        echo "📄 Using manifest file: ${MANIFEST_FILE_ABS}"
 
         # Set outputs
-        echo "manifest_path=${MANIFEST_FILE}" >> $GITHUB_OUTPUT
-        echo "manifest_dir=${MANIFEST_DIR}" >> $GITHUB_OUTPUT
+        echo "manifest_path=${MANIFEST_FILE_ABS}" >> $GITHUB_OUTPUT
+        echo "manifest_dir=${MANIFEST_DIR_ABS}" >> $GITHUB_OUTPUT

@@ -63,33 +63,6 @@ Starts replication for VMs with idempotent handling - skips VMs that already hav
 ansible-playbook playbooks/start-migration-replication.yml -e "manifest=phase_1"
 ```
 
-### 4) Azure Migrate – migration cutover (`playbooks/migration-cutover.yml`)
-Performs migration cutover for VMs that have completed replication, creating target VMs in Azure.
-
-- **WARNING**: This operation is irreversible and will create target VMs in Azure
-- **Prerequisites**: VMs must have completed replication and be healthy
-- **Validation**: Checks replication status before proceeding
-
-- Key vars:
-  - `manifest`: **Required** - Environment selector for loading manifest
-  - All configuration loaded from manifest file
-  - Optional per-VM settings:
-    - `shutdown_source_vm`: Whether to shutdown source VM during cutover (default: false)
-    - `target_vm_name`: Override target VM name
-
-- Example:
-```bash
-# Perform cutover for all VMs in the manifest
-ansible-playbook playbooks/migration-cutover.yml -e "manifest=phase_1"
-```
-
-- Post-cutover steps:
-  1. Monitor migration jobs in Azure portal
-  2. Verify target VMs are created and functional
-  3. Test target VM connectivity and applications
-  4. Manually shutdown source VMs if not done automatically
-  5. Update DNS records and networking configurations
-
 ## Tips
 - Increase verbosity: add `-vvv`
 - Show diffs for templates/changes: add `--diff`

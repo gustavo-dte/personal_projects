@@ -1,29 +1,6 @@
 # Cloud Platform VM Migration
 
-This repository contains Ansible playbooks and roles for Azure VM migration operations, including Azure Migrate replication management and Azure Backup protection orchestration.
-
-## Overview
-
-This project provides automated workflows for:
-- **Azure Migrate Operations**: Start replication, check replication status, perform migration cutover, list migrate projects
-- **Azure Backup Protection**: Enable backup protection for VMs based on replication readiness
-- **OS Version Validation**: Ensure VMs meet minimum OS requirements (Windows Server 2019+, RHEL 8+)
-- **Manifest-driven Configuration**: Manage multiple VMs through manifest files
-
-## Key Features
-
-- **Idempotent Operations**: Safe to re-run - skips already configured VMs
-- **Manifest-driven Configuration**: Centralized VM and environment management
-- **Smart Backup Orchestration**: Only enables backup for VMs meeting replication thresholds
-- **OS Compatibility Validation**: Configurable minimum OS version checks
-- **Comprehensive Logging**: Detailed logs with GitHub Actions artifact upload
-
-## Quick Start
-
-1. **Prerequisites**: Install Ansible, Azure CLI, PowerShell 7, and Azure PowerShell modules
-2. **Authentication**: Run `az login` or configure service principal/managed identity
-3. **Configuration**: Update `ansible/vars/phase_1/manifest.yml` with your environment details
-4. **Execute**: Run playbooks directly or use GitHub Actions workflows
+This repository contains Ansible playbooks and roles for automated Azure VM migration operations.
 
 ## Main Components
 
@@ -31,6 +8,14 @@ This project provides automated workflows for:
 - **`ansible/roles/`**: Reusable roles (azure_migrate, azure_backup, common)
 - **`ansible/vars/`**: Manifest-specific configuration
 - **`.github/workflows/`**: GitHub Actions for automated execution
+
+## How to Run Playbooks
+
+1. Navigate to the [Actions](https://github.com/dteenergy/cloud-platform-vm-migration/actions) tab.
+2. Select the desired workflow, and click `Run workflow`.
+3. Provide any required inputs (such as manifest names) and execute.
+
+![Run Workflow](docs/assets/playbook.png)
 
 ## Contributing
 

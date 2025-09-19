@@ -19,7 +19,13 @@ permissions:
 
 jobs:
   list-migrate-projects:
-    runs-on: [self-hosted, vm-migrate, container]
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - container
+      - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
     steps:
