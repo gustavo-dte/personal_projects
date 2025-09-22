@@ -37,3 +37,18 @@ vms:
       recovery_vault_name: cloud-platform-prod-cu-backup-vault
       backup_policy_name: DefaultPolicy
       replication_threshold: 80
+
+  - name: dca-devFAKE
+    description: "Server created to test migration pipeline"
+    target_vm_size: Standard_D2s_v5
+    target_license_type: Windows_Server
+    target_disk_type: Standard_LRS
+    portfolio: Test-Portfolio
+    tier: 4
+    env: dev
+    app_name: fake-app
+
+    backup:
+      recovery_vault_name: cloud-platform-prod-cu-backup-vault
+      backup_policy_name: DefaultPolicy
+      replication_threshold: 80

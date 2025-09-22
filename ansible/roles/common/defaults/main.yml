@@ -10,3 +10,6 @@ target_resource_group: ""
 
 # Common API versions (can be overridden)
 api_version_migrate: "2020-01-01"
+
+# Dry run mode - when true, only print commands that would be executed
+dry_run: false

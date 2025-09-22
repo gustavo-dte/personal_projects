@@ -27,12 +27,16 @@
       - target_subnet_name: {{ target_subnet_name | default('NOT SET') }}
       - os_disk_scsi_id: {{ os_disk_scsi_id | default('NOT SET') }}
 
-- name: Generate target VM name if not specified
+- name: Set target VM name
   ansible.builtin.set_fact:
-    generated_target_vm_name: "vm-{{ os_prefix }}-{{ vm_env }}-{{ app_name_camel }}"
+    final_target_vm_name: >-
+      {{
+        target_vm_name if (target_vm_name | default('')) | length > 0
+        else 'vm-' + os_prefix + '-' + vm_env + '-' + app_name_camel
+      }}
   vars:
-    # Extract OS prefix (dca/lnx) from source VM name
-    os_prefix: "{{ vm_name | regex_search('^(dca|lnx)', '\\1') | first | default('vm') }}"
+    # Extract OS prefix safely
+    os_prefix: "{{ (vm_name | regex_search('^(dca|lnx)', '\\1') | first) | default('vm') }}"
     # Get environment from VM spec
     vm_env: "{{ vm_spec.env | default('prod') }}"
     # Get app_name from VM spec or extract from source VM name
@@ -40,18 +44,6 @@
     # Convert to camelCase: split by hyphens/underscores, capitalize each word except first
     app_name_parts: "{{ app_name_raw | regex_replace('[_-]', ' ') | split() }}"
     app_name_camel: "{{ app_name_parts[0] | lower }}{{ app_name_parts[1:] | map('capitalize') | join('') }}"
-  when: (target_vm_name | default('')) | length == 0
-
-- name: Set final target VM name
-  ansible.builtin.set_fact:
-    final_target_vm_name: "{{ target_vm_name | default(generated_target_vm_name) }}"
-
-- name: Display target VM name decision
-  ansible.builtin.debug:
-    msg:
-      - "Source VM: {{ vm_name }}"
-      - "Target VM: {{ final_target_vm_name }}"
-      - "{{ 'Using user-specified name' if (target_vm_name | default('')) | length > 0 else 'Using generated name' }}"
 
 - name: Check if replication already exists for VM
   block:
@@ -66,6 +58,13 @@
         -SubscriptionId {{ target_subscription_id | default('') }}
       register: existing_replication_check
       changed_when: false
+      when: not (dry_run | default(false))
+
+    - name: Mock replication status check for dry run
+      ansible.builtin.set_fact:
+        existing_replication_check:
+          stdout: 'Some PowerShell output here\n[{"VMName":"{{ vm_name }}","ReplicationStatus":"Not Found","ReplicationPercentage":0,"MeetsThreshold":false}]'
+      when: dry_run | default(false)
 
     - name: Parse replication status and set flags
       ansible.builtin.set_fact:
@@ -109,6 +108,17 @@
         {{ ('-MinRHELVersion ' ~ min_os_versions.rhel_major) if not (skip_os_version_check | default(false)) else '' }}
       register: replication_output
       changed_when: replication_output.rc == 0
+      when: not (dry_run | default(false))
+
+    - name: Mock replication start for dry run
+      ansible.builtin.set_fact:
+        replication_output:
+          stdout: "INFO: [DRY RUN] Replication for VM {{ vm_name }} to target VM {{ final_target_vm_name }}"
+          stderr: ""
+          rc: 0
+          changed: true
+      when: dry_run | default(false)
+
   when: not vm_already_replicating
   rescue:
     - name: Replication failed
@@ -142,10 +152,28 @@
 - name: Display replication result
   ansible.builtin.debug:
     msg:
-      - "VM '{{ vm_name }}': {{ 'Already configured' if vm_already_replicating else 'Replication started' }}"
-      - "Changed: {{ replication_output.changed | default(false) }} | RC: {{ replication_output.rc | default('N/A') }}"
+      - "VM {{ vm_name }}: {{ 'Already configured' if vm_already_replicating else 'Replication started' }}"
+      - "Changed: {{ replication_output.changed | default(false) }}"
 
 - name: Show detailed replication CLI output
   ansible.builtin.debug:
     var: replication_output
   when: ansible_verbosity >= 1
+
+- name: Set replication output for main playbook
+  ansible.builtin.set_fact:
+    replication_output: "{{ replication_output }}"
+
+- name: Add replication output to collection
+  ansible.builtin.set_fact:
+    all_replication_outputs: >-
+      {{
+        all_replication_outputs | default({}) | combine({
+          vm_name: {
+            'changed': replication_output.changed | default(false),
+            'msg': replication_output.msg | default(''),
+            'stdout': replication_output.stdout | default(''),
+            'stderr': replication_output.stderr | default('')
+          }
+        })
+      }}

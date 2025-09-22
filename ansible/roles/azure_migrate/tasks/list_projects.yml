@@ -12,10 +12,41 @@
     - name: List Azure Migrate projects in resource group
       azure.azcollection.azure_rm_resource_info:
         resource_group: "{{ target_resource_group }}"
+        subscription_id: "{{ target_subscription_id }}"
         provider: Migrate
         resource_type: migrateprojects
         api_version: "{{ api_version_migrate }}"
       register: migrate_projects_response
+      when: not dry_run
+
+    - name: Show dry run command for Azure Migrate projects listing
+      ansible.builtin.debug:
+        msg:
+          - "DRY RUN: Would execute the following Ansible task:"
+          - "azure.azcollection.azure_rm_resource_info:"
+          - "  resource_group: {{ target_resource_group }}"
+          - "  subscription_id: {{ target_subscription_id }}"
+          - "  provider: Migrate"
+          - "  resource_type: migrateprojects"
+          - "  api_version: {{ api_version_migrate }}"
+          - ""
+          - "This would make a REST API call to:"
+          - "GET /subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Migrate/migrateProjects"
+      when: dry_run
+
+    - name: Simulate dry run response for migrate projects
+      ansible.builtin.set_fact:
+        migrate_projects_response:
+          response:
+            - id: "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Migrate/migrateProjects/example-project-1"
+              name: "example-project-1"
+              location: "eastus"
+              type: "Microsoft.Migrate/migrateProjects"
+            - id: "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Migrate/migrateProjects/example-project-2"
+              name: "example-project-2"
+              location: "westus2"
+              type: "Microsoft.Migrate/migrateProjects"
+      when: dry_run
 
     - name: Show full Azure Migrate API response
       ansible.builtin.debug:
@@ -36,14 +67,9 @@
       ansible.builtin.debug:
         msg: "Found {{ (migrate_projects_list | default([])) | length }} Azure Migrate project(s)"
 
-    - name: Display Azure Migrate project details
+    - name: Display Azure Migrate project names
       ansible.builtin.debug:
-        msg:
-          - "Project Name: {{ (item.id | default('') | regex_search('/migrate[Pp]rojects/([^/]+)', '\\1')) | default('unknown') }}"
-          - "Location: {{ item.location | default('unknown') }}"
-          - "Type: {{ item.type | default('unknown') }}"
-          - "Id: {{ item.id | default('unknown') }}"
-      loop: "{{ migrate_projects_list | default([]) }}"
+        msg: "{{ migrate_projects_list | default([]) | map(attribute='name') | list }}"
 
   rescue:
     - name: Handle Azure Migrate API failure

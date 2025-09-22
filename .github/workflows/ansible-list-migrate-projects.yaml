@@ -12,6 +12,11 @@ on:
       subscription_id:
         description: "Override Azure Subscription ID (optional)"
         required: false
+      dry_run:
+        description: "Dry run"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write
@@ -28,41 +33,49 @@ jobs:
       - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
     steps:
-      - name: Checkout repository
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Ansible and Azure SDKs
+      - name: 🔧 Setup Ansible and Azure SDKs
+        if: ${{ !inputs.dry_run }}
         uses: ./.github/actions/prereq
         with:
           ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
           collections_requirements: ansible/requirements.yml
 
-      - name: Azure Login
+      - name: 🔐 Azure Login
+        if: ${{ !inputs.dry_run }}
         uses: ./.github/actions/azure-login
         with:
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
           tenant_id: ${{ secrets.AZURE_TENANT_ID }}
           subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Set subscription (optional override)
-        if: ${{ inputs.subscription_id != '' }}
+      - name: 🔄 Set subscription (optional override)
+        if: ${{ inputs.subscription_id != '' && !inputs.dry_run }}
         run: |
           az account set -s "${{ inputs.subscription_id }}"
 
-      - name: Display configuration
+      - name: 📊 Display configuration
         run: |
           echo "✅ Configuration ready!"
           echo "📁 Resource group: ${{ inputs.resource_group }}"
-          echo "📋 Listing Azure Migrate projects..."
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🔍 DRY RUN MODE: Will show commands that would be executed"
+          else
+            echo "📋 Listing Azure Migrate projects..."
+          fi
 
-      - name: Run playbook - list migrate projects
+      - name: 🎬 Run playbook - list migrate projects
         run: |
           ansible-playbook ansible/playbooks/list-migrate-projects.yml \
             -e "resource_group=${{ inputs.resource_group }}" \
-            -e "subscription_id=${SUBSCRIPTION_ID}"
+            -e "subscription_id=${{ inputs.subscription_id }}" \
+            -e "dry_run=${{ inputs.dry_run }}"
 
-      - name: Upload Logs
+      - name: 📤 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:

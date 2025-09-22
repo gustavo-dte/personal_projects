@@ -7,22 +7,16 @@
   hosts: localhost
   connection: local
   gather_facts: no
-  pre_tasks:
-    - name: Show Azure account
-      block:
-        - name: Run 'az account show'
-          ansible.builtin.command: az account show -o table
-          changed_when: false
-      rescue:
-        - name: Exit playbook when 'az account show' fails
-          ansible.builtin.fail:
-            msg: "az account show failed; exiting"
-
   vars:
-    migration_action: start_replication
+    verify_azure_account: true
+    all_replication_outputs: []
   roles:
+    - role: common
     - role: azure_migrate
+      vars:
+        migration_action: start_replication
+        dry_run: "{{ dry_run }}"
   post_tasks:
     - name: Replication request output
       ansible.builtin.debug:
-        var: replication_output
+        var: all_replication_outputs

@@ -10,6 +10,15 @@ on:
         description: "Manifest name (directory in ansible/vars/)"
         required: true
         type: string
+      dry_run:
+        description: "Dry run"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   id-token: write
@@ -26,40 +35,49 @@ jobs:
       - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
     steps:
-      - name: Checkout repository
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate manifest
+      - name: ✅ Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: Setup Ansible and Azure SDKs
+      - name: 🔧 Setup Ansible and Azure SDKs
+        if: ${{ !inputs.dry_run }}
         uses: ./.github/actions/prereq
         with:
           ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
           collections_requirements: ansible/requirements.yml
 
-      - name: Azure Login
+      - name: 🔐 Azure Login
+        if: ${{ !inputs.dry_run }}
         uses: ./.github/actions/azure-login
         with:
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
           tenant_id: ${{ secrets.AZURE_TENANT_ID }}
           subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Display configuration
+      - name: 📊 Display configuration
         run: |
           echo "✅ Configuration validated!"
           echo "📄 Using manifest: ${{ inputs.manifest }}"
-          echo "🚀 Starting migration replication..."
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🚀 Starting migration replication..."
+          fi
 
-      - name: Run playbook - start migration replication
+      - name: 🎬 Run playbook - start migration replication
         run: |
           ansible-playbook ansible/playbooks/start-migration-replication.yml \
-            -e "manifest=${{ inputs.manifest }}"
+            -e "manifest=${{ inputs.manifest }}" \
+            -e "dry_run=${{ inputs.dry_run }}"
 
-      - name: Upload Logs
+      - name: 📤 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:

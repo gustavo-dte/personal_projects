@@ -3,4 +3,4 @@
 # This file includes other handler files for better organization
 
 - name: Include logging handlers
-  ansible.builtin.include: logging.yml
+  ansible.builtin.import_tasks: logging.yml

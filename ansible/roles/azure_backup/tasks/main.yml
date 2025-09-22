@@ -14,17 +14,17 @@
 
 - name: Extract backup configuration from manifest
   ansible.builtin.set_fact:
-    recovery_vault_name: "{{ manifest.recovery_vault_name | default('') }}"
-    backup_policy_name: "{{ manifest.backup_policy_name | default('DefaultPolicy') }}"
-    replication_threshold: "{{ manifest.replication_threshold | default(80) }}"
+    recovery_vault_name: "{{ manifest_data.recovery_vault_name | default('') }}"
+    backup_policy_name: "{{ manifest_data.backup_policy_name | default('DefaultPolicy') }}"
+    replication_threshold: "{{ manifest_data.replication_threshold | default(80) }}"
 
 - name: Assert required variables for backup operations
   ansible.builtin.assert:
     that:
-      - (manifest.target_resource_group | default('')) | length > 0
-      - (manifest.vms | default([])) | length > 0
+      - (manifest_data.target_resource_group | default('')) | length > 0
+      - (manifest_data.vms | default([])) | length > 0
       - (recovery_vault_name | default('')) | length > 0
-      - (manifest.azure_migrate_project_name | default('')) | length > 0
+      - (manifest_data.azure_migrate_project_name | default('')) | length > 0
     fail_msg: "❌ Required variables missing. Provide target_resource_group, vms list, recovery_vault_name, and azure_migrate_project_name in manifest."
 
 
@@ -33,10 +33,11 @@
     name: azure_migrate
     tasks_from: get_replication_status
   vars:
-    # Pass replication_threshold from azure_backup defaults
-    replication_threshold: "{{ replication_threshold }}"
+    dry_run: "{{ dry_run | default(false) }}"
   when: backup_action == 'enable_backup_protection'
 
 - name: Include enable backup protection tasks
   ansible.builtin.include_tasks: enable_backup_protection.yml
   when: backup_action == 'enable_backup_protection'
+  vars:
+    dry_run: "{{ dry_run | default(false) }}"

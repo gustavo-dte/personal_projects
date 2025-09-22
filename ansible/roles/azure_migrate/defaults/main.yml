@@ -7,6 +7,11 @@ migration_actions:
   - list_projects
   - get_replication_status
 
+manifest_dependent_actions:
+  - start_replication
+  - cutover
+  - get_replication_status
+
 # Optional inputs (extend as needed for replication parameters)
 vm_name: "all"  # specific VM name or 'all' for all VMs
 replication_policy_name: "DefaultPolicy"

@@ -9,3 +9,7 @@
 - name: Include Azure prerequisite verification tasks
   ansible.builtin.include_tasks: azure_verify_prerequisites.yml
   when: verify_azure_prerequisites | default(false)
+
+- name: Include Azure account verification tasks
+  ansible.builtin.include_tasks: azure_verify_account.yml
+  when: verify_azure_account | default(false)

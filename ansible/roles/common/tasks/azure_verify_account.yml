@@ -1,0 +1,31 @@
+---
+# Common Azure account verification task
+# Verifies Azure authentication and displays account information
+# Supports dry_run mode to skip actual API calls
+
+- name: Verify Azure account authentication
+  block:
+    - name: Run 'az account show' to verify authentication
+      ansible.builtin.command: az account show -o table
+      changed_when: false
+      register: az_account_output
+
+    - name: Display Azure account information
+      ansible.builtin.debug:
+        msg: "{{ az_account_output.stdout_lines }}"
+
+  rescue:
+    - name: Handle Azure authentication failure
+      ansible.builtin.fail:
+        msg: "Azure authentication failed. Please ensure you are logged in with 'az login' or have valid credentials configured."
+
+  when: not (dry_run | default(false))
+
+- name: Show dry run Azure account verification
+  ansible.builtin.debug:
+    msg:
+      - "DRY RUN: Would execute \"az account show\" to verify Azure authentication"
+      - "DRY RUN: Would check subscription and tenant information"
+      - "DRY RUN: Would display current Azure account details"
+
+  when: dry_run | default(false)

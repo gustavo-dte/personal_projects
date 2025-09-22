@@ -5,9 +5,14 @@
 
 - name: Enable Azure Backup Protection for VMs
   hosts: localhost
-  gather_facts: false
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
   roles:
+    - role: common
     - role: azure_backup
       vars:
-        backup_action: enable_backup_protection      # Action to perform
-        manifest: "{{ manifest }}"      # load manifest from vars directory
+        backup_action: enable_backup_protection
+        manifest: "{{ manifest }}"
+        dry_run: "{{ dry_run }}"
