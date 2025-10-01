@@ -1,4 +1,9 @@
 {
+  "version": "2.0",
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[3.*, 4.0.0)"
+  },
   "extensions": {
     "serviceBus": {
       "messageHandlerOptions": {
@@ -61,6 +66,5 @@
     "lockAcquisitionPollingInterval": "00:00:05",
     "lockAcquisitionTimeout": "00:01:00",
     "lockPeriod": "00:00:15"
-  },
-  "version": "2.0"
+  }
 }
