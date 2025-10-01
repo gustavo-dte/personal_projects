@@ -1,18 +1,70 @@
 {
-  "IsEncrypted": false,
-  "Values": {
-    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "DELTA_MINUTES": "2",
-    "FUNCTIONS_WORKER_RUNTIME": "python",
-    "PRIMARY_SERVICEBUS_CONN": "<primary-namespace-connection-string>",
-    "PRIMARY_SUBSCRIPTION_NAME": "<primary-subscription-name>",
-    "PRIMARY_TOPIC_NAME": "<primary-topic-name>",
-    "QUEUE_NAME": "<queue-name-for-basic-operations>",
-    "REPLICATION_TYPE": "primary_to_secondary",
-    "RTO_MINUTES": "10",
-    "SECONDARY_SERVICEBUS_CONN": "<secondary-namespace-connection-string>",
-    "SECONDARY_TOPIC_NAME": "<secondary-topic-name>",
-    "SOURCE_CONNECTION_STRING": "<source-connection-string>",
-    "TARGET_CONNECTION_STRING": "<target-connection-string>"
+  "version": "2.0",
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[3.*, 4.0.0)"
+  },
+  "extensions": {
+    "serviceBus": {
+      "messageHandlerOptions": {
+        "autoComplete": true,
+        "maxAutoRenewDuration": "00:05:00",
+        "maxConcurrentCalls": 16
+      },
+      "prefetchCount": 100,
+      "sessionHandlerOptions": {
+        "autoComplete": false,
+        "maxAutoRenewDuration": "00:55:00",
+        "maxConcurrentSessions": 8,
+        "messageWaitTimeout": "00:00:30"
+      }
+    }
+  },
+  "functionTimeout": "00:05:00",
+  "healthMonitor": {
+    "counterThreshold": 0.8,
+    "enabled": true,
+    "healthCheckInterval": "00:00:10",
+    "healthCheckThreshold": 6,
+    "healthCheckWindow": "00:02:00"
+  },
+  "logging": {
+    "applicationInsights": {
+      "enableDependencyTracking": true,
+      "enableLiveMetrics": true,
+      "enablePerformanceCountersCollection": true,
+      "httpAutoCollectionOptions": {
+        "enableHttpTriggerExtendedInfoCollection": true,
+        "enableResponseHeaderInjection": true,
+        "enableW3CDistributedTracing": true
+      },
+      "samplingSettings": {
+        "evaluationInterval": "01:00:00",
+        "initialSamplingPercentage": 100.0,
+        "isEnabled": true,
+        "maxTelemetryItemsPerSecond": 20,
+        "samplingPercentageDecreaseTimeout": "00:00:01",
+        "samplingPercentageIncreaseTimeout": "00:00:01"
+      }
+    },
+    "logLevel": {
+      "Function": "Information",
+      "Host.Aggregator": "Trace",
+      "Host.Results": "Error",
+      "default": "Information"
+    }
+  },
+  "retry": {
+    "maxRetryCount": 3,
+    "maximumInterval": "00:00:30",
+    "minimumInterval": "00:00:02",
+    "strategy": "exponentialBackoff"
+  },
+  "singleton": {
+    "listenerLockPeriod": "00:01:00",
+    "listenerLockRecoveryPollingInterval": "00:01:00",
+    "lockAcquisitionPollingInterval": "00:00:05",
+    "lockAcquisitionTimeout": "00:01:00",
+    "lockPeriod": "00:00:15"
   }
 }
