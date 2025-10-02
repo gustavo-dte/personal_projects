@@ -4,7 +4,7 @@ Configuration handling for the Service Bus replication function.
 
 from __future__ import annotations
 
-from typing import Literal, Optional, Union, cast  # noqa: F401
+from typing import List, Literal, Optional, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -102,6 +102,23 @@ class ReplicationConfig(BaseSettings):
         description="Secondary Service Bus topic name",
     )
 
+    # Subscriptions
+    primary_subscription_principal: Optional[str] = Field(
+        default=None,
+        alias="PRIMARY_SUBSCRIPTION_PRINCIPAL_NAME",
+        description="Principal subscription for the topic",
+    )
+    primary_subscription_additional: Optional[str] = Field(
+        default=None,
+        alias="PRIMARY_SUBSCRIPTION_ADDITIONAL_NAME",
+        description="Additional subscription for the topic",
+    )
+    subscription_list: List[str] = Field(
+        default_factory=list,
+        alias="SUBSCRIPTION_LIST",
+        description="Comma-separated list of subscriptions to loop through",
+    )
+
     # Timing configuration
     rto_minutes: int = Field(
         default=DEFAULT_RTO_MINUTES,
@@ -145,6 +162,7 @@ class ReplicationConfig(BaseSettings):
         extra="forbid",
     )
 
+    # -------- Validators --------
     @field_validator("replication_type")
     @classmethod
     def validate_replication_type(cls, v: str) -> str:
@@ -160,10 +178,18 @@ class ReplicationConfig(BaseSettings):
             )
         return v
 
+    @field_validator("subscription_list", mode="before")
+    @classmethod
+    def split_subscription_list(cls, v):
+        if not v:
+            return []
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
+
     @model_validator(mode="after")
     def validate_connection_config(self):
         """Validate that required connection strings and queues are provided."""
-        # Map replication types to required environment variables
         required_vars_map = {
             REPLICATION_TYPE_PRIMARY_TO_SECONDARY: [
                 ("secondary_conn_str", "SECONDARY_SERVICEBUS_CONN"),
@@ -175,7 +201,6 @@ class ReplicationConfig(BaseSettings):
             ],
         }
 
-        # Use list comprehension to validate required fields
         required_fields = required_vars_map.get(self.replication_type, [])
         missing_fields = [
             env_var
@@ -191,6 +216,7 @@ class ReplicationConfig(BaseSettings):
 
         return self
 
+    # -------- Convenience Properties --------
     @property
     def ttl_seconds(self) -> int:
         """Calculate the Time To Live for replicated messages in seconds."""
@@ -210,14 +236,6 @@ class ReplicationConfig(BaseSettings):
 
         Returns:
             Tuple of (connection_string, topic_name, direction_description)
-
-        Note:
-            Validation is handled by Pydantic validators during model instantiation,
-            so configuration is guaranteed to be valid when this method is called.
-
-        Raises:
-            ConfigError: If any required configuration is missing, which should never
-                        happen due to Pydantic validation but is checked for safety.
         """
         if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
             return (
@@ -238,3 +256,7 @@ class ReplicationConfig(BaseSettings):
         return bool(
             self.app_insights_connection_string or self.app_insights_instrumentation_key
         )
+
+
+# Single instance for import
+settings = ReplicationConfig()
