@@ -1,104 +1,176 @@
-[2025-10-01T23:55:20.883Z] x-ms-version:2024-08-04
-[2025-10-01T23:55:20.884Z] Accept:application/xml
-[2025-10-01T23:55:20.885Z] x-ms-client-request-id:f27ef14f-60fe-4bc8-b032-4eb9d22f2f01
-[2025-10-01T23:55:21.027Z] x-ms-return-client-request-id:true
-[2025-10-01T23:55:21.044Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
-[2025-10-01T23:55:21.045Z] x-ms-date:Wed, 01 Oct 2025 23:55:20 GMT
-[2025-10-01T23:55:21.046Z] Authorization:REDACTED
-[2025-10-01T23:55:21.047Z] client assembly: Azure.Storage.Blobs
-[2025-10-01T23:55:23.081Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] exception Azure.RequestFailedException: No connection could be made because the target machine actively refused it. (127.0.0.1:10000)
-[2025-10-01T23:55:23.082Z]  ---> System.Net.Http.HttpRequestException: No connection could be made because the target machine actively refused it. (127.0.0.1:10000)
-[2025-10-01T23:55:23.083Z]  ---> System.Net.Sockets.SocketException (10061): No connection could be made because the target machine actively refused it.
-[2025-10-01T23:55:23.084Z]    at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
-[2025-10-01T23:55:23.085Z]    at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
-[2025-10-01T23:55:23.158Z]    at System.Net.Sockets.Socket.<ConnectAsync>g__WaitForConnectWithCancellation|285_0(AwaitableSocketAsyncEventArgs saea, ValueTask connectTask, CancellationToken cancellationToken)
-[2025-10-01T23:55:23.159Z]    at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:23.160Z]    --- End of inner exception stack trace ---
-[2025-10-01T23:55:23.161Z]    at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:23.162Z]    at System.Net.Http.HttpConnectionPool.ConnectAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:23.163Z]    at System.Net.Http.HttpConnectionPool.CreateHttp11ConnectionAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:23.163Z]    at System.Net.Http.HttpConnectionPool.AddHttp11ConnectionAsync(QueueItem queueItem)    
-[2025-10-01T23:55:23.164Z]    at System.Threading.Tasks.TaskCompletionSourceWithCancellation`1.WaitWithCancellationAsync(CancellationToken cancellationToken)
-[2025-10-01T23:55:23.164Z]    at System.Net.Http.HttpConnectionPool.SendWithVersionDetectionAndRetryAsync(HttpRequestMessage request, Boolean async, Boolean doRequestAuth, CancellationToken cancellationToken)
-[2025-10-01T23:55:23.165Z]    at System.Net.Http.HttpClient.<SendAsync>g__Core|83_0(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationTokenSource cts, Boolean disposeCts, CancellationTokenSource pendingRequestsCts, CancellationToken originalCancellationToken)
-[2025-10-01T23:55:23.166Z]    at Azure.Core.Pipeline.HttpClientTransport.ProcessSyncOrAsync(HttpMessage message, Boolean async)
-[2025-10-01T23:55:23.166Z]    --- End of inner exception stack trace ---
-[2025-10-01T23:55:23.168Z]    at Azure.Core.Pipeline.HttpClientTransport.ProcessSyncOrAsync(HttpMessage message, Boolean async)
-[2025-10-01T23:55:23.169Z]    at Azure.Core.Pipeline.HttpPipelineTransportPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline)
-[2025-10-01T23:55:23.169Z]    at Azure.Core.Pipeline.ResponseBodyPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline, Boolean async)
-[2025-10-01T23:55:23.170Z]    at Azure.Core.Pipeline.LoggingPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline, Boolean async)
-[2025-10-01T23:55:24.688Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] attempt number 2 took 02.3s
-[2025-10-01T23:55:24.690Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] HEAD http://127.0.0.1:10000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host
-[2025-10-01T23:55:24.691Z] x-ms-version:2024-08-04
-[2025-10-01T23:55:24.691Z] Accept:application/xml
-[2025-10-01T23:55:24.693Z] x-ms-client-request-id:f27ef14f-60fe-4bc8-b032-4eb9d22f2f01
-[2025-10-01T23:55:24.694Z] x-ms-return-client-request-id:true
-[2025-10-01T23:55:24.695Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
-[2025-10-01T23:55:24.696Z] x-ms-date:Wed, 01 Oct 2025 23:55:24 GMT
-[2025-10-01T23:55:24.696Z] Authorization:REDACTED
-[2025-10-01T23:55:24.697Z] client assembly: Azure.Storage.Blobs
-[2025-10-01T23:55:26.782Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] exception Azure.RequestFailedException: No connection could be made because the target machine actively refused it. (127.0.0.1:10000)
-[2025-10-01T23:55:26.782Z]  ---> System.Net.Http.HttpRequestException: No connection could be made because the target machine actively refused it. (127.0.0.1:10000)
-[2025-10-01T23:55:26.783Z]  ---> System.Net.Sockets.SocketException (10061): No connection could be made because the target machine actively refused it.
-[2025-10-01T23:55:26.783Z]    at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
-[2025-10-01T23:55:26.784Z]    at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
-[2025-10-01T23:55:26.785Z]    at System.Net.Sockets.Socket.<ConnectAsync>g__WaitForConnectWithCancellation|285_0(AwaitableSocketAsyncEventArgs saea, ValueTask connectTask, CancellationToken cancellationToken)
-[2025-10-01T23:55:26.785Z]    at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:26.786Z]    --- End of inner exception stack trace ---
-[2025-10-01T23:55:26.786Z]    at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:26.788Z]    at System.Net.Http.HttpConnectionPool.ConnectAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:26.789Z]    at System.Net.Http.HttpConnectionPool.CreateHttp11ConnectionAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:26.790Z]    at System.Net.Http.HttpConnectionPool.AddHttp11ConnectionAsync(QueueItem queueItem)    
-[2025-10-01T23:55:26.790Z]    at System.Threading.Tasks.TaskCompletionSourceWithCancellation`1.WaitWithCancellationAsync(CancellationToken cancellationToken)
-[2025-10-01T23:55:26.791Z]    at System.Net.Http.HttpConnectionPool.SendWithVersionDetectionAndRetryAsync(HttpRequestMessage request, Boolean async, Boolean doRequestAuth, CancellationToken cancellationToken)
-[2025-10-01T23:55:26.792Z]    at System.Net.Http.HttpClient.<SendAsync>g__Core|83_0(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationTokenSource cts, Boolean disposeCts, CancellationTokenSource pendingRequestsCts, CancellationToken originalCancellationToken)
-[2025-10-01T23:55:26.793Z]    at Azure.Core.Pipeline.HttpClientTransport.ProcessSyncOrAsync(HttpMessage message, Boolean async)
-[2025-10-01T23:55:26.839Z]    --- End of inner exception stack trace ---
-[2025-10-01T23:55:26.859Z]    at Azure.Core.Pipeline.HttpClientTransport.ProcessSyncOrAsync(HttpMessage message, Boolean async)
-[2025-10-01T23:55:26.860Z]    at Azure.Core.Pipeline.HttpPipelineTransportPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline)
-[2025-10-01T23:55:26.861Z]    at Azure.Core.Pipeline.ResponseBodyPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline, Boolean async)
-[2025-10-01T23:55:26.862Z]    at Azure.Core.Pipeline.LoggingPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline, Boolean async)
-[2025-10-01T23:55:30.263Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] attempt number 3 took 02.2s
-[2025-10-01T23:55:30.264Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] HEAD http://127.0.0.1:10000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host
-[2025-10-01T23:55:30.264Z] x-ms-version:2024-08-04
-[2025-10-01T23:55:30.265Z] Accept:application/xml
-[2025-10-01T23:55:30.265Z] x-ms-client-request-id:f27ef14f-60fe-4bc8-b032-4eb9d22f2f01
-[2025-10-01T23:55:30.266Z] x-ms-return-client-request-id:true
-[2025-10-01T23:55:30.266Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
-[2025-10-01T23:55:30.267Z] x-ms-date:Wed, 01 Oct 2025 23:55:30 GMT
-[2025-10-01T23:55:30.268Z] Authorization:REDACTED
-[2025-10-01T23:55:30.268Z] client assembly: Azure.Storage.Blobs
-[2025-10-01T23:55:32.311Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] exception Azure.RequestFailedException: No connection could be made because the target machine actively refused it. (127.0.0.1:10000)
-[2025-10-01T23:55:32.312Z]  ---> System.Net.Http.HttpRequestException: No connection could be made because the target machine actively refused it. (127.0.0.1:10000)
-[2025-10-01T23:55:32.313Z]  ---> System.Net.Sockets.SocketException (10061): No connection could be made because the target machine actively refused it.
-[2025-10-01T23:55:32.314Z]    at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
-[2025-10-01T23:55:32.314Z]    at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
-[2025-10-01T23:55:32.315Z]    at System.Net.Sockets.Socket.<ConnectAsync>g__WaitForConnectWithCancellation|285_0(AwaitableSocketAsyncEventArgs saea, ValueTask connectTask, CancellationToken cancellationToken)
-[2025-10-01T23:55:32.316Z]    at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:32.316Z]    --- End of inner exception stack trace ---
-[2025-10-01T23:55:32.317Z]    at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:32.392Z]    at System.Net.Http.HttpConnectionPool.ConnectAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:32.394Z]    at System.Net.Http.HttpConnectionPool.CreateHttp11ConnectionAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
-[2025-10-01T23:55:32.394Z]    at System.Net.Http.HttpConnectionPool.AddHttp11ConnectionAsync(QueueItem queueItem)    
-[2025-10-01T23:55:32.395Z]    at System.Threading.Tasks.TaskCompletionSourceWithCancellation`1.WaitWithCancellationAsync(CancellationToken cancellationToken)
-[2025-10-01T23:55:32.395Z]    at System.Net.Http.HttpConnectionPool.SendWithVersionDetectionAndRetryAsync(HttpRequestMessage request, Boolean async, Boolean doRequestAuth, CancellationToken cancellationToken)
-[2025-10-01T23:55:32.397Z]    at System.Net.Http.HttpClient.<SendAsync>g__Core|83_0(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationTokenSource cts, Boolean disposeCts, CancellationTokenSource pendingRequestsCts, CancellationToken originalCancellationToken)
-[2025-10-01T23:55:32.398Z]    at Azure.Core.Pipeline.HttpClientTransport.ProcessSyncOrAsync(HttpMessage message, Boolean async)
-[2025-10-01T23:55:32.398Z]    --- End of inner exception stack trace ---
-[2025-10-01T23:55:32.399Z]    at Azure.Core.Pipeline.HttpClientTransport.ProcessSyncOrAsync(HttpMessage message, Boolean async)
-[2025-10-01T23:55:32.400Z]    at Azure.Core.Pipeline.HttpPipelineTransportPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline)
-[2025-10-01T23:55:32.400Z]    at Azure.Core.Pipeline.ResponseBodyPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline, Boolean async)
-[2025-10-01T23:55:32.401Z]    at Azure.Core.Pipeline.LoggingPolicy.ProcessAsync(HttpMessage message, ReadOnlyMemory`1 pipeline, Boolean async)
-[2025-10-01T23:55:40.107Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] attempt number 4 took 02.2s
-[2025-10-01T23:55:40.109Z] Request [f27ef14f-60fe-4bc8-b032-4eb9d22f2f01] HEAD http://127.0.0.1:10000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host
-[2025-10-01T23:55:40.111Z] x-ms-version:2024-08-04
-[2025-10-01T23:55:40.111Z] Accept:application/xml
-[2025-10-01T23:55:40.112Z] x-ms-client-request-id:f27ef14f-60fe-4bc8-b032-4eb9d22f2f01
-[2025-10-01T23:55:40.112Z] x-ms-return-client-request-id:true
-[2025-10-01T23:55:40.113Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
-[2025-10-01T23:55:40.113Z] x-ms-date:Wed, 01 Oct 2025 23:55:40 GMT
-[2025-10-01T23:55:40.245Z] Authorization:REDACTED
-[2025-10-01T23:55:40.246Z] client assembly: Azure.Storage.Blobs
-[2025-10-01T23:55:41.592Z] Stopping host...
-[2025-10-01T23:55:41.599Z] Stopping JobHost
-[2025-10-01T23:55:41.632Z] Stopping the listener 'Microsoft.Azure.WebJobs.ServiceBus.Listeners.ServiceBusListener' for function 'replication_fuction'
+[2025-10-02T00:12:56.847Z] Request [07cb60a1-f645-4a68-8b9a-3d7ebbae833f] PUT http://127.0.0.1:11000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host?comp=lease
+[2025-10-02T00:12:56.849Z] x-ms-lease-action:renew
+[2025-10-02T00:12:56.850Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:12:56.850Z] x-ms-version:2024-08-04
+[2025-10-02T00:12:56.851Z] Accept:application/xml
+[2025-10-02T00:12:56.855Z] x-ms-client-request-id:07cb60a1-f645-4a68-8b9a-3d7ebbae833f
+[2025-10-02T00:12:56.857Z] x-ms-return-client-request-id:true
+[2025-10-02T00:12:56.956Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
+[2025-10-02T00:12:56.957Z] x-ms-date:Thu, 02 Oct 2025 00:12:56 GMT
+[2025-10-02T00:12:56.957Z] Authorization:REDACTED
+[2025-10-02T00:12:56.958Z] client assembly: Azure.Storage.Blobs
+[2025-10-02T00:12:57.042Z] Response [07cb60a1-f645-4a68-8b9a-3d7ebbae833f] 200 OK (00.1s)
+[2025-10-02T00:12:57.044Z] Server:Azurite-Blob/3.35.0
+[2025-10-02T00:12:57.045Z] ETag:"0x1C69CCF233645F0"
+[2025-10-02T00:12:57.045Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:12:57.047Z] x-ms-client-request-id:07cb60a1-f645-4a68-8b9a-3d7ebbae833f
+[2025-10-02T00:12:57.048Z] x-ms-request-id:86064428-4df4-4af8-ac7e-a7260bdb4318
+[2025-10-02T00:12:57.049Z] x-ms-version:2025-11-05
+[2025-10-02T00:12:57.051Z] Date:Thu, 02 Oct 2025 00:12:57 GMT
+[2025-10-02T00:12:57.052Z] Connection:keep-alive
+[2025-10-02T00:12:57.052Z] Keep-Alive:REDACTED
+[2025-10-02T00:12:57.054Z] Last-Modified:Thu, 02 Oct 2025 00:11:08 GMT
+[2025-10-02T00:12:57.054Z] Content-Length:0
+[2025-10-02T00:12:57.055Z]
+[2025-10-02T00:13:06.130Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.131Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:06.132Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.229Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:06.232Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.233Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:06.236Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.239Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:06.240Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.241Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:06.242Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.243Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:06.337Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.417Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:06.421Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:06.423Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.436Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.437Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.439Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.440Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.441Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.524Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.525Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.526Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.538Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.557Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.649Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.736Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.740Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.743Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:07.744Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync done. Received '0' messages. LockTokens =
+[2025-10-02T00:13:07.842Z] dte-notifications/Subscriptions/sms-notifications-d70c66d1-b661-49b2-b688-0861e21d7e02-Receiver: ReceiveBatchAsync start. MessageCount = 1
+[2025-10-02T00:13:08.838Z] Request [a26f0be3-9877-424a-916e-ea910b60b38e] PUT http://127.0.0.1:11000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host?comp=lease
+[2025-10-02T00:13:08.841Z] x-ms-lease-action:renew
+[2025-10-02T00:13:08.842Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:08.842Z] x-ms-version:2024-08-04
+[2025-10-02T00:13:08.843Z] Accept:application/xml
+[2025-10-02T00:13:08.844Z] x-ms-client-request-id:a26f0be3-9877-424a-916e-ea910b60b38e
+[2025-10-02T00:13:08.844Z] x-ms-return-client-request-id:true
+[2025-10-02T00:13:08.845Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
+[2025-10-02T00:13:08.845Z] x-ms-date:Thu, 02 Oct 2025 00:13:08 GMT
+[2025-10-02T00:13:08.846Z] Authorization:REDACTED
+[2025-10-02T00:13:08.847Z] client assembly: Azure.Storage.Blobs
+[2025-10-02T00:13:08.877Z] Response [a26f0be3-9877-424a-916e-ea910b60b38e] 200 OK (00.0s)
+[2025-10-02T00:13:08.928Z] Server:Azurite-Blob/3.35.0
+[2025-10-02T00:13:08.928Z] ETag:"0x1C69CCF233645F0"
+[2025-10-02T00:13:08.929Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:08.929Z] x-ms-client-request-id:a26f0be3-9877-424a-916e-ea910b60b38e
+[2025-10-02T00:13:08.930Z] x-ms-request-id:8cc3ea58-5497-4009-9b2e-053532be6787
+[2025-10-02T00:13:08.930Z] x-ms-version:2025-11-05
+[2025-10-02T00:13:08.931Z] Date:Thu, 02 Oct 2025 00:13:08 GMT
+[2025-10-02T00:13:08.931Z] Connection:keep-alive
+[2025-10-02T00:13:08.935Z] Keep-Alive:REDACTED
+[2025-10-02T00:13:08.936Z] Last-Modified:Thu, 02 Oct 2025 00:11:08 GMT
+[2025-10-02T00:13:09.003Z] Content-Length:0
+[2025-10-02T00:13:09.003Z]
+[2025-10-02T00:13:20.839Z] Request [774e9d05-f62b-46ba-83cd-77eb0190ab4c] PUT http://127.0.0.1:11000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host?comp=lease
+[2025-10-02T00:13:20.842Z] x-ms-lease-action:renew
+[2025-10-02T00:13:20.843Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:20.844Z] x-ms-version:2024-08-04
+[2025-10-02T00:13:20.844Z] Accept:application/xml
+[2025-10-02T00:13:20.845Z] x-ms-client-request-id:774e9d05-f62b-46ba-83cd-77eb0190ab4c
+[2025-10-02T00:13:20.845Z] x-ms-return-client-request-id:true
+[2025-10-02T00:13:20.846Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
+[2025-10-02T00:13:20.846Z] x-ms-date:Thu, 02 Oct 2025 00:13:20 GMT
+[2025-10-02T00:13:20.978Z] Authorization:REDACTED
+[2025-10-02T00:13:20.979Z] client assembly: Azure.Storage.Blobs
+[2025-10-02T00:13:20.986Z] Response [774e9d05-f62b-46ba-83cd-77eb0190ab4c] 200 OK (00.0s)
+[2025-10-02T00:13:21.137Z] Server:Azurite-Blob/3.35.0
+[2025-10-02T00:13:21.138Z] ETag:"0x1C69CCF233645F0"
+[2025-10-02T00:13:21.138Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:21.139Z] x-ms-client-request-id:774e9d05-f62b-46ba-83cd-77eb0190ab4c
+[2025-10-02T00:13:21.139Z] x-ms-request-id:d5527780-f5f4-4ad0-ba8d-1c3908de19de
+[2025-10-02T00:13:21.140Z] x-ms-version:2025-11-05
+[2025-10-02T00:13:21.140Z] Date:Thu, 02 Oct 2025 00:13:20 GMT
+[2025-10-02T00:13:21.141Z] Connection:keep-alive
+[2025-10-02T00:13:21.144Z] Keep-Alive:REDACTED
+[2025-10-02T00:13:21.145Z] Last-Modified:Thu, 02 Oct 2025 00:11:08 GMT
+[2025-10-02T00:13:21.145Z] Content-Length:0
+[2025-10-02T00:13:21.146Z]
+[2025-10-02T00:13:32.841Z] Request [2a4ba087-360f-407a-adef-b9ec5113f755] PUT http://127.0.0.1:11000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host?comp=lease
+[2025-10-02T00:13:32.842Z] x-ms-lease-action:renew
+[2025-10-02T00:13:32.842Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:32.844Z] x-ms-version:2024-08-04
+[2025-10-02T00:13:32.845Z] Accept:application/xml
+[2025-10-02T00:13:32.845Z] x-ms-client-request-id:2a4ba087-360f-407a-adef-b9ec5113f755
+[2025-10-02T00:13:32.845Z] x-ms-return-client-request-id:true
+[2025-10-02T00:13:32.846Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
+[2025-10-02T00:13:32.847Z] x-ms-date:Thu, 02 Oct 2025 00:13:32 GMT
+[2025-10-02T00:13:32.848Z] Authorization:REDACTED
+[2025-10-02T00:13:32.849Z] client assembly: Azure.Storage.Blobs
+[2025-10-02T00:13:32.854Z] Response [2a4ba087-360f-407a-adef-b9ec5113f755] 200 OK (00.0s)
+[2025-10-02T00:13:32.859Z] Server:Azurite-Blob/3.35.0
+[2025-10-02T00:13:32.859Z] ETag:"0x1C69CCF233645F0"
+[2025-10-02T00:13:32.863Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:32.863Z] x-ms-client-request-id:2a4ba087-360f-407a-adef-b9ec5113f755
+[2025-10-02T00:13:32.866Z] x-ms-request-id:095b5ad6-12a1-4e28-acdc-13800701dc19
+[2025-10-02T00:13:32.867Z] x-ms-version:2025-11-05
+[2025-10-02T00:13:32.867Z] Date:Thu, 02 Oct 2025 00:13:32 GMT
+[2025-10-02T00:13:32.868Z] Connection:keep-alive
+[2025-10-02T00:13:32.868Z] Keep-Alive:REDACTED
+[2025-10-02T00:13:32.869Z] Last-Modified:Thu, 02 Oct 2025 00:11:08 GMT
+[2025-10-02T00:13:32.875Z] Content-Length:0
+[2025-10-02T00:13:32.876Z]
+[2025-10-02T00:13:44.843Z] Request [570c3a49-0944-4139-8446-5d8d1fa0a037] PUT http://127.0.0.1:11000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host?comp=lease
+[2025-10-02T00:13:44.949Z] x-ms-lease-action:renew
+[2025-10-02T00:13:44.953Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:45.131Z] x-ms-version:2024-08-04
+[2025-10-02T00:13:45.135Z] Accept:application/xml
+[2025-10-02T00:13:45.136Z] x-ms-client-request-id:570c3a49-0944-4139-8446-5d8d1fa0a037
+[2025-10-02T00:13:45.137Z] x-ms-return-client-request-id:true
+[2025-10-02T00:13:45.138Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
+[2025-10-02T00:13:45.139Z] x-ms-date:Thu, 02 Oct 2025 00:13:44 GMT
+[2025-10-02T00:13:45.141Z] Authorization:REDACTED
+[2025-10-02T00:13:45.142Z] client assembly: Azure.Storage.Blobs
+[2025-10-02T00:13:45.286Z] Response [570c3a49-0944-4139-8446-5d8d1fa0a037] 200 OK (00.1s)
+[2025-10-02T00:13:45.322Z] Server:Azurite-Blob/3.35.0
+[2025-10-02T00:13:45.323Z] ETag:"0x1C69CCF233645F0"
+[2025-10-02T00:13:45.324Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:45.325Z] x-ms-client-request-id:570c3a49-0944-4139-8446-5d8d1fa0a037
+[2025-10-02T00:13:45.326Z] x-ms-request-id:8065adf6-45b8-4d5f-9a81-5bc1caded4e9
+[2025-10-02T00:13:45.328Z] x-ms-version:2025-11-05
+[2025-10-02T00:13:45.329Z] Date:Thu, 02 Oct 2025 00:13:45 GMT
+[2025-10-02T00:13:45.331Z] Connection:keep-alive
+[2025-10-02T00:13:45.332Z] Keep-Alive:REDACTED
+[2025-10-02T00:13:45.336Z] Last-Modified:Thu, 02 Oct 2025 00:11:08 GMT
+[2025-10-02T00:13:45.337Z] Content-Length:0
+[2025-10-02T00:13:45.487Z] 
+[2025-10-02T00:13:56.839Z] Request [888636cd-73b6-4001-ac98-3c532cf3d101] PUT http://127.0.0.1:11000/devstoreaccount1/azure-webjobs-hosts/locks/avd1371-2113432517/host?comp=lease
+[2025-10-02T00:13:56.843Z] x-ms-lease-action:renew
+[2025-10-02T00:13:56.844Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:56.845Z] x-ms-version:2024-08-04
+[2025-10-02T00:13:56.846Z] Accept:application/xml
+[2025-10-02T00:13:56.847Z] x-ms-client-request-id:888636cd-73b6-4001-ac98-3c532cf3d101
+[2025-10-02T00:13:56.919Z] x-ms-return-client-request-id:true
+[2025-10-02T00:13:56.922Z] User-Agent:azsdk-net-Storage.Blobs/12.21.2 (.NET 8.0.19; Microsoft Windows 10.0.22631)    
+[2025-10-02T00:13:56.923Z] x-ms-date:Thu, 02 Oct 2025 00:13:56 GMT
+[2025-10-02T00:13:56.924Z] Authorization:REDACTED
+[2025-10-02T00:13:56.925Z] client assembly: Azure.Storage.Blobs
+[2025-10-02T00:13:56.931Z] Response [888636cd-73b6-4001-ac98-3c532cf3d101] 200 OK (00.0s)
+[2025-10-02T00:13:57.014Z] Server:Azurite-Blob/3.35.0
+[2025-10-02T00:13:57.015Z] ETag:"0x1C69CCF233645F0"
+[2025-10-02T00:13:57.017Z] x-ms-lease-id:000000000000000000000000EE44FDF1
+[2025-10-02T00:13:57.018Z] x-ms-client-request-id:888636cd-73b6-4001-ac98-3c532cf3d101
+[2025-10-02T00:13:57.021Z] x-ms-request-id:e0de9bd4-c33d-4a5f-8aa8-7d9cece0798d
+[2025-10-02T00:13:57.022Z] x-ms-version:2025-11-05
+[2025-10-02T00:13:57.023Z] Date:Thu, 02 Oct 2025 00:13:56 GMT
+[2025-10-02T00:13:57.024Z] Connection:keep-alive
+[2025-10-02T00:13:57.025Z] Keep-Alive:REDACTED
+[2025-10-02T00:13:57.107Z] Last-Modified:Thu, 02 Oct 2025 00:11:08 GMT
+[2025-10-02T00:13:57.108Z] Content-Length:0
+[2025-10-02T00:13:57.109Z]
