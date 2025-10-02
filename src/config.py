@@ -105,12 +105,12 @@ class ReplicationConfig(BaseSettings):
     # Subscriptions
     primary_subscription_principal: Optional[str] = Field(
         default=None,
-        alias="PRIMARY_SUBSCRIPTION_PRINCIPAL_NAME",
+        alias="PRIMARY_SUBSCRIPTION_TOPIC_A",
         description="Principal subscription for the topic",
     )
     primary_subscription_additional: Optional[str] = Field(
         default=None,
-        alias="PRIMARY_SUBSCRIPTION_ADDITIONAL_NAME",
+        alias="PRIMARY_SUBSCRIPTION_TOPIC_B",
         description="Additional subscription for the topic",
     )
     subscription_list: List[str] = Field(
