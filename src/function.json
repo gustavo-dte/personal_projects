@@ -4,7 +4,7 @@
       "connection": "PRIMARY_SERVICEBUS_CONN",
       "direction": "in",
       "name": "msg1",
-      "subscriptionName": "%PRIMARY_SUBSCRIPTION_PRINCIPAL_NAME%",
+      "subscriptionName": "%PRIMARY_SUBSCRIPTION_TOPIC_A%",
       "topicName": "%PRIMARY_TOPIC_NAME%",
       "type": "serviceBusTrigger"
     },
@@ -12,7 +12,7 @@
       "connection": "PRIMARY_SERVICEBUS_CONN",
       "direction": "in",
       "name": "msg2",
-      "subscriptionName": "%PRIMARY_SUBSCRIPTION_ADDITIONAL_NAME%",
+      "subscriptionName": "%PRIMARY_SUBSCRIPTION_TOPIC_B%",
       "topicName": "%PRIMARY_TOPIC_NAME%",
       "type": "serviceBusTrigger"
     }
