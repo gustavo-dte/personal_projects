@@ -3,11 +3,20 @@
     {
       "connection": "PRIMARY_SERVICEBUS_CONN",
       "direction": "in",
-      "name": "msg",
-      "subscriptionName": "%PRIMARY_SUBSCRIPTION_NAME%",
+      "name": "msg1",
+      "subscriptionName": "%PRIMARY_SUBSCRIPTION_PRINCIPAL_NAME%",
+      "topicName": "%PRIMARY_TOPIC_NAME%",
+      "type": "serviceBusTrigger"
+    },
+    {
+      "connection": "PRIMARY_SERVICEBUS_CONN",
+      "direction": "in",
+      "name": "msg2",
+      "subscriptionName": "%PRIMARY_SUBSCRIPTION_ADDITIONAL_NAME%",
       "topicName": "%PRIMARY_TOPIC_NAME%",
       "type": "serviceBusTrigger"
     }
   ],
-  "scriptFile": "main.py"
+  "scriptFile": "__init__.py"
 }
+
