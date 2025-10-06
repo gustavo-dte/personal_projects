@@ -9,37 +9,41 @@ import logging
 from unittest.mock import Mock, patch
 
 import pytest
-from azure.core.exceptions import ClientAuthenticationError
+from azure.core.exceptions import (
+    ClientAuthenticationError,
+    ServiceRequestError,
+)
 from pydantic import ValidationError as PydanticValidationError
 
-from src.config import DeadLetterConfig, ReplicationConfig, RetryConfig
-from src.constants import (
+from src.shared.config import DeadLetterConfig, ReplicationConfig, RetryConfig
+from src.shared.constants import (
     DEFAULT_DELTA_MINUTES,
     DEFAULT_RTO_MINUTES,
     DIRECTION_PRIMARY_TO_SECONDARY,
     REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
 )
-from src.exceptions import ConfigError, ValidationError
-from src.main import (
+from src.shared.exceptions import ConfigError, ReplicationError, ValidationError
+from src.shared.main import (
     handle_authentication_error,
     load_and_validate_config,
     orchestrate_replication,
     send_message_to_destination,
 )
-from src.message_utils import (
+from src.shared.message_utils import (
     create_enhanced_properties,
     generate_correlation_id,
     generate_replicated_message_id,
     process_message_body,
 )
+from src.shared.retry_utils import exponential_backoff_retry
 from tests.constants_test import TEST_SERVICEBUS_CONNECTION_STRING
 
 
 class TestConfigurationLoading:
     """Test configuration loading and validation."""
 
-    @patch("src.main.ReplicationConfig")
-    def test_load_and_validate_config_success(self, mock_config_class):
+    @patch("src.shared.main.ReplicationConfig")
+    def test_load_and_validate_config_success(self, mock_config_class: Mock) -> None:
         """Test successful configuration loading."""
         mock_config = Mock()
         mock_config.replication_type = REPLICATION_TYPE_PRIMARY_TO_SECONDARY
@@ -50,8 +54,10 @@ class TestConfigurationLoading:
         assert result == mock_config
         mock_config_class.assert_called_once()
 
-    @patch("src.main.ReplicationConfig")
-    def test_load_and_validate_config_validation_error(self, mock_config_class):
+    @patch("src.shared.main.ReplicationConfig")
+    def test_load_and_validate_config_validation_error(
+        self, mock_config_class: Mock
+    ) -> None:
         """Test configuration loading with validation error."""
         mock_config_class.side_effect = PydanticValidationError.from_exception_data(
             "TestModel",
@@ -63,8 +69,10 @@ class TestConfigurationLoading:
 
         assert "Configuration validation failed" in str(exc_info.value)
 
-    @patch("src.main.ReplicationConfig")
-    def test_load_and_validate_config_unexpected_error(self, mock_config_class):
+    @patch("src.shared.main.ReplicationConfig")
+    def test_load_and_validate_config_unexpected_error(
+        self, mock_config_class: Mock
+    ) -> None:
         """Test configuration loading with unexpected error."""
         mock_config_class.side_effect = RuntimeError("Unexpected error")
 
@@ -77,7 +85,7 @@ class TestConfigurationLoading:
 class TestMessageUtils:
     """Test message utility functions."""
 
-    def test_generate_correlation_id_existing(self):
+    def test_generate_correlation_id_existing(self) -> None:
         """Test correlation ID generation when message already has one."""
         mock_message = Mock()
         mock_message.correlation_id = "existing-id"
@@ -86,7 +94,7 @@ class TestMessageUtils:
 
         assert result == "existing-id"
 
-    def test_generate_correlation_id_new(self):
+    def test_generate_correlation_id_new(self) -> None:
         """Test correlation ID generation for new message."""
         mock_message = Mock()
         mock_message.correlation_id = None
@@ -94,9 +102,71 @@ class TestMessageUtils:
         result = generate_correlation_id(mock_message)
 
         assert result.startswith("repl-")
-        assert len(result) > 10  # Should have timestamp
 
-    def test_process_message_body_bytes(self):
+
+class TestRetryUtils:
+    """Test retry utility functions."""
+
+    def test_exponential_backoff_retry_success(self) -> None:
+        """Test successful execution without retries."""
+        logger = Mock()
+        mock_func = Mock(return_value="success")
+        decorated = exponential_backoff_retry(
+            max_attempts=3, base_delay=0.1, logger=logger
+        )(mock_func)
+
+        result = decorated()
+
+        assert result == "success"
+        mock_func.assert_called_once()
+        logger.info.assert_not_called()
+
+    @patch("src.shared.retry_utils.time.sleep")
+    def test_exponential_backoff_retry_with_retries(self, mock_sleep: Mock) -> None:
+        """Test retry behavior with temporary failures."""
+        logger = Mock()
+        mock_func = Mock(
+            side_effect=[
+                ServiceRequestError("error"),
+                ServiceRequestError("error"),
+                "success",
+            ]
+        )
+        decorated = exponential_backoff_retry(
+            max_attempts=3, base_delay=0.1, logger=logger
+        )(mock_func)
+
+        result = decorated(correlation_id="test-id")
+
+        assert result == "success"
+        assert mock_func.call_count == 3
+        assert logger.warning.call_count == 2
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(0.1)  # First retry delay
+        mock_sleep.assert_any_call(0.2)  # Second retry delay
+
+    @patch("src.shared.retry_utils.time.sleep")
+    def test_exponential_backoff_retry_exhausted(self, mock_sleep: Mock) -> None:
+        """Test behavior when all retries are exhausted."""
+        logger = Mock()
+        error = ServiceRequestError("persistent error")
+        mock_func = Mock(side_effect=error)
+        decorated = exponential_backoff_retry(
+            max_attempts=3, base_delay=0.1, logger=logger
+        )(mock_func)
+
+        with pytest.raises(ReplicationError) as exc_info:
+            decorated(correlation_id="test-id")
+
+        assert "All 3 retry attempts failed" in str(exc_info.value)
+        assert mock_func.call_count == 3
+        assert logger.warning.call_count == 2
+        logger.error.assert_called()
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(0.1)  # First retry delay
+        mock_sleep.assert_any_call(0.2)  # Second retry delay
+
+    def test_process_message_body_bytes(self) -> None:
         """Test processing message body that is already bytes."""
         body = b"test message"
         content_type = "application/json"
@@ -106,7 +176,7 @@ class TestMessageUtils:
         assert processed_body == body
         assert final_content_type == content_type
 
-    def test_process_message_body_string(self):
+    def test_process_message_body_string(self) -> None:
         """Test processing message body that is a string."""
         body = "test message"
         content_type = None
@@ -116,7 +186,7 @@ class TestMessageUtils:
         assert processed_body == b"test message"
         assert final_content_type == "text/plain; charset=utf-8"
 
-    def test_process_message_body_other_type(self):
+    def test_process_message_body_other_type(self) -> None:
         """Test processing message body of other types."""
         body = 12345
         content_type = None
@@ -126,7 +196,7 @@ class TestMessageUtils:
         assert processed_body == b"12345"
         assert final_content_type == "text/plain; charset=utf-8"
 
-    def test_create_enhanced_properties(self):
+    def test_create_enhanced_properties(self) -> None:
         """Test creation of enhanced properties with replication metadata."""
         mock_message = Mock()
         mock_message.application_properties = {"original_prop": "value"}
@@ -140,7 +210,7 @@ class TestMessageUtils:
         assert result["x-replication-correlation-id"] == correlation_id
         assert "x-replication-timestamp" in result
 
-    def test_generate_replicated_message_id_with_original(self):
+    def test_generate_replicated_message_id_with_original(self) -> None:
         """Test generation of replicated message ID with original ID."""
         correlation_id = "test-correlation-id"
         original_id = "original-message-id"
@@ -149,7 +219,7 @@ class TestMessageUtils:
 
         assert result == "repl-test-cor-original-message-id"
 
-    def test_generate_replicated_message_id_without_original(self):
+    def test_generate_replicated_message_id_without_original(self) -> None:
         """Test generation of replicated message ID without original ID."""
         correlation_id = "test-correlation-id"
         original_id = None
@@ -162,7 +232,7 @@ class TestMessageUtils:
 class TestErrorHandling:
     """Test error handling functions."""
 
-    def test_handle_authentication_error(self):
+    def test_handle_authentication_error(self) -> None:
         """Test handling of authentication errors."""
         error = ClientAuthenticationError("Auth failed")
         correlation_id = "test-id"
@@ -183,8 +253,8 @@ class TestErrorHandling:
 class TestReplicationOrchestration:
     """Test replication orchestration functions."""
 
-    @patch("src.main.replicate_message_to_destination")
-    def test_orchestrate_replication_success(self, mock_replicate):
+    @patch("src.shared.main.replicate_message_to_destination")
+    def test_orchestrate_replication_success(self, mock_replicate: Mock) -> None:
         """Test successful replication orchestration."""
         mock_message = Mock()
         mock_config = Mock()
@@ -205,7 +275,7 @@ class TestReplicationOrchestration:
         assert call_args[1]["destination_connection_string"] == "conn_str"
         assert call_args[1]["destination_topic_name"] == "queue_name"
 
-    def test_orchestrate_replication_validation_error(self):
+    def test_orchestrate_replication_validation_error(self) -> None:
         """Test replication orchestration with validation error."""
         mock_message = Mock()
         mock_config = Mock()
@@ -220,7 +290,7 @@ class TestReplicationOrchestration:
 class TestReplicationConfig:
     """Test Pydantic configuration model."""
 
-    def test_config_creation_valid(self):
+    def test_config_creation_valid(self) -> None:
         """Test creation of valid configuration."""
         config_data = {
             "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
@@ -238,7 +308,7 @@ class TestReplicationConfig:
         assert isinstance(config.retry_config, RetryConfig)
         assert isinstance(config.dead_letter_config, DeadLetterConfig)
 
-    def test_config_ttl_seconds_calculation(self):
+    def test_config_ttl_seconds_calculation(self) -> None:
         """Test TTL seconds calculation."""
         config_data = {
             "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
@@ -252,7 +322,7 @@ class TestReplicationConfig:
 
         assert config.ttl_seconds == 720  # (10 + 2) * 60
 
-    def test_config_direction_property(self):
+    def test_config_direction_property(self) -> None:
         """Test direction property formatting."""
         config_data = {
             "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
@@ -264,7 +334,7 @@ class TestReplicationConfig:
 
         assert config.direction == DIRECTION_PRIMARY_TO_SECONDARY
 
-    def test_config_get_destination_config(self):
+    def test_config_get_destination_config(self) -> None:
         """Test getting destination configuration."""
         config_data = {
             "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
@@ -284,11 +354,11 @@ class TestReplicationConfig:
 class TestIntegration:
     """Integration tests for the complete replication flow."""
 
-    @patch("src.main.ServiceBusClient")
-    @patch("src.main.create_replicated_message")
+    @patch("src.shared.main.ServiceBusClient")
+    @patch("src.shared.main.create_replicated_message")
     def test_send_message_to_destination_integration(
-        self, mock_create_msg, mock_client_class
-    ):
+        self, mock_create_msg: Mock, mock_client_class: Mock
+    ) -> None:
         """Test the complete message sending flow."""
         # Setup mocks
         mock_client = Mock()

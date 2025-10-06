@@ -56,6 +56,4 @@ _version.py
 # Local development
 .DS_Store
 
-
-#Unnecessary files
-REFACTORING_SUMMARY.md
+mypy.ini

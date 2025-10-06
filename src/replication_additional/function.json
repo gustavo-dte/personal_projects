@@ -1,0 +1,13 @@
+{
+  "bindings": [
+    {
+      "connection": "PRIMARY_SERVICEBUS_CONN",
+      "direction": "in",
+      "name": "msg",
+      "subscriptionName": "%TOPIC_PRIMARY_SUBSCRIPTION_B%",
+      "topicName": "%PRIMARY_TOPIC_NAME%",
+      "type": "serviceBusTrigger"
+    }
+  ],
+  "scriptFile": "__init__.py"
+}

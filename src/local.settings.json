@@ -1,0 +1,16 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "DELTA_MINUTES": "2",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "PRIMARY_SERVICEBUS_CONN": "<primary-namespace-connection-string>",
+    "PRIMARY_TOPIC_NAME": "<primary-topic-name>",
+    "REPLICATION_TYPE": "primary_to_secondary",
+    "RTO_MINUTES": "10",
+    "SECONDARY_SERVICEBUS_CONN": "<secondary-namespace-connection-string>",
+    "SECONDARY_TOPIC_NAME": "<secondary-topic-name>",
+    "TOPIC_PRIMARY_SUBSCRIPTION_A": "<primary-subscription-a-name>",
+    "TOPIC_PRIMARY_SUBSCRIPTION_B": "<primary-subscription-b-name>"
+  }
+}

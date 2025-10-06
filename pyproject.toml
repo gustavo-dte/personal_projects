@@ -85,7 +85,7 @@ select = [
     "UP",  # pyupgrade
 ]
 ignore = [
-    "UP045",  # Use X | None for type annotations (incompatible with Pydantic + Python 3.10)
+    "UP045",  # Use X | None for type annotations (incompatible with Pydantic + Python 3.9)
 ]
 fixable = ["ALL"]
 unfixable = []

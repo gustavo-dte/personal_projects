@@ -27,32 +27,46 @@ The application works as an Azure Function that gets triggered when messages arr
 
 ```
 cloud-application-servicebus-replication/
-├── src/                          # Main source code
-│   ├── main.py                   # Azure Function entry point
-│   ├── config.py                 # Configuration management
-│   ├── message_utils.py          # Message processing utilities
-│   ├── retry_utils.py            # Retry logic with backoff
-│   ├── logging_utils.py          # Centralized logging
-│   ├── error_handlers.py         # Error handling utilities
-│   ├── exceptions.py             # Custom exception classes
-│   ├── constants.py              # Application constants
-│   └── function.json             # Azure Functions binding config
-├── tests/                        # Unit tests
-│   ├── main_test.py              # Main test suite
-│   ├── test_constants.py         # Test-specific constants
-│   └── README.md                 # Testing documentation
-├── .github/                      # GitHub Actions workflows
+├── src/                                    # Main source code
+│   ├── replication_principal/              # Primary replication function
+│   │   ├── __init__.py                     # Primary function implementation
+│   │   └── function.json                   # Primary function binding config
+│   ├── replication_additional/             # Additional replication function
+│   │   ├── __init__.py                     # Additional function implementation
+│   │   └── function.json                   # Additional function binding config
+│   ├── shared/                             # Shared utilities and modules
+│   │   ├── __init__.py                     # Package initialization
+│   │   ├── main.py                         # Main business logic
+│   │   ├── config.py                       # Configuration management
+│   │   ├── message_utils.py                # Message processing utilities
+│   │   ├── retry_utils.py                  # Retry logic with backoff
+│   │   ├── logging_utils.py                # Centralized logging
+│   │   ├── error_handlers.py               # Error handling utilities
+│   │   ├── exceptions.py                   # Custom exception classes
+│   │   └── constants.py                    # Application constants
+│   ├── __init__.py                         # Source package initialization
+│   ├── host.json                           # Azure Functions host config
+│   ├── local.settings.json                 # Local development settings
+│   └── requirements.txt                    # Function-specific dependencies
+├── tests/                                  # Unit tests
+│   ├── __init__.py                         # Test package initialization
+│   ├── main_test.py                        # Main test suite
+│   └── constants_test.py                   # Constants test suite
+├── .github/                                # GitHub Actions workflows
 │   ├── workflows/
-│   │   ├── ci.yml                # Main CI/CD pipeline
-│   │   ├── on-pull-request.yaml  # PR validation
-│   │   └── on-push.yaml          # Push validation
-│   ├── CODEOWNERS               # Code review assignments
-│   └── PULL_REQUEST_TEMPLATE.md # PR template
-├── requirements.txt              # Python dependencies
-├── pyproject.toml               # Project configuration
-├── host.json                    # Azure Functions host config
-├── local.settings.json          # Local development settings
-└── .pre-commit-config.yaml      # Code quality hooks
+│   │   ├── ci.yml                          # Main CI/CD pipeline
+│   │   ├── on-pull-request.yaml            # PR validation
+│   │   └── on-push.yaml                    # Push validation
+│   ├── CODEOWNERS                          # Code review assignments
+│   └── PULL_REQUEST_TEMPLATE.md            # PR template
+├── .coverage                               # Test coverage data
+├── .editorconfig                           # Editor configuration
+├── .gitignore                              # Git ignore patterns
+├── .pre-commit-config.yaml                 # Code quality hooks
+├── .python-version                         # Python version specification
+├── host.json                               # Azure Functions host config (root)
+├── mypy.ini                                # MyPy type checker configuration
+└── pyproject.toml                          # Project configuration and dependencies
 ```
 
 ## Getting Started

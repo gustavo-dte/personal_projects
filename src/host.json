@@ -48,10 +48,23 @@
     },
     "logLevel": {
       "Function": "Information",
-      "Host.Aggregator": "Information",
-      "Host.Results": "Information",
+      "Host.Aggregator": "Trace",
+      "Host.Results": "Error",
       "default": "Information"
     }
+  },
+  "retry": {
+    "maxRetryCount": 3,
+    "maximumInterval": "00:00:30",
+    "minimumInterval": "00:00:02",
+    "strategy": "exponentialBackoff"
+  },
+  "singleton": {
+    "listenerLockPeriod": "00:01:00",
+    "listenerLockRecoveryPollingInterval": "00:01:00",
+    "lockAcquisitionPollingInterval": "00:00:05",
+    "lockAcquisitionTimeout": "00:01:00",
+    "lockPeriod": "00:00:15"
   },
   "version": "2.0"
 }
