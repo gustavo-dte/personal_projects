@@ -1,42 +1,16 @@
-[2025-10-13T22:18:54.477Z]   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
-[2025-10-13T22:18:54.477Z]   File "C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\main.py", line 9, in <module>
-[2025-10-13T22:18:54.478Z]     from .error_handlers import (
-[2025-10-13T22:18:54.479Z] ImportError: cannot import name 'handle_servicebus_error' from '__app__.src.error_handlers' (C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\error_handlers.py)
-[2025-10-13T22:18:53.061Z] Error: cannot import name 'handle_servicebus_error' from '__app__.src.error_handlers' (C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\error_handlers.py), Cannot find module. Please check the requirements.txt file for the missing module. For more info, please refer the troubleshooting guide: https://aka.ms/functions-modulenotfound. Current sys.path: ['C:\\Program Files\\Microsoft\\Azure Functions Core Tools\\workers\\python\\3.11\\WINDOWS\\X64', 'C:\\Program Files\\Microsoft\\Azure Functions Core Tools\\workers\\python\\3.11\\WINDOWS\\X64', 'C:\\Python\\python311.zip', 'C:\\Python\\DLLs', 'C:\\Python\\Lib', 'C:\\Python', 'C:\\Users\\u69819\\Documents\\DevOps\\service_bus\\personal\\personal_projects\\src\\.venv', 'C:\\Users\\u69819\\Documents\\DevOps\\service_bus\\personal\\personal_projects\\src\\.venv\\Lib\\site-packages', 'C:\\Users\\u69819\\Documents\\DevOps\\service_bus\\personal\\personal_projects']
-Traceback (most recent call last):
-  File "C:\Program Files\Microsoft\Azure Functions Core Tools\workers\python\3.11\WINDOWS\X64\azure_functions_worker\utils\wrappers.py", line 44, in call
-    return func(*args, **kwargs)
-  File "C:\Program Files\Microsoft\Azure Functions Core Tools\workers\python\3.11\WINDOWS\X64\azure_functions_worker\loader.py", line 220, in load_function
-    mod = importlib.import_module(fullmodname)
-  File "C:\Python\Lib\importlib\__init__.py", line 126, in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
-  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
-  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
-  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
-  File "<frozen importlib._bootstrap_external>", line 940, in exec_module
-  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
-  File "C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\main.py", line 9, in <module>
-    from .error_handlers import (
-ImportError: cannot import name 'handle_servicebus_error' from '__app__.src.error_handlers' (C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\error_handlers.py)
-
-[2025-10-13T22:18:54.486Z] Result: Failure
-Exception: ImportError: cannot import name 'handle_servicebus_error' from '__app__.src.error_handlers' (C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\error_handlers.py). Cannot find module. Please check the requirements.txt file for the missing module. For more info, please refer the troubleshooting guide: https://aka.ms/functions-modulenotfound. Current sys.path: ['C:\\Program Files\\Microsoft\\Azure Functions Core Tools\\workers\\python\\3.11\\WINDOWS\\X64', 'C:\\Program Files\\Microsoft\\Azure Functions Core Tools\\workers\\python\\3.11\\WINDOWS\\X64', 'C:\\Python\\python311.zip', 'C:\\Python\\DLLs', 'C:\\Python\\Lib', 'C:\\Python', 'C:\\Users\\u69819\\Documents\\DevOps\\service_bus\\personal\\personal_projects\\src\\.venv', 'C:\\Users\\u69819\\Documents\\DevOps\\service_bus\\personal\\personal_projects\\src\\.venv\\Lib\\site-packages', 'C:\\Users\\u69819\\Documents\\DevOps\\service_bus\\personal\\personal_projects']
-Stack:   File "C:\Program Files\Microsoft\Azure Functions Core Tools\workers\python\3.11\WINDOWS\X64\azure_functions_worker\dispatcher.py", line 546, in _handle__function_load_request
-    func = loader.load_function(
-  File "C:\Program Files\Microsoft\Azure Functions Core Tools\workers\python\3.11\WINDOWS\X64\azure_functions_worker\utils\wrappers.py", line 49, in call
-    raise extend_exception_message(e, message)
-  File "C:\Program Files\Microsoft\Azure Functions Core Tools\workers\python\3.11\WINDOWS\X64\azure_functions_worker\utils\wrappers.py", line 44, in call
-    return func(*args, **kwargs)
-  File "C:\Program Files\Microsoft\Azure Functions Core Tools\workers\python\3.11\WINDOWS\X64\azure_functions_worker\loader.py", line 220, in load_function
-    mod = importlib.import_module(fullmodname)
-  File "C:\Python\Lib\importlib\__init__.py", line 126, in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
-  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
-  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
-  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
-  File "<frozen importlib._bootstrap_external>", line 940, in exec_module
-  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
-  File "C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\main.py", line 9, in <module>
-    from .error_handlers import (
+[2025-10-13T22:27:14.566Z] Successfully processed FunctionLoadRequest, request ID: 13c59bf4-a8f9-43bc-a308-898c3868496b, function ID: 64a0acf3-b665-4144-ab99-cb1d74e97033,function Name: src,programming model: V1
+[2025-10-13T22:27:37.517Z] The listener for function 'Functions.src' was unable to start.
+[2025-10-13T22:27:37.535Z] The listener for function 'Functions.src' was unable to start. Azure.Storage.Blobs: Service request failed.
+[2025-10-13T22:27:37.539Z] Status: 500 (Internal Server Error)
+[2025-10-13T22:27:37.540Z]
+[2025-10-13T22:27:37.540Z] Headers:
+[2025-10-13T22:27:37.541Z] Server: Azurite-Blob/3.35.0
+[2025-10-13T22:27:37.541Z] Date: Mon, 13 Oct 2025 22:27:37 GMT
+[2025-10-13T22:27:37.542Z] Connection: keep-alive
+[2025-10-13T22:27:37.543Z] Keep-Alive: REDACTED
+[2025-10-13T22:27:37.619Z] Content-Length: 0
+[2025-10-13T22:27:37.620Z] .
+[2025-10-13T22:27:37.623Z] Host started (28837ms)
+[2025-10-13T22:27:37.624Z] Job host started
+[2025-10-13T22:27:39.630Z] Retrying to start listener for function 'Functions.src' (Attempt 1)
+[2025-10-13T22:27:39.638Z] Listener successfully started for function 'Functions.src' after 1 retries.
