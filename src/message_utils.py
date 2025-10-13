@@ -13,6 +13,7 @@ from typing import Any, cast
 import azure.functions as func
 from azure.servicebus import ServiceBusMessage
 from azure.servicebus.management import ServiceBusAdministrationClient
+from .exceptions import ReplicationError
 
 from .constants import (
     CONTENT_TYPE_BINARY,
