@@ -157,7 +157,7 @@ def get_all_topics_and_subscriptions(conn_str: str) -> dict[str, list[str]]:
     admin = ServiceBusAdministrationClient.from_connection_string(conn_str)
     mapping: dict[str, list[str]] = {}
     for topic in admin.list_topics():
-        subs = [s.subscription_name for s in admin.list_subscriptions(topic.name)]
+        subs = [s.name for s in admin.list_subscriptions(topic.name)]
         mapping[topic.name] = subs
     return mapping
 
