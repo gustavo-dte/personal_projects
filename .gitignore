@@ -29,6 +29,10 @@ env/
 ENV/
 .venv/
 
+# Azure Functions
+local.settings.json
+*.local.settings.json
+
 # IDE specific files
 .idea/
 .vscode/
