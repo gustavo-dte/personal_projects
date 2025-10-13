@@ -143,13 +143,21 @@ def replicate_message_to_destination(source_message: func.ServiceBusMessage,
 
 
 def orchestrate_replication(source_message: func.ServiceBusMessage,
-                             config: ReplicationConfig) -> None:
-    """Coordinate one message replication."""
-    dest_conn, dest_topic, direction = config.get_destination_config()
-    replicate_message_to_destination(source_message, dest_conn, dest_topic,
-                                     config.ttl_seconds, direction,
-                                     config.retry_config.max_attempts,
-                                     config.retry_config.base_delay)
+                             config: ReplicationConfig,
+                             topic_name: str) -> None:
+    """Coordinate one message replication dynamically using same topic name."""
+    dest_conn = config.secondary_conn_str
+    dest_topic = topic_name  # ✅ mirror same topic name
+    direction = config.direction
+    replicate_message_to_destination(
+        source_message,
+        dest_conn,
+        dest_topic,
+        config.ttl_seconds,
+        direction,
+        config.retry_config.max_attempts,
+        config.retry_config.base_delay
+    )
 
 
 def get_all_topics_and_subscriptions(conn_str: str) -> dict[str, list[str]]:
@@ -181,7 +189,7 @@ def main(timer: func.TimerRequest) -> None:
                     with client.get_subscription_receiver(topic, sub, max_wait_time=5) as receiver:
                         messages = receiver.receive_messages(max_message_count=100)
                         for msg in messages:
-                            orchestrate_replication(msg, config)
+                            orchestrate_replication(msg, config, topic)
                             receiver.complete_message(msg)
 
         logger.info("Replication cycle completed successfully.")
