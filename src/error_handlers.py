@@ -189,3 +189,9 @@ def handle_unexpected_error(exception, correlation_id, direction, dest_topic, lo
         f"Direction: {direction} | Correlation ID: {correlation_id or 'N/A'} | "
         f"Error Type: {type(exception).__name__}"
     )
+
+__all__ = [
+    "handle_servicebus_error",
+    "handle_replication_error",
+    "handle_unexpected_error",
+]
