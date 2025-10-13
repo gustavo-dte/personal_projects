@@ -407,7 +407,7 @@ def orchestrate_replication(
         raise
 
 
-def main(msg: func.ServiceBusMessage) -> None:
+def main(msg: func.TimerRequest) -> None:
     """
     Main entry point for the Azure Function.
 
