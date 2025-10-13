@@ -33,8 +33,8 @@ def main(timer: func.TimerRequest) -> None:
         app_logger.info("Configuration loaded successfully.")
 
         # Upgrade logger (attach AI handler if available)
-        global app_logger
-        app_logger = configure_logger(config)
+        logger = configure_logger(config)
+        logger.info(f"Running replication direction: {config.direction}")
 
         # ------------------------------------------------------------------
         # Start replication cycle
