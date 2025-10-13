@@ -12,8 +12,6 @@ from typing import Any, cast
 
 import azure.functions as func
 from azure.servicebus import ServiceBusMessage
-from azure.servicebus.management import ServiceBusAdministrationClient
-from .exceptions import ReplicationError
 
 from .constants import (
     CONTENT_TYPE_BINARY,
@@ -121,40 +119,53 @@ def generate_replicated_message_id(
         return f"{CORRELATION_ID_PREFIX}-{correlation_prefix}"
 
 
-def create_replicated_message(source_message, correlation_id, ttl_seconds):
-    """Create a new ServiceBusMessage based on a received message."""
-    try:
-        # ✅ Modern SDK body extraction
-        if hasattr(source_message, "body"):
-            body_bytes = b"".join(source_message.body)
-        else:
-            # backward compatibility (very old SDKs)
-            body_bytes = source_message.get_body()
-
-        body_str = body_bytes.decode("utf-8") if isinstance(body_bytes, (bytes, bytearray)) else str(body_bytes)
-
-        msg = ServiceBusMessage(
-            body=body_str,
-            content_type=getattr(source_message, "content_type", "application/json"),
-            subject=getattr(source_message, "subject", None),
-            correlation_id=correlation_id,
-            time_to_live=ttl_seconds,
-        )
-        return msg
-    except Exception as e:
-        raise ReplicationError(f"Failed to create replicated message: {e}")
-
-def list_topics_and_subscriptions(conn_str: str) -> dict[str, list[str]]:
+def create_replicated_message(
+    source_message: func.ServiceBusMessage, correlation_id: str, ttl_seconds: int
+) -> ServiceBusMessage:
     """
-    List all topics and their subscriptions in the Service Bus namespace.
+    Create a new ServiceBusMessage for replication with all properties preserved.
+
     Args:
-        conn_str: Connection string for the Service Bus namespace
+        source_message: The original Service Bus message
+        correlation_id: Correlation ID for tracking
+        ttl_seconds: Time-to-live for the replicated message
+
     Returns:
-        Dictionary mapping topic names to lists of subscription names
+        New ServiceBusMessage ready for replication
     """
-    client = ServiceBusAdministrationClient.from_connection_string(conn_str)
-    result = {}
-    for topic in client.list_topics():
-        subs = [s.subscription_name for s in client.list_subscriptions(topic.name)]
-        result[topic.name] = subs
-    return result
+    # Process message body and content type
+    source_body = source_message.get_body()
+    original_content_type = getattr(source_message, "content_type", None)
+    processed_body, final_content_type = process_message_body(
+        source_body, original_content_type
+    )
+
+    # Create enhanced properties with replication metadata
+    enhanced_properties = create_enhanced_properties(source_message, correlation_id)
+
+    # Generate new message ID
+    new_message_id = generate_replicated_message_id(
+        correlation_id, source_message.message_id
+    )
+
+    # Set up TTL
+    message_ttl = datetime.timedelta(seconds=ttl_seconds)
+
+    # Create the replicated message with all properties preserved
+    return ServiceBusMessage(
+        processed_body,
+        time_to_live=message_ttl,
+        application_properties=cast(Any, enhanced_properties),
+        content_type=final_content_type,
+        correlation_id=correlation_id,
+        subject=getattr(source_message, "subject", None),
+        session_id=getattr(source_message, "session_id", None),
+        to=getattr(source_message, "to", None),
+        reply_to=getattr(source_message, "reply_to", None),
+        reply_to_session_id=getattr(source_message, "reply_to_session_id", None),
+        partition_key=getattr(source_message, "partition_key", None),
+        scheduled_enqueue_time_utc=getattr(
+            source_message, "scheduled_enqueue_time_utc", None
+        ),
+        message_id=new_message_id,
+    )
