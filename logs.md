@@ -1,3 +1,3 @@
-[2025-10-14T14:41:49.900Z] Link state changed: <LinkState.DETACH_SENT: 4> -> <LinkState.DETACHED: 0>     
-[2025-10-14T14:41:49.901Z] Retry failed after 3 attempts: Error sending message to dte-notifications: 'ServiceBusReceivedMessage' object has no attribute 'get_body'
-[2025-10-14T14:41:49.903Z] Replication error sending to dte-notifications | Direction: Primary → Secondary | Correlation ID: sms | Exception: Error sending message to dte-notifications: 'ServiceBusReceivedMessage' object has no attribute 'get_body'
+[2025-10-14T14:47:20.537Z] Link state changed: <LinkState.DETACH_SENT: 4> -> <LinkState.DETACHED: 0>     
+[2025-10-14T14:47:20.756Z] Retry failed after 3 attempts: Error sending message to dte-notifications: unsupported type for timedelta seconds component: NoneType
+[2025-10-14T14:47:20.761Z] Replication error sending to dte-notifications | Direction: Primary → Secondary | Correlation ID: sms | Exception: Error sending message to dte-notifications: unsupported type for timedelta seconds component: NoneType
