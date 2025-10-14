@@ -110,16 +110,21 @@ def replicate_message_to_destination(source_message, dest_conn, dest_topic, conf
             with client.get_topic_sender(topic_name=dest_topic) as sender:
                 correlation_id = getattr(source_message, "correlation_id", None)
                 ttl_seconds = getattr(source_message, "time_to_live", None)
-                replicated_body = create_replicated_message(
+
+                # ✅ create_replicated_message already returns a ServiceBusMessage
+                replicated_message = create_replicated_message(
                     source_message,
                     correlation_id=correlation_id,
                     ttl_seconds=ttl_seconds,
-                    )
-                sender.send_messages(ServiceBusMessage(replicated_body))
+                )
+
+                # ✅ send directly, don’t wrap again
+                sender.send_messages(replicated_message)
+
                 _log_successful_replication(direction, dest_topic, correlation_id)
+
     except Exception as e:
         raise ReplicationError(f"Error sending message to {dest_topic}: {e}") from e
-
 
 # --------------------------------------------------------------------------
 # EXCEPTION HANDLERS
