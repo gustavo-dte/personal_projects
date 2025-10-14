@@ -8,8 +8,8 @@ during replication, following separation of concerns principle.
 from __future__ import annotations
 
 import datetime
-from datetime import timedelta
 from typing import Any, cast
+from datetime import timedelta
 
 import azure.functions as func
 from azure.servicebus import ServiceBusMessage
@@ -121,45 +121,35 @@ def generate_replicated_message_id(
 
 
 def create_replicated_message(
-    source_message: func.ServiceBusMessage, correlation_id: str, ttl_seconds: int
+    source_message: func.ServiceBusMessage,
+    correlation_id: str,
+    ttl_seconds: int | None,
 ) -> ServiceBusMessage:
     """
     Create a new ServiceBusMessage for replication with all properties preserved.
-
-    Args:
-        source_message: The original Service Bus message
-        correlation_id: Correlation ID for tracking
-        ttl_seconds: Time-to-live for the replicated message
-
-    Returns:
-        New ServiceBusMessage ready for replication
     """
-    # Process message body and content type
+    # --- Extract and normalize body ------------------------------------------
     if hasattr(source_message, "get_body"):
+        # Legacy SDK compatibility
         source_body = source_message.get_body()
     else:
+        # Modern SDK: .body is iterable of bytes
         source_body = b"".join(part for part in source_message.body)
-    source_body = source_message.body
+
     original_content_type = getattr(source_message, "content_type", None)
     processed_body, final_content_type = process_message_body(
         source_body, original_content_type
     )
 
-    # Create enhanced properties with replication metadata
+    # --- Enhanced metadata ---------------------------------------------------
     enhanced_properties = create_enhanced_properties(source_message, correlation_id)
-
-    # Generate new message ID
     new_message_id = generate_replicated_message_id(
-        correlation_id, source_message.message_id
+        correlation_id, getattr(source_message, "message_id", None)
     )
 
-    # Set up TTL
-    message_ttl = datetime.timedelta(seconds=ttl_seconds)
-
-    # Create the replicated message with all properties preserved
-    return ServiceBusMessage(
-        processed_body,
-        time_to_live=message_ttl,
+    # --- TTL handling (avoid NoneType errors) -------------------------------
+    msg_kwargs = dict(
+        body=processed_body,
         application_properties=cast(Any, enhanced_properties),
         content_type=final_content_type,
         correlation_id=correlation_id,
@@ -174,3 +164,10 @@ def create_replicated_message(
         ),
         message_id=new_message_id,
     )
+
+    # Only set TTL if valid and numeric
+    if ttl_seconds is not None and isinstance(ttl_seconds, (int, float)):
+        msg_kwargs["time_to_live"] = timedelta(seconds=int(ttl_seconds))
+
+    # --- Construct replicated message ---------------------------------------
+    return ServiceBusMessage(**msg_kwargs)
