@@ -162,20 +162,16 @@ class ReplicationConfig(BaseSettings):
 
     @model_validator(mode="after")
     def validate_connection_config(self):
-        """Validate that required connection strings and queues are provided."""
-        # Map replication types to required environment variables
+        """Validate that required connection strings are provided."""
         required_vars_map = {
             REPLICATION_TYPE_PRIMARY_TO_SECONDARY: [
                 ("secondary_conn_str", "SECONDARY_SERVICEBUS_CONN"),
-                ("secondary_queue", "SECONDARY_TOPIC_NAME"),
             ],
             REPLICATION_TYPE_SECONDARY_TO_PRIMARY: [
                 ("primary_conn_str", "PRIMARY_SERVICEBUS_CONN"),
-                ("primary_queue", "PRIMARY_TOPIC_NAME"),
             ],
         }
 
-        # Use list comprehension to validate required fields
         required_fields = required_vars_map.get(self.replication_type, [])
         missing_fields = [
             env_var
