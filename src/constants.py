@@ -5,26 +5,27 @@ This module contains all constant values used throughout the application,
 following the Twelve Factor App methodology by avoiding hardcoded values.
 """
 
-from typing import Literal
+# # Replication types
+# REPLICATION_TYPE_PRIMARY_TO_SECONDARY: Literal["primary_to_secondary"] = (
+#     "primary_to_secondary"
+# )
+# REPLICATION_TYPE_SECONDARY_TO_PRIMARY: Literal["secondary_to_primary"] = (
+#     "secondary_to_primary"
+# )
 
-# Replication types
-REPLICATION_TYPE_PRIMARY_TO_SECONDARY: Literal["primary_to_secondary"] = (
-    "primary_to_secondary"
-)
-REPLICATION_TYPE_SECONDARY_TO_PRIMARY: Literal["secondary_to_primary"] = (
-    "secondary_to_primary"
-)
+# # Direction labels
+# DIRECTION_PRIMARY_TO_SECONDARY = "Primary → Secondary"
+# DIRECTION_SECONDARY_TO_PRIMARY = "Secondary → Primary"
 
-# Direction labels
-DIRECTION_PRIMARY_TO_SECONDARY = "Primary → Secondary"
-DIRECTION_SECONDARY_TO_PRIMARY = "Secondary → Primary"
-
+# Connection string environment variables with type annotations
+ENV_PRIMARY_SERVICEBUS_CONN: str = "PRIMARY_SERVICEBUS_CONN"
+ENV_SECONDARY_SERVICEBUS_CONN: str = "SECONDARY_SERVICEBUS_CONN"
 # Environment variable names
-ENV_REPLICATION_TYPE = "REPLICATION_TYPE"
+# ENV_REPLICATION_TYPE = "REPLICATION_TYPE"
 ENV_PRIMARY_SERVICEBUS_CONN = "PRIMARY_SERVICEBUS_CONN"
-ENV_PRIMARY_QUEUE_NAME = "PRIMARY_QUEUE_NAME"
+# ENV_PRIMARY_QUEUE_NAME = "PRIMARY_QUEUE_NAME"
 ENV_SECONDARY_SERVICEBUS_CONN = "SECONDARY_SERVICEBUS_CONN"
-ENV_SECONDARY_QUEUE_NAME = "SECONDARY_QUEUE_NAME"
+# ENV_SECONDARY_QUEUE_NAME = "SECONDARY_QUEUE_NAME"
 ENV_RTO_MINUTES = "RTO_MINUTES"
 ENV_DELTA_MINUTES = "DELTA_MINUTES"
 ENV_DLQ_ENABLED = "DLQ_ENABLED"

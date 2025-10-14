@@ -4,9 +4,9 @@ Configuration handling for the Service Bus replication function.
 
 from __future__ import annotations
 
-from typing import Literal, Optional, Union, cast  # noqa: F401
+from typing import Optional, Union, cast  # noqa: F401
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import (
@@ -17,10 +17,6 @@ from .constants import (
     DEFAULT_MAX_DELIVERY_COUNT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
     DEFAULT_RTO_MINUTES,
-    DIRECTION_PRIMARY_TO_SECONDARY,
-    DIRECTION_SECONDARY_TO_PRIMARY,
-    REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-    REPLICATION_TYPE_SECONDARY_TO_PRIMARY,
     SECONDS_PER_MINUTE,
 )
 from .exceptions import ConfigError
@@ -74,33 +70,27 @@ class ReplicationConfig(BaseSettings):
     backward compatibility, but they now represent topic names.
     """
 
-    replication_type: Literal["primary_to_secondary", "secondary_to_primary"] = Field(
-        default="primary_to_secondary",
-        alias="REPLICATION_TYPE",
-        description="Direction of message replication",
-    )
-
     # Service Bus connection strings
     primary_conn_str: Optional[str] = Field(
         default=None,
         alias="PRIMARY_SERVICEBUS_CONN",
         description="Primary Service Bus connection string",
     )
-    primary_queue: Optional[str] = Field(
-        default=None,
-        alias="PRIMARY_TOPIC_NAME",
-        description="Primary Service Bus topic name",
-    )
+    # primary_queue: Optional[str] = Field(
+    #     default=None,
+    #     alias="PRIMARY_TOPIC_NAME",
+    #     description="Primary Service Bus topic name",
+    # )
     secondary_conn_str: Optional[str] = Field(
         default=None,
         alias="SECONDARY_SERVICEBUS_CONN",
         description="Secondary Service Bus connection string",
     )
-    secondary_queue: Optional[str] = Field(
-        default=None,
-        alias="SECONDARY_TOPIC_NAME",
-        description="Secondary Service Bus topic name",
-    )
+    # secondary_queue: Optional[str] = Field(
+    #     default=None,
+    #     alias="SECONDARY_TOPIC_NAME",
+    #     description="Secondary Service Bus topic name",
+    # )
 
     # Timing configuration
     rto_minutes: int = Field(
@@ -145,50 +135,17 @@ class ReplicationConfig(BaseSettings):
         extra="forbid",
     )
 
-    @field_validator("replication_type")
-    @classmethod
-    def validate_replication_type(cls, v: str) -> str:
-        """Validate replication type is one of allowed values."""
-        allowed_types = [
-            REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            REPLICATION_TYPE_SECONDARY_TO_PRIMARY,
-        ]
-        if v not in allowed_types:
-            raise ValueError(
-                f"Invalid replication type '{v}'. "
-                f"Must be one of: {', '.join(allowed_types)}"
-            )
-        return v
-
     @model_validator(mode="after")
     def validate_connection_config(self):
-        """Validate that required connection strings and queues are provided."""
-        # Map replication types to required environment variables
-        required_vars_map = {
-            REPLICATION_TYPE_PRIMARY_TO_SECONDARY: [
-                ("secondary_conn_str", "SECONDARY_SERVICEBUS_CONN"),
-                ("secondary_queue", "SECONDARY_TOPIC_NAME"),
-            ],
-            REPLICATION_TYPE_SECONDARY_TO_PRIMARY: [
-                ("primary_conn_str", "PRIMARY_SERVICEBUS_CONN"),
-                ("primary_queue", "PRIMARY_TOPIC_NAME"),
-            ],
-        }
-
-        # Use list comprehension to validate required fields
-        required_fields = required_vars_map.get(self.replication_type, [])
-        missing_fields = [
-            env_var
-            for field_name, env_var in required_fields
-            if not getattr(self, field_name)
-        ]
-
-        if missing_fields:
+        """Validate that required connection strings are provided."""
+        # Check if either primary or secondary connection string is provided
+        if not self.primary_conn_str and not self.secondary_conn_str:
             raise ConfigError(
-                f"Missing required environment variables for "
-                f"{self.replication_type}: {', '.join(missing_fields)}"
+                "At least one of PRIMARY_SERVICEBUS_CONN or "
+                "SECONDARY_SERVICEBUS_CONN must be provided"
             )
 
+        # Additional validation can be added here if needed
         return self
 
     @property
@@ -200,13 +157,19 @@ class ReplicationConfig(BaseSettings):
     @property
     def direction(self) -> str:
         """Return a readable description of the replication direction."""
-        if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
-            return DIRECTION_PRIMARY_TO_SECONDARY
-        return DIRECTION_SECONDARY_TO_PRIMARY
+        if self.primary_conn_str and self.secondary_conn_str:
+            return "Primary ↔ Secondary"
+        elif self.primary_conn_str:
+            return "Primary → Secondary"
+        else:
+            return "Secondary → Primary"
 
-    def get_destination_config(self) -> tuple[str, str, str]:
+    def get_destination_config(self, topic_name: str) -> tuple[str, str, str]:
         """
-        Get destination connection information based on replication type.
+        Get destination connection information.
+
+        Args:
+            topic_name: The name of the topic to replicate to
 
         Returns:
             Tuple of (connection_string, topic_name, direction_description)
@@ -216,20 +179,27 @@ class ReplicationConfig(BaseSettings):
             so configuration is guaranteed to be valid when this method is called.
 
         Raises:
-            ConfigError: If any required configuration is missing, which should never
-                        happen due to Pydantic validation but is checked for safety.
+            ConfigError: If any required configuration is missing
         """
-        if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
+        # If we have both connection strings, use secondary as destination
+        if self.primary_conn_str and self.secondary_conn_str:
             return (
                 cast(str, self.secondary_conn_str),
-                cast(str, self.secondary_queue),
-                self.direction,
+                topic_name,
+                self.direction
             )
-
+        # If we only have primary connection, use it
+        elif self.primary_conn_str:
+            return (
+                cast(str, self.primary_conn_str),
+                topic_name,
+                self.direction
+            )
+        # Otherwise use secondary connection
         return (
-            cast(str, self.primary_conn_str),
-            cast(str, self.primary_queue),
-            self.direction,
+            cast(str, self.secondary_conn_str),
+            topic_name,
+            self.direction
         )
 
     @property

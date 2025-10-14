@@ -135,7 +135,7 @@ def create_replicated_message(
         New ServiceBusMessage ready for replication
     """
     # Process message body and content type
-    source_body = source_message.get_body()
+    source_body = source_message.body if hasattr(source_message, 'body') else source_message.get_body()
     original_content_type = getattr(source_message, "content_type", None)
     processed_body, final_content_type = process_message_body(
         source_body, original_content_type

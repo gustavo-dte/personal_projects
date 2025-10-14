@@ -15,6 +15,7 @@ from azure.core.exceptions import (
     ServiceRequestError,
 )
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from azure.servicebus.management import ServiceBusAdministrationClient
 from azure.servicebus.exceptions import ServiceBusError
 from pydantic import ValidationError as PydanticValidationError
 
@@ -29,7 +30,7 @@ from .error_handlers import (
     handle_service_request_error,
     handle_unexpected_error,
 )
-from .exceptions import ConfigError, ReplicationError, ValidationError
+from .exceptions import ConfigError, ValidationError
 from .logging_utils import (
     configure_logger,
     log_replication_start,
@@ -73,7 +74,7 @@ def load_and_validate_config() -> ReplicationConfig:
         app_logger.info(
             "Replication configuration loaded successfully",
             extra={
-                "replication_type": config.replication_type,
+                # "replication_type": config.replication_type,
                 "configuration_status": "loaded",
             },
         )
@@ -215,7 +216,7 @@ def _log_successful_replication(
         direction: Replication direction description
         destination_topic_name: Name of destination topic
     """
-    source_body = source_message.get_body()
+    source_body = source_message.body if hasattr(source_message, 'body') else source_message.get_body()
     log_replication_success(
         logger=app_logger,
         correlation_id=correlation_id,
@@ -354,7 +355,9 @@ def replicate_message_to_destination(
 
 
 def orchestrate_replication(
-    source_message: func.ServiceBusMessage, replication_config: ReplicationConfig
+    source_message: func.ServiceBusMessage,
+    replication_config: ReplicationConfig,
+    topic_name: str
 ) -> None:
     """
     Orchestrate the message replication process using the provided configuration.
@@ -365,6 +368,7 @@ def orchestrate_replication(
     Args:
         source_message: The Service Bus message to replicate
         replication_config: Validated replication configuration
+        topic_name: Name of the topic to replicate to/from
 
     Raises:
         ValidationError: If destination configuration is invalid
@@ -373,7 +377,7 @@ def orchestrate_replication(
     try:
         # Extract destination configuration
         dest_connection_string, dest_topic_name, direction = (
-            replication_config.get_destination_config()
+            replication_config.get_destination_config(topic_name)
         )
 
         app_logger.debug(
@@ -425,17 +429,19 @@ def main(timer: func.TimerRequest) -> None:
         logger = configure_application_logging(config)
         logger.info("Replication cron job running...")
 
-        # Connect to primary namespace
+        # Connect to primary namespace for management operations
+        admin_client = ServiceBusAdministrationClient.from_connection_string(config.primary_conn_str)
+        topics = [topic.name for topic in admin_client.list_topics()]
+        
+        # Connect to primary namespace for message operations
         with ServiceBusClient.from_connection_string(config.primary_conn_str) as client:
-            topics = [t.name for t in client._management_client.list_topics()]  # or via mgmt API
-            
             for topic_name in topics:
-                subs = [s.subscription_name for s in client._management_client.list_subscriptions(topic_name)]
+                subs = [sub.name for sub in admin_client.list_subscriptions(topic_name)]
                 for sub_name in subs:
                     with client.get_subscription_receiver(topic_name, sub_name, max_wait_time=5) as receiver:
                         messages = receiver.receive_messages(max_message_count=100)
                         for msg in messages:
-                            orchestrate_replication(msg, config)
+                            orchestrate_replication(msg, config, topic_name)
                             receiver.complete_message(msg)
 
         logger.info("Replication cycle completed successfully")
