@@ -37,13 +37,23 @@ def main(timer: func.TimerRequest) -> None:
         topics = [t.name for t in admin_client.list_topics()]
         app_logger.info(f"Found {len(topics)} topics: {topics}")
 
-        for topic in topics:
-            subs = [s.name for s in admin_client.list_subscriptions(topic)]
-            app_logger.info(f"Found {len(subs)} subscriptions for topic '{topic}': {subs}")
+        # Create ServiceBus client for the primary namespace
+        with ServiceBusClient.from_connection_string(config.primary_conn_str) as source_client:
+            for topic in topics:
+                subs = [s.name for s in admin_client.list_subscriptions(topic)]
+                app_logger.info(f"Found {len(subs)} subscriptions for topic '{topic}': {subs}")
 
-            for sub in subs:
-                app_logger.info(f"Processing {topic}/{sub}")
-                process_subscription_messages(topic, sub, config)
+                for sub in subs:
+                    app_logger.info(f"Processing {topic}/{sub}")
+                    process_subscription_messages(
+                        client=source_client,
+                        topic=topic,
+                        subscription=sub,
+                        dest_conn=config.secondary_conn_str,
+                        config=config,
+                        direction="Primary → Secondary",
+                        logger=app_logger
+                    )
 
         app_logger.info("✅ Replication cycle completed successfully.")
 
