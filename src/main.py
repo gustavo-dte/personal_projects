@@ -1,14 +1,12 @@
 import azure.functions as func
 from azure.servicebus import ServiceBusClient, ServiceBusMessage, ServiceBusReceiveMode
 from azure.servicebus.management import ServiceBusAdministrationClient
-import traceback
 
 from .config import ReplicationConfig
 from .logging_utils import configure_logger
 from .message_utils import create_replicated_message
 from .retry_utils import with_retry
 from .error_handlers import (
-    handle_servicebus_error,
     handle_replication_error,
     handle_unexpected_error,
 )
@@ -41,7 +39,7 @@ def main(timer: func.TimerRequest) -> None:
         app_logger.info(f"Found {len(topics)} topics: {topics}")
 
         for topic in topics:
-            subs = [s.subscription_name for s in admin_client.list_subscriptions(topic)]
+            subs = [s.name for s in admin_client.list_subscriptions(topic)]
             app_logger.info(f"Found {len(subs)} subscriptions for topic '{topic}': {subs}")
 
             for sub in subs:
@@ -110,7 +108,13 @@ def replicate_message_to_destination(source_message, dest_conn, dest_topic, conf
     try:
         with ServiceBusClient.from_connection_string(dest_conn) as client:
             with client.get_topic_sender(topic_name=dest_topic) as sender:
-                replicated_body = create_replicated_message(source_message)
+                correlation_id = getattr(source_message, "correlation_id", None)
+                ttl_seconds = getattr(source_message, "time_to_live", None)
+                replicated_body = create_replicated_message(
+                    source_message,
+                    correlation_id=correlation_id,
+                    ttl_seconds=ttl_seconds,
+                    )
                 sender.send_messages(ServiceBusMessage(replicated_body))
                 _log_successful_replication(direction, dest_topic, correlation_id)
     except Exception as e:
