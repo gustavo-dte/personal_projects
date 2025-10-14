@@ -4,7 +4,7 @@ Configuration handling for the Service Bus replication function.
 
 from __future__ import annotations
 
-from typing import Literal, Optional, Union, cast  # noqa: F401
+from typing import Literal, Optional, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict

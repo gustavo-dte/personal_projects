@@ -168,30 +168,3 @@ def handle_unexpected_error(
     raise ReplicationError(
         f"Unexpected error during message replication: {error}"
     ) from error
-
-def handle_servicebus_error(exception, correlation_id, direction, dest_topic, logger):
-    logger.error(
-        f"Service Bus error during replication to {dest_topic} | Direction: {direction} | "
-        f"Correlation ID: {correlation_id or 'N/A'} | Exception: {exception}"
-    )
-
-
-def handle_replication_error(exception, correlation_id, direction, dest_topic, logger):
-    logger.error(
-        f"Replication error sending to {dest_topic} | Direction: {direction} | "
-        f"Correlation ID: {correlation_id or 'N/A'} | Exception: {exception}"
-    )
-
-
-def handle_unexpected_error(exception, correlation_id, direction, dest_topic, logger):
-    logger.exception(
-        f"Unexpected error during message replication to {dest_topic} | "
-        f"Direction: {direction} | Correlation ID: {correlation_id or 'N/A'} | "
-        f"Error Type: {type(exception).__name__}"
-    )
-
-__all__ = [
-    "handle_servicebus_error",
-    "handle_replication_error",
-    "handle_unexpected_error",
-]
