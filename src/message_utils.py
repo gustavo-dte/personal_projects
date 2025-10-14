@@ -8,6 +8,7 @@ during replication, following separation of concerns principle.
 from __future__ import annotations
 
 import datetime
+from datetime import timedelta
 from typing import Any, cast
 
 import azure.functions as func
