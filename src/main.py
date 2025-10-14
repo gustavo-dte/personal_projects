@@ -1,11 +1,12 @@
 import azure.functions as func
-from azure.servicebus import ServiceBusClient, ServiceBusMessage, ServiceBusReceiveMode
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.management import ServiceBusAdministrationClient
 
 from .config import ReplicationConfig
 from .logging_utils import configure_logger
 from .message_utils import create_replicated_message
 from .retry_utils import with_retry
+from src.exceptions import ReplicationError
 from .error_handlers import (
     handle_replication_error,
     handle_unexpected_error,
@@ -57,30 +58,49 @@ def main(timer: func.TimerRequest) -> None:
 # --------------------------------------------------------------------------
 # MESSAGE PROCESSING
 # --------------------------------------------------------------------------
-def process_subscription_messages(topic: str, subscription: str, config: ReplicationConfig) -> None:
-    """Read messages from a subscription in primary Service Bus and replicate to secondary."""
-    try:
-        with ServiceBusClient.from_connection_string(config.primary_conn_str) as client:
-            with client.get_subscription_receiver(
-                topic_name=topic,
-                subscription_name=subscription,
-                receive_mode=ServiceBusReceiveMode.PEEK_LOCK,
-                max_wait_time=5,
-            ) as receiver:
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from src.exceptions import ReplicationError
 
-                messages = receiver.receive_messages(max_message_count=100)
-                if not messages:
-                    app_logger.info(f"No new messages for {topic}/{subscription}")
-                    return
+def process_subscription_messages(client, topic, subscription, dest_conn, config, direction, logger):
+    """Read messages from one subscription and replicate them safely."""
 
-                app_logger.info(f"Fetched {len(messages)} messages from {topic}/{subscription}")
+    with client.get_subscription_receiver(
+        topic_name=topic,
+        subscription_name=subscription,
+        max_wait_time=5
+    ) as receiver:
+        messages = receiver.receive_messages(max_message_count=10)
+        if not messages:
+            logger.info(f"No new messages for {topic}/{subscription}")
+            return
 
-                for message in messages:
-                    orchestrate_replication(message, config, topic)
-                    receiver.complete_message(message)
+        logger.info(f"🔁 Found {len(messages)} messages in {topic}/{subscription}")
 
-    except Exception as e:
-        app_logger.exception(f"Failed to process {topic}/{subscription}: {e}")
+        for msg in messages:
+            correlation_id = getattr(msg, "correlation_id", None) or "replica"
+            ttl_seconds = getattr(msg, "time_to_live", None)
+
+            try:
+                # Create replicated copy
+                replicated = create_replicated_message(
+                    msg,
+                    correlation_id=correlation_id,
+                    ttl_seconds=ttl_seconds
+                )
+
+                # Send to destination
+                with ServiceBusClient.from_connection_string(dest_conn) as dest_client:
+                    with dest_client.get_topic_sender(topic_name=topic) as sender:
+                        sender.send_messages(replicated)
+
+                # Complete only after successful send
+                receiver.complete_message(msg)
+                logger.info(f"✅ Replicated message {correlation_id} from {topic}/{subscription}")
+
+            except Exception as e:
+                # Log & abandon to retry later
+                receiver.abandon_message(msg)
+                logger.error(f"❌ Failed to replicate message {correlation_id} from {topic}/{subscription}: {e}")
 
 
 # --------------------------------------------------------------------------
