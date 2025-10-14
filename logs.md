@@ -1,33 +1,14 @@
-[2025-10-14T13:37:48.037Z] No HTTP routes mapped
-[2025-10-14T13:37:48.035Z] HttpOptions
-[2025-10-14T13:37:48.038Z]
-[2025-10-14T13:37:48.038Z] {
-[2025-10-14T13:37:48.157Z]   "DynamicThrottlesEnabled": false,
-[2025-10-14T13:37:48.158Z]   "EnableChunkedRequestBinding": false,
-[2025-10-14T13:37:48.158Z]   "MaxConcurrentRequests": -1,
-[2025-10-14T13:37:48.158Z]   "MaxConcurrentRequests": -1,
-[2025-10-14T13:37:48.159Z]   "MaxOutstandingRequests": -1,
-[2025-10-14T13:37:48.159Z]   "RoutePrefix": "api"[2025-10-14T13:37:48.165Z] Host initialized (7386ms)    
-
-[2025-10-14T13:37:48.632Z] }
+[2025-10-14T14:01:21.731Z] Worker process started and initialized.
 
 Functions:
 
         src: timerTrigger
 
-[2025-10-14T13:37:49.886Z] Successfully processed FunctionLoadRequest, request ID: c1f91f7b-384f-4990-844e-0c491b08e772, function ID: a87570e4-6b42-4a0a-999c-2dcbb0e91f77,function Name: src,programming model: V1
-[2025-10-14T13:38:13.173Z] The listener for function 'Functions.src' was unable to start.
-[2025-10-14T13:38:13.174Z] The listener for function 'Functions.src' was unable to start. Azure.Storage.Blobs: Service request failed.
-[2025-10-14T13:38:13.174Z] Status: 500 (Internal Server Error)
-[2025-10-14T13:38:13.175Z]
-[2025-10-14T13:38:13.175Z] Headers:
-[2025-10-14T13:38:13.176Z] Server: Azurite-Blob/3.35.0
-[2025-10-14T13:38:13.176Z] Date: Tue, 14 Oct 2025 13:38:13 GMT
-[2025-10-14T13:38:13.177Z] Connection: keep-alive
-[2025-10-14T13:38:13.177Z] Keep-Alive: REDACTED
-[2025-10-14T13:38:13.178Z] Content-Length: 0
-[2025-10-14T13:38:13.178Z] .
-[2025-10-14T13:38:13.186Z] Host started (32527ms)
-[2025-10-14T13:38:13.187Z] Job host started
-[2025-10-14T13:38:15.193Z] Retrying to start listener for function 'Functions.src' (Attempt 1)
-[2025-10-14T13:38:15.197Z] Listener successfully started for function 'Functions.src' after 1 retries.   
+        src: timerTrigger
+
+For detailed output, run func with --verbose flag.
+[2025-10-14T14:01:25.369Z] Host lock lease acquired by instance ID '000000000000000000000000EE44FDF1'.   
+[2025-10-14T14:01:30.040Z] Executing 'Functions.src' (Reason='Timer fired at 2025-10-14T10:01:30.0181697-04:00', Id=bbf927ea-28c7-4f14-85ff-e8aba67b085e)
+[2025-10-14T14:01:30.175Z] Replication cron cycle started.
+[2025-10-14T14:01:30.187Z] ❌ Configuration error: Missing required environment variables for primary_to_secondary: SECONDARY_TOPIC_NAME
+[2025-10-14T14:01:30.222Z] Executed 'Functions.src' (Succeeded, Id=bbf927ea-28c7-4f14-85ff-e8aba67b085e, Duration=189ms)
