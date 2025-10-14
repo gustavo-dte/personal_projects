@@ -1,18 +1,16 @@
 import azure.functions as func
-from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from azure.servicebus import ServiceBusClient
 from azure.servicebus.management import ServiceBusAdministrationClient
 
 from .config import ReplicationConfig
 from .logging_utils import configure_logger
 from .message_utils import create_replicated_message
 from .retry_utils import with_retry
-from src.exceptions import ReplicationError
+from src.exceptions import ReplicationError, ConfigError
 from .error_handlers import (
     handle_replication_error,
     handle_unexpected_error,
 )
-from .exceptions import ReplicationError, ConfigError
-
 # --------------------------------------------------------------------------
 # GLOBAL LOGGER
 # --------------------------------------------------------------------------
@@ -58,9 +56,6 @@ def main(timer: func.TimerRequest) -> None:
 # --------------------------------------------------------------------------
 # MESSAGE PROCESSING
 # --------------------------------------------------------------------------
-from azure.servicebus import ServiceBusClient, ServiceBusMessage
-from src.exceptions import ReplicationError
-
 def process_subscription_messages(client, topic, subscription, dest_conn, config, direction, logger):
     """Read messages from one subscription and replicate them safely."""
 
