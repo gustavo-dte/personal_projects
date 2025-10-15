@@ -1,20 +1,21 @@
 """
-Unit tests for the dynamic Service Bus replication function.
+Unit tests for the dynamic Azure Service Bus replication Function App.
 """
 
+from __future__ import annotations
+
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import patch, Mock
 from azure.core.exceptions import ClientAuthenticationError
 from pydantic import ValidationError as PydanticValidationError
 
-from src.config import ReplicationConfig
 from src.main import (
-    main,
     load_config,
+    main,
     process_subscription_messages,
     replicate_to_destination,
 )
-from src.message_utils import create_replicated_message
 from tests.constants_test import (
     TEST_PRIMARY_CONN,
     TEST_SECONDARY_CONN,
@@ -25,10 +26,10 @@ from tests.constants_test import (
 
 
 class TestConfigLoading:
-    """Validate configuration initialization and environment reading."""
+    """Validate configuration loading and validation behavior."""
 
     @patch("src.main.ReplicationConfig")
-    def test_load_config_success(self, mock_config):
+    def test_load_config_success(self, mock_config: Mock) -> None:
         mock_instance = Mock()
         mock_config.return_value = mock_instance
         result = load_config()
@@ -36,24 +37,30 @@ class TestConfigLoading:
         mock_config.assert_called_once()
 
     @patch("src.main.ReplicationConfig")
-    def test_load_config_validation_error(self, mock_config):
+    def test_load_config_validation_error(self, mock_config: Mock) -> None:
         mock_config.side_effect = PydanticValidationError.from_exception_data(
-            "Config", [{"type": "missing", "loc": ("PRIMARY_SERVICEBUS_CONN",), "msg": "missing"}]
+            "ReplicationConfig",
+            [{"type": "missing", "loc": ("PRIMARY_SERVICEBUS_CONN",), "msg": "missing"}],
         )
         with pytest.raises(Exception):
             load_config()
 
 
 class TestDynamicReplication:
-    """Tests for the dynamic replication behavior."""
+    """Test dynamic topic/subscription enumeration."""
 
     @patch("src.main.ServiceBusAdministrationClient")
-    def test_topic_subscription_discovery(self, mock_admin):
-        """Validate that dynamic discovery retrieves topics and subscriptions."""
+    @patch("src.main.process_subscription_messages")
+    def test_topic_subscription_discovery(
+        self,
+        mock_process: Mock,
+        mock_admin: Mock,
+    ) -> None:
         mock_admin_instance = Mock()
         mock_admin.return_value = mock_admin_instance
-
-        mock_admin_instance.list_topics.return_value = [Mock(name="topic", name_value=t) for t in TEST_TOPICS]
+        mock_admin_instance.list_topics.return_value = [
+            Mock(name_value=t) for t in TEST_TOPICS
+        ]
         mock_admin_instance.list_subscriptions.return_value = [
             Mock(subscription_name=s) for s in TEST_SUBSCRIPTIONS
         ]
@@ -63,23 +70,24 @@ class TestDynamicReplication:
         config.secondary_conn_str = TEST_SECONDARY_CONN
         config.replication_type = TEST_REPLICATION_TYPE
 
-        with patch("src.main.process_subscription_messages") as mock_process:
-            main(Mock())
-
+        main(Mock())
         mock_process.assert_called()
 
 
 class TestSubscriptionProcessing:
-    """Unit test for process_subscription_messages."""
+    """Verify per-subscription message processing logic."""
 
     @patch("src.main.replicate_to_destination")
     @patch("src.main.ServiceBusClient")
-    def test_process_subscription_messages_no_messages(self, mock_client, mock_replicate):
-        """Validate that it exits gracefully when no messages exist."""
-        mock_receiver = Mock()
-        mock_receiver.receive_messages.return_value = []
+    def test_no_messages(
+        self,
+        mock_client: Mock,
+        mock_replicate: Mock,
+    ) -> None:
+        receiver = Mock()
+        receiver.receive_messages.return_value = []
         mock_client.return_value.__enter__.return_value = mock_client
-        mock_client.get_subscription_receiver.return_value = mock_receiver
+        mock_client.get_subscription_receiver.return_value = receiver
 
         config = Mock()
         config.ttl_seconds = 300
@@ -99,13 +107,16 @@ class TestSubscriptionProcessing:
 
     @patch("src.main.replicate_to_destination")
     @patch("src.main.ServiceBusClient")
-    def test_process_subscription_messages_with_messages(self, mock_client, mock_replicate):
-        """Validate replication loop for active messages."""
-        mock_receiver = Mock()
-        mock_message = Mock()
-        mock_receiver.receive_messages.return_value = [mock_message]
+    def test_with_messages(
+        self,
+        mock_client: Mock,
+        mock_replicate: Mock,
+    ) -> None:
+        receiver = Mock()
+        msg = Mock()
+        receiver.receive_messages.return_value = [msg]
         mock_client.return_value.__enter__.return_value = mock_client
-        mock_client.get_subscription_receiver.return_value = mock_receiver
+        mock_client.get_subscription_receiver.return_value = receiver
 
         config = Mock()
         config.ttl_seconds = 600
@@ -125,23 +136,26 @@ class TestSubscriptionProcessing:
 
 
 class TestMessageReplication:
-    """Unit test for replicate_to_destination."""
+    """Check outbound message replication to destination Service Bus."""
 
     @patch("src.main.ServiceBusClient")
     @patch("src.main.create_replicated_message")
-    def test_replicate_to_destination_success(self, mock_create, mock_client):
-        """Ensure that replicate_to_destination sends a built message."""
-        mock_message = Mock()
-        mock_replicated = Mock()
-        mock_create.return_value = mock_replicated
+    def test_successful_send(
+        self,
+        mock_create: Mock,
+        mock_client: Mock,
+    ) -> None:
+        msg = Mock()
+        replicated = Mock()
+        mock_create.return_value = replicated
 
-        mock_sender = Mock()
-        mock_client_instance = Mock()
-        mock_client_instance.get_topic_sender.return_value = mock_sender
-        mock_client.return_value.__enter__.return_value = mock_client_instance
+        sender = Mock()
+        client_instance = Mock()
+        client_instance.get_topic_sender.return_value = sender
+        mock_client.return_value.__enter__.return_value = client_instance
 
         replicate_to_destination(
-            mock_message,
+            msg,
             TEST_SECONDARY_CONN,
             "topic-a",
             "sub-a",
@@ -151,14 +165,14 @@ class TestMessageReplication:
         )
 
         mock_create.assert_called_once()
-        mock_sender.send_messages.assert_called_once_with(mock_replicated)
+        sender.send_messages.assert_called_once_with(replicated)
 
 
 class TestErrorCases:
-    """Validate authentication and exception handling."""
+    """Ensure exceptions and auth failures are handled correctly."""
 
     @patch("src.main.ServiceBusClient")
-    def test_authentication_error_raises(self, mock_client):
+    def test_auth_error(self, mock_client: Mock) -> None:
         mock_client.side_effect = ClientAuthenticationError("Auth failed")
         config = Mock()
         logger = Mock()
@@ -176,4 +190,4 @@ class TestErrorCases:
 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    raise SystemExit(pytest.main([__file__]))
