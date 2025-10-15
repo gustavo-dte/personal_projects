@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import datetime
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any, Union, cast
 
 import azure.functions as func
-from azure.servicebus import ServiceBusMessage
+from azure.servicebus import ServiceBusMessage, ServiceBusReceivedMessage
 
 from .constants import (
     CONTENT_TYPE_BINARY,
@@ -24,7 +24,7 @@ from .constants import (
 )
 
 
-def generate_correlation_id(source_message: func.ServiceBusMessage) -> str:
+def generate_correlation_id(source_message: Union[func.ServiceBusMessage, ServiceBusReceivedMessage]) -> str:
     """
     Generate or extract correlation ID for message tracking.
 
@@ -73,7 +73,7 @@ def process_message_body(
 
 
 def create_enhanced_properties(
-    source_message: func.ServiceBusMessage, correlation_id: str
+    source_message: Union[func.ServiceBusMessage, ServiceBusReceivedMessage], correlation_id: str
 ) -> dict[str, Any]:
     """
     Create enhanced application properties with replication metadata.
@@ -121,7 +121,7 @@ def generate_replicated_message_id(
 
 
 def create_replicated_message(
-    source_message: func.ServiceBusMessage,
+    source_message: Union[func.ServiceBusMessage, ServiceBusReceivedMessage],
     correlation_id: str,
     ttl_seconds: int | None,
 ) -> ServiceBusMessage:
@@ -132,9 +132,19 @@ def create_replicated_message(
     if hasattr(source_message, "get_body"):
         # Legacy SDK compatibility
         source_body = source_message.get_body()
+    elif hasattr(source_message, "body") and source_message.body is not None:
+        # ServiceBusReceivedMessage has body attribute
+        if isinstance(source_message.body, bytes):
+            source_body = source_message.body
+        else:
+            # Handle iterable body content
+            try:
+                source_body = b"".join(source_message.body)
+            except (TypeError, AttributeError):
+                source_body = b""
     else:
-        # Modern SDK: .body is iterable of bytes
-        source_body = b"".join(part for part in source_message.body)
+        # Fallback for different message types
+        source_body = b""
 
     original_content_type = getattr(source_message, "content_type", None)
     processed_body, final_content_type = process_message_body(

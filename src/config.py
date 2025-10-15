@@ -65,10 +65,12 @@ class ReplicationConfig(BaseSettings):
 
     # --- Connection strings ---
     primary_conn_str: str = Field(
+        default="",
         alias="PRIMARY_SERVICEBUS_CONN",
         description="Primary Service Bus connection string",
     )
     secondary_conn_str: str = Field(
+        default="",
         alias="SECONDARY_SERVICEBUS_CONN",
         description="Secondary Service Bus connection string",
     )

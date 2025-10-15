@@ -37,9 +37,10 @@ def configure_logger(config: ReplicationConfig | None = None) -> logging.Logger:
     # Load configuration if not provided
     if config is None:
         try:
+            # Try to load config, but it might fail if required env vars are missing
             config = ReplicationConfig()
         except Exception:
-            # If config loading fails, use standard logging
+            # If config loading fails (e.g., missing env vars), use standard logging
             config = None
 
     # Check if Azure Monitor configuration is available
