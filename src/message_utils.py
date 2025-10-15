@@ -148,25 +148,26 @@ def create_replicated_message(
     )
 
     # --- TTL handling (avoid NoneType errors) -------------------------------
-    msg_kwargs = dict(
-        body=processed_body,
-        application_properties=cast(Any, enhanced_properties),
-        content_type=final_content_type,
-        correlation_id=correlation_id,
-        subject=getattr(source_message, "subject", None),
-        session_id=getattr(source_message, "session_id", None),
-        to=getattr(source_message, "to", None),
-        reply_to=getattr(source_message, "reply_to", None),
-        reply_to_session_id=getattr(source_message, "reply_to_session_id", None),
-        partition_key=getattr(source_message, "partition_key", None),
-        scheduled_enqueue_time_utc=getattr(
+    msg_kwargs = {
+        "body": processed_body,
+        "application_properties": cast(Any, enhanced_properties),
+        "content_type": final_content_type,
+        "correlation_id": correlation_id,
+        "subject": getattr(source_message, "subject", None),
+        "session_id": getattr(source_message, "session_id", None),
+        "to": getattr(source_message, "to", None),
+        "reply_to": getattr(source_message, "reply_to", None),
+        "reply_to_session_id": getattr(source_message, "reply_to_session_id", None),
+        "partition_key": getattr(source_message, "partition_key", None),
+        "scheduled_enqueue_time_utc": getattr(
             source_message, "scheduled_enqueue_time_utc", None
         ),
-        message_id=new_message_id,
-    )
+        "message_id": new_message_id,
+    }
+
 
     # Only set TTL if valid and numeric
-    if ttl_seconds is not None and isinstance(ttl_seconds, (int, float)):
+    if ttl_seconds is not None and isinstance(ttl_seconds, int | float):
         msg_kwargs["time_to_live"] = timedelta(seconds=int(ttl_seconds))
 
     # --- Construct replicated message ---------------------------------------
