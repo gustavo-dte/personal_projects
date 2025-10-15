@@ -133,7 +133,8 @@ class ReplicationConfig(BaseSettings):
     @model_validator(mode="after")
     def validate_connection_config(self):
         """Validate that required connection strings are provided."""
-        # For dynamic replication, both primary and secondary connection strings are required
+        # For dynamic replication, both primary and secondary
+        # connection strings are required
         if not self.primary_conn_str:
             raise ConfigError(
                 "PRIMARY_SERVICEBUS_CONN is required for dynamic replication"

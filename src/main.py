@@ -102,15 +102,24 @@ def process_subscription_messages(
                 # Complete only after successful send
                 receiver.complete_message(msg)
                 logger.info(
-                    f"✅ Replicated message {correlation_id} from {topic}/{subscription}"
+                    "✅ Replicated message %s from %s/%s",
+                    correlation_id,
+                    topic,
+                    subscription,
                 )
+
 
             except Exception as e:
                 # Log & abandon to retry later
                 receiver.abandon_message(msg)
                 logger.error(
-                    f"❌ Failed to replicate message {correlation_id} from {topic}/{subscription}: {e}"
+                    "❌ Failed to replicate message %s from %s/%s: %s",
+                    correlation_id,
+                    topic,
+                    subscription,
+                    e,
                 )
+
 
 
 # --------------------------------------------------------------------------
