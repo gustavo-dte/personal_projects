@@ -3,6 +3,7 @@ Unit tests for retry utilities module.
 """
 
 import time
+from typing import cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -19,7 +20,7 @@ class TestRetryUtils:
         
         @with_retry(max_attempts=3, base_delay=0.1)
         def test_func() -> str:
-            return mock_func()
+            return cast(str, mock_func())
         
         result = test_func()
         
@@ -34,7 +35,7 @@ class TestRetryUtils:
         
         @with_retry(max_attempts=3, base_delay=0.01)  # Very short delay for testing
         def test_func() -> str:
-            return mock_func()
+            return cast(str, mock_func())
         
         result = test_func()
         
@@ -48,7 +49,7 @@ class TestRetryUtils:
         
         @with_retry(max_attempts=2, base_delay=0.01)
         def test_func() -> str:
-            return mock_func()
+            return cast(str, mock_func())
         
         with pytest.raises(Exception, match="persistent failure"):
             test_func()
@@ -63,7 +64,7 @@ class TestRetryUtils:
         
         @with_retry(max_attempts=2, base_delay=1.0)
         def test_func() -> str:
-            return mock_func()
+            return cast(str, mock_func())
         
         result = test_func()
         

@@ -45,7 +45,7 @@ class TestConfigLoading:
         """Test config validation error handling."""
         mock_config.side_effect = PydanticValidationError.from_exception_data(
             "ReplicationConfig",
-            [{"type": "missing", "loc": ("PRIMARY_SERVICEBUS_CONN",), "msg": "missing"}],
+            [{"type": "missing", "loc": ("PRIMARY_SERVICEBUS_CONN",), "input": {}}],
         )
         
         with pytest.raises(Exception):
