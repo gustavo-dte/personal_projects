@@ -1,57 +1,57 @@
 # Azure Service Bus Message Replication
 
-A reliable Azure Function for replicating messages between Service Bus namespaces to support disaster recovery and cross-region resilience.
+A reliable Azure Function for dynamically replicating messages between Service Bus namespaces to support disaster recovery and cross-region resilience.
 
 ## What Does This Do?
 
-This application automatically replicates messages from one Azure Service Bus namespace to another, helping you:
+This application automatically discovers and replicates messages from ALL topics and subscriptions in one Azure Service Bus namespace to another, helping you:
 
 - **Disaster Recovery**: Keep your messages safe if one region goes down
-- **Cross-Region Backup**: Maintain message copies across different Azure regions
+- **Cross-Region Backup**: Maintain message copies across different Azure regions  
 - **Business Continuity**: Meet your RTO (Recovery Time Objective) requirements
 - **Zero Message Loss**: Ensure critical business messages aren't lost during outages
+- **Dynamic Discovery**: Automatically replicates ALL topics and subscriptions without manual configuration
 
-The application works as an Azure Function that gets triggered when messages arrive in your primary Service Bus topic, then replicates them to your secondary Service Bus in another region.
+The application works as a timer-triggered Azure Function that runs every 30 seconds, dynamically discovers all topics and subscriptions, then replicates any pending messages to your secondary Service Bus namespace.
 
 ## How It Works
 
-1. A message arrives in your primary Service Bus topic
-2. The Azure Function is triggered automatically
-3. The function reads the message and creates a copy
-4. The copy is sent to your secondary Service Bus topic in another region
-5. The replicated message gets a configurable TTL (Time To Live) based on your RTO requirements
-6. If sending fails, the function retries with exponential backoff
-7. All operations are logged for monitoring and troubleshooting
+1. **Timer Trigger**: The function runs every 30 seconds automatically
+2. **Dynamic Discovery**: It discovers all topics and subscriptions in the source namespace
+3. **Message Processing**: For each subscription, it retrieves up to 10 pending messages
+4. **Message Replication**: Creates enhanced copies with tracking metadata
+5. **Cross-Namespace Send**: Sends copies to the corresponding topic in the destination namespace
+6. **Message Completion**: Marks original messages as complete only after successful replication
+7. **Error Handling**: If sending fails, messages are abandoned for retry on the next cycle
+8. **Comprehensive Logging**: All operations are logged for monitoring and troubleshooting
 
 ## Project Structure
 
 ```
-cloud-application-servicebus-replication/
+personal_projects/
 ├── src/                          # Main source code
-│   ├── main.py                   # Azure Function entry point
-│   ├── config.py                 # Configuration management
-│   ├── message_utils.py          # Message processing utilities
-│   ├── retry_utils.py            # Retry logic with backoff
-│   ├── logging_utils.py          # Centralized logging
-│   ├── error_handlers.py         # Error handling utilities
+│   ├── main.py                   # Azure Function entry point & timer trigger
+│   ├── config.py                 # Configuration management with Pydantic
+│   ├── message_utils.py          # Message processing & enhancement utilities
+│   ├── retry_utils.py            # Retry logic with exponential backoff
+│   ├── logging_utils.py          # Centralized logging with Azure Monitor
+│   ├── error_handlers.py         # Comprehensive error handling utilities
 │   ├── exceptions.py             # Custom exception classes
 │   ├── constants.py              # Application constants
-│   └── function.json             # Azure Functions binding config
+│   └── function.json             # Azure Functions timer trigger config
 ├── tests/                        # Unit tests
 │   ├── main_test.py              # Main test suite
-│   ├── test_constants.py         # Test-specific constants
-│   └── README.md                 # Testing documentation
+│   ├── constants_test.py         # Constants tests
+│   └── __init__.py               # Test package
 ├── .github/                      # GitHub Actions workflows
-│   ├── workflows/
-│   │   ├── ci.yml                # Main CI/CD pipeline
-│   │   ├── on-pull-request.yaml  # PR validation
-│   │   └── on-push.yaml          # Push validation
+│   ├── workflows/                # CI/CD pipeline configurations
 │   ├── CODEOWNERS               # Code review assignments
 │   └── PULL_REQUEST_TEMPLATE.md # PR template
 ├── requirements.txt              # Python dependencies
-├── pyproject.toml               # Project configuration
-├── host.json                    # Azure Functions host config
-├── local.settings.json          # Local development settings
+├── host.json                    # Azure Functions host configuration
+├── local.settings.example.json  # Example local development settings
+├── .gitignore                   # Git ignore patterns
+├── .editorconfig               # Editor configuration
 └── .pre-commit-config.yaml      # Code quality hooks
 ```
 
@@ -111,25 +111,23 @@ REPLICATION_TYPE=primary_to_secondary
 
 #### **For Primary → Secondary Replication**
 ```bash
-# Primary Service Bus (source) - optional for primary_to_secondary mode
+# Primary Service Bus (source) - REQUIRED for primary_to_secondary mode
 PRIMARY_SERVICEBUS_CONN="Endpoint=sb://your-primary-sb.servicebus.windows.net/;SharedAccessKeyName=..."
-PRIMARY_TOPIC_NAME="your-source-topic"
 
-# Secondary Service Bus (destination) - REQUIRED for primary_to_secondary mode
+# Secondary Service Bus (destination) - REQUIRED for primary_to_secondary mode  
 SECONDARY_SERVICEBUS_CONN="Endpoint=sb://your-secondary-sb.servicebus.windows.net/;SharedAccessKeyName=..."
-SECONDARY_TOPIC_NAME="your-destination-topic"
 ```
 
 #### **For Secondary → Primary Replication**
 ```bash
 # Primary Service Bus (destination) - REQUIRED for secondary_to_primary mode
 PRIMARY_SERVICEBUS_CONN="Endpoint=sb://your-primary-sb.servicebus.windows.net/;SharedAccessKeyName=..."
-PRIMARY_TOPIC_NAME="your-destination-topic"
 
-# Secondary Service Bus (source) - optional for secondary_to_primary mode
+# Secondary Service Bus (source) - REQUIRED for secondary_to_primary mode
 SECONDARY_SERVICEBUS_CONN="Endpoint=sb://your-secondary-sb.servicebus.windows.net/;SharedAccessKeyName=..."
-SECONDARY_TOPIC_NAME="your-source-topic"
 ```
+
+> **Note**: Topic names are automatically discovered. The function will replicate ALL topics and subscriptions from the source namespace to corresponding topics in the destination namespace.
 
 #### **Timing Configuration (Optional)**
 ```bash
@@ -150,21 +148,29 @@ APPINSIGHTS_INSTRUMENTATIONKEY="your-instrumentation-key"
 
 ### Configuration Examples
 
-#### **Example 1: East US → West US Backup**
+#### **Example 1: East US → West US Complete Namespace Backup**
 ```bash
 REPLICATION_TYPE=primary_to_secondary
+PRIMARY_SERVICEBUS_CONN="Endpoint=sb://myapp-eastus.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=..."
 SECONDARY_SERVICEBUS_CONN="Endpoint=sb://myapp-westus.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=..."
-SECONDARY_TOPIC_NAME="orders-backup"
 RTO_MINUTES=15
 DELTA_MINUTES=3
 ```
 
-#### **Example 2: Development Environment**
+#### **Example 2: Development Environment Complete Replication**
 ```bash
-REPLICATION_TYPE=primary_to_secondary
+REPLICATION_TYPE=primary_to_secondary  
+PRIMARY_SERVICEBUS_CONN="Endpoint=sb://myapp-dev.servicebus.windows.net/;SharedAccessKeyName=..."
 SECONDARY_SERVICEBUS_CONN="Endpoint=sb://myapp-dev-backup.servicebus.windows.net/;SharedAccessKeyName=..."
-SECONDARY_TOPIC_NAME="dev-messages-backup"
 RTO_MINUTES=5
+```
+
+#### **Example 3: Failback Scenario (Secondary → Primary)**
+```bash
+REPLICATION_TYPE=secondary_to_primary
+PRIMARY_SERVICEBUS_CONN="Endpoint=sb://myapp-primary-restored.servicebus.windows.net/;SharedAccessKeyName=..."
+SECONDARY_SERVICEBUS_CONN="Endpoint=sb://myapp-secondary.servicebus.windows.net/;SharedAccessKeyName=..."
+RTO_MINUTES=10
 ```
 
 ### Local Development Setup
@@ -178,13 +184,15 @@ Create a `local.settings.json` file in the project root:
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
     "REPLICATION_TYPE": "primary_to_secondary",
+    "PRIMARY_SERVICEBUS_CONN": "your-primary-connection-string",
     "SECONDARY_SERVICEBUS_CONN": "your-secondary-connection-string",
-    "SECONDARY_TOPIC_NAME": "your-destination-topic",
     "RTO_MINUTES": "10",
     "DELTA_MINUTES": "2"
   }
 }
 ```
+
+> **Note**: Use `local.settings.example.json` as a template. The function will automatically discover and replicate all topics and subscriptions.
 
 ## Usage
 
@@ -194,7 +202,14 @@ Create a `local.settings.json` file in the project root:
 # Start the Azure Functions runtime
 func start
 
-# The function will be available at:
+# The timer function will start automatically and run every 30 seconds
+# Monitor the console output for replication activity:
+# - "Found X topics: [topic1, topic2, ...]" 
+# - "Found X subscriptions for topic 'Y': [sub1, sub2, ...]"
+# - "Processing topic/subscription"
+# - "✅ Replicated message correlation_id from topic/subscription"
+
+# Function endpoint (for monitoring only):
 # http://localhost:7071/admin/functions/main
 ```
 
@@ -301,21 +316,26 @@ STAGING_APPLICATIONINSIGHTS_CONNECTION_STRING
 
 ### Testing the Function
 
-You can test message replication by sending a message to your primary topic:
+The function automatically discovers and processes all topics, so you can test by sending messages to any topic in your source namespace:
 
 ```python
-# Quick test script
+# Quick test script - send to any topic
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 
 async def send_test_message():
     conn_str = "your-primary-connection-string"
-    topic_name = "your-source-topic"
+    topic_name = "any-existing-topic"  # Function will discover this automatically
 
     async with ServiceBusClient.from_connection_string(conn_str) as client:
         sender = client.get_topic_sender(topic_name)
         message = ServiceBusMessage("Test message for replication")
         await sender.send_messages(message)
-        print("Test message sent!")
+        print(f"Test message sent to {topic_name}!")
+
+# The function will automatically:
+# 1. Discover this topic in the next 30-second cycle
+# 2. Find the message in any subscription 
+# 3. Replicate it to the corresponding topic in the destination namespace
 ```
 
 ### Deployment to Azure
@@ -340,16 +360,51 @@ async def send_test_message():
    az functionapp config appsettings set --name myapp-servicebus-replication \
      --resource-group myResourceGroup \
      --settings REPLICATION_TYPE=primary_to_secondary \
-                SECONDARY_SERVICEBUS_CONN="connection-string" \
-                SECONDARY_TOPIC_NAME="backup-topic"
+                PRIMARY_SERVICEBUS_CONN="primary-connection-string" \
+                SECONDARY_SERVICEBUS_CONN="secondary-connection-string" \
+                RTO_MINUTES=10 \
+                DELTA_MINUTES=2
    ```
 
+> **Note**: The function will automatically discover and replicate ALL topics and subscriptions. No need to specify individual topic names.
+
 ## Understanding the Configuration
+
+### Timer-Based Architecture
+
+The function uses a **timer trigger** instead of Service Bus triggers for better control and reliability:
+
+- **Schedule**: Runs every 30 seconds (`"*/30 * * * * *"` in function.json)
+- **Discovery Phase**: Dynamically discovers all topics and subscriptions
+- **Processing Phase**: Processes up to 10 messages per subscription per cycle  
+- **Error Handling**: Failed messages are abandoned and retried in the next cycle
+- **Resource Efficiency**: Processes multiple topics/subscriptions in a single function execution
+
+### Processing Flow
+
+1. **Timer Activation** (every 30 seconds)
+2. **Namespace Discovery** → List all topics in source namespace
+3. **Subscription Discovery** → For each topic, list all subscriptions  
+4. **Message Retrieval** → Get up to 10 pending messages per subscription
+5. **Message Enhancement** → Add replication metadata
+6. **Cross-Namespace Send** → Send to corresponding topic in destination
+7. **Message Completion** → Mark original messages as processed
+8. **Cycle Complete** → Wait for next timer activation
 
 ### Replication Types
 
 - **`primary_to_secondary`**: Messages flow from primary region to secondary region (typical disaster recovery setup)
 - **`secondary_to_primary`**: Messages flow from secondary region to primary region (for failback scenarios)
+
+> **Important**: The function dynamically discovers ALL topics and subscriptions in the source namespace. Ensure that corresponding topics exist in the destination namespace for successful replication.
+
+### Message Enhancement
+
+The application enhances each replicated message with metadata:
+- **Original Message ID**: Preserved for traceability  
+- **Replication Correlation ID**: Unique identifier for the replication operation
+- **Replication Timestamp**: When the replication occurred
+- **Enhanced Properties**: All original message properties are preserved
 
 ### Time-to-Live (TTL) Calculation
 
@@ -376,32 +431,45 @@ When message sending fails, the function:
 
 **1. "Missing required environment variables" error**
 - Check that you have the correct variables set for your replication type
-- For primary_to_secondary: need SECONDARY_SERVICEBUS_CONN and SECONDARY_TOPIC_NAME
-- For secondary_to_primary: need PRIMARY_SERVICEBUS_CONN and PRIMARY_TOPIC_NAME
+- For primary_to_secondary: need PRIMARY_SERVICEBUS_CONN and SECONDARY_SERVICEBUS_CONN
+- For secondary_to_primary: need PRIMARY_SERVICEBUS_CONN and SECONDARY_SERVICEBUS_CONN
 
 **2. Authentication errors**
-- Verify your Service Bus connection strings have the correct permissions
+- Verify your Service Bus connection strings have the correct permissions (Send, Listen, Manage)
 - Make sure the connection strings include SharedAccessKey or are using managed identity
 
-**3. Topic/subscription not found**
-- Ensure the topics exist in both Service Bus namespaces
+**3. Topic not found errors**
+- Ensure corresponding topics exist in both Service Bus namespaces
+- The function discovers topics from the source but requires matching topics in the destination
 - Check that topic names match exactly (case-sensitive)
 
-**4. Function not triggering**
-- Verify the Service Bus trigger is configured correctly in function.json
-- Check that messages are actually arriving in the source topic
-- Review Azure Functions logs for any binding errors
+**4. Function not processing messages**
+- Check the timer trigger configuration in function.json (default: every 30 seconds)
+- Verify messages are actually pending in subscriptions (not just in topics)
+- Review Azure Functions logs for any discovery or processing errors
+
+**5. "No new messages" frequently logged**
+- This is normal when subscriptions are empty
+- The function checks all subscriptions every 30 seconds
+- Messages appear only when there are pending messages in subscriptions
 
 ### Monitoring and Logging
 
 The application provides detailed logging for troubleshooting:
 
-- **Info logs**: Normal operation, successful replications
-- **Warning logs**: Retry attempts, configuration issues
-- **Error logs**: Failed operations, authentication problems
+- **Info logs**: Topic/subscription discovery, successful replications, processing status
+- **Warning logs**: Retry attempts, configuration issues, empty subscriptions
+- **Error logs**: Failed operations, authentication problems, missing topics
+
+Key log messages to monitor:
+- `"Found X topics: [...]"` - Topic discovery successful
+- `"Found X subscriptions for topic 'Y': [...]"` - Subscription discovery
+- `"✅ Replicated message correlation_id from topic/subscription"` - Successful replication
+- `"❌ Failed to replicate message correlation_id"` - Replication failures
+- `"No new messages for topic/subscription"` - Normal when no pending messages
 
 View logs in:
-- **Local development**: Console output
+- **Local development**: Console output with real-time updates
 - **Azure**: Application Insights or Function App logs
 - **CI/CD**: GitHub Actions workflow logs
 
