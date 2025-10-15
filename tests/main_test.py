@@ -14,14 +14,12 @@ from src.main import (
     main,
     process_subscription_messages,
     replicate_message_to_destination,
-    orchestrate_replication,
 )
 from tests.constants_test import (
     TEST_PRIMARY_CONN,
     TEST_SECONDARY_CONN,
     TEST_TOPICS,
     TEST_SUBSCRIPTIONS,
-    TEST_REPLICATION_TYPE,
 )
 
 
