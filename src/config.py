@@ -64,13 +64,11 @@ class ReplicationConfig(BaseSettings):
     """
 
     # --- Connection strings ---
-    primary_conn_str: Optional[str] = Field(
-        default=None,
+    primary_conn_str: str = Field(
         alias="PRIMARY_SERVICEBUS_CONN",
         description="Primary Service Bus connection string",
     )
-    secondary_conn_str: Optional[str] = Field(
-        default=None,
+    secondary_conn_str: str = Field(
         alias="SECONDARY_SERVICEBUS_CONN",
         description="Secondary Service Bus connection string",
     )
@@ -141,12 +139,7 @@ class ReplicationConfig(BaseSettings):
 
     def get_destination_config(self, topic_name: str) -> tuple[str, str, str]:
         """Return destination connection info."""
-        if self.primary_conn_str and self.secondary_conn_str:
-            return (self.secondary_conn_str, topic_name, self.direction)
-        if self.primary_conn_str:
-            return (self.primary_conn_str, topic_name, self.direction)
-        # fallback (validated above)
-        return (self.secondary_conn_str or "", topic_name, self.direction)
+        return (self.secondary_conn_str, topic_name, self.direction)
 
     @property
     def has_app_insights_config(self) -> bool:

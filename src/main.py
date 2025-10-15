@@ -145,12 +145,12 @@ def orchestrate_replication(
         max_attempts=config.retry_config.max_attempts,
         base_delay=config.retry_config.base_delay,
     )
-    def send_with_retry(correlation_id: Optional[str] = None) -> None:
+    def send_with_retry(correlation_id: str) -> None:
         replicate_message_to_destination(
             source_message, dest_conn, dest_topic, direction, correlation_id
         )
 
-    corr_id = getattr(source_message, "correlation_id", None)
+    corr_id = getattr(source_message, "correlation_id", None) or "replica"
     _handle_replication_exceptions(send_with_retry, corr_id, direction, dest_topic)
 
 
@@ -162,7 +162,7 @@ def replicate_message_to_destination(
     dest_conn: str, 
     dest_topic: str, 
     direction: str, 
-    correlation_id: Optional[str]
+    correlation_id: str
 ) -> None:
     """Send one message to the secondary topic."""
     try:
@@ -191,7 +191,7 @@ def replicate_message_to_destination(
 # --------------------------------------------------------------------------
 def _handle_replication_exceptions(
     send_fn: Any, 
-    correlation_id: Optional[str], 
+    correlation_id: str, 
     direction: str, 
     dest_topic: str
 ) -> None:
@@ -201,8 +201,7 @@ def _handle_replication_exceptions(
         handle_unexpected_error(e, correlation_id, direction, dest_topic, app_logger)
 
 
-def _log_successful_replication(direction: str, topic: str, correlation_id: Optional[str]) -> None:
+def _log_successful_replication(direction: str, topic: str, correlation_id: str) -> None:
     msg = f"✅ Message replicated successfully ({direction}) to topic: {topic}"
-    if correlation_id:
-        msg += f" | Correlation ID: {correlation_id}"
+    msg += f" | Correlation ID: {correlation_id}"
     app_logger.info(msg)
