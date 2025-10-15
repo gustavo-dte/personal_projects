@@ -39,12 +39,17 @@ class TestExceptions:
     def test_replication_error_with_cause(self) -> None:
         """Test ReplicationError can be chained with another exception."""
         original_error = ValueError("Original error")
+        caught_error: ReplicationError | None = None
         
-        with pytest.raises(ReplicationError) as exc_info:
+        # Capture the exception
+        try:
             try:
                 raise original_error
             except ValueError as e:
                 raise ReplicationError("Replication failed") from e
+        except ReplicationError as re:
+            caught_error = re
         
-        # Check that the cause was properly set
-        assert exc_info.value.__cause__ == original_error
+        # Verify the exception was caught and has proper cause
+        assert caught_error is not None
+        assert caught_error.__cause__ == original_error
