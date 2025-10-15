@@ -1,3 +1,6 @@
+import logging
+from typing import Any, Optional
+
 import azure.functions as func
 from azure.servicebus import ServiceBusClient
 from azure.servicebus.management import ServiceBusAdministrationClient
@@ -70,8 +73,13 @@ def main(timer: func.TimerRequest) -> None:
 # MESSAGE PROCESSING
 # --------------------------------------------------------------------------
 def process_subscription_messages(
-    client, topic, subscription, dest_conn, direction, logger
-):
+    client: ServiceBusClient, 
+    topic: str, 
+    subscription: str, 
+    dest_conn: str, 
+    direction: str, 
+    logger: logging.Logger
+) -> None:
     """Read messages from one subscription and replicate them safely."""
 
     with client.get_subscription_receiver(
@@ -126,7 +134,7 @@ def process_subscription_messages(
 # REPLICATION ORCHESTRATION
 # --------------------------------------------------------------------------
 def orchestrate_replication(
-    source_message, config: ReplicationConfig, topic_name: str
+    source_message: func.ServiceBusMessage, config: ReplicationConfig, topic_name: str
 ) -> None:
     """Replicate one message from primary to secondary (mirror topic name)."""
     dest_conn = config.secondary_conn_str
@@ -137,7 +145,7 @@ def orchestrate_replication(
         max_attempts=config.retry_config.max_attempts,
         base_delay=config.retry_config.base_delay,
     )
-    def send_with_retry(correlation_id=None):
+    def send_with_retry(correlation_id: Optional[str] = None) -> None:
         replicate_message_to_destination(
             source_message, dest_conn, dest_topic, direction, correlation_id
         )
@@ -150,8 +158,12 @@ def orchestrate_replication(
 # CORE REPLICATION
 # --------------------------------------------------------------------------
 def replicate_message_to_destination(
-    source_message, dest_conn, dest_topic, direction, correlation_id
-):
+    source_message: func.ServiceBusMessage, 
+    dest_conn: str, 
+    dest_topic: str, 
+    direction: str, 
+    correlation_id: Optional[str]
+) -> None:
     """Send one message to the secondary topic."""
     try:
         with ServiceBusClient.from_connection_string(dest_conn) as client:
@@ -177,14 +189,19 @@ def replicate_message_to_destination(
 # --------------------------------------------------------------------------
 # EXCEPTION HANDLERS
 # --------------------------------------------------------------------------
-def _handle_replication_exceptions(send_fn, correlation_id, direction, dest_topic):
+def _handle_replication_exceptions(
+    send_fn: Any, 
+    correlation_id: Optional[str], 
+    direction: str, 
+    dest_topic: str
+) -> None:
     try:
         send_fn(correlation_id=correlation_id)
     except Exception as e:
         handle_unexpected_error(e, correlation_id, direction, dest_topic, app_logger)
 
 
-def _log_successful_replication(direction, topic, correlation_id):
+def _log_successful_replication(direction: str, topic: str, correlation_id: Optional[str]) -> None:
     msg = f"✅ Message replicated successfully ({direction}) to topic: {topic}"
     if correlation_id:
         msg += f" | Correlation ID: {correlation_id}"

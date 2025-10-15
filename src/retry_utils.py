@@ -16,7 +16,7 @@ from .constants import ALERT_SEVERITY_HIGH, ALERT_SEVERITY_MEDIUM
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def with_retry(max_attempts=3, base_delay=1.0, backoff_factor=2.0):
+def with_retry(max_attempts: int = 3, base_delay: float = 1.0, backoff_factor: float = 2.0) -> Callable[[F], F]:
     """
     Decorator for retrying a function if it raises an exception.
     Args:
@@ -25,9 +25,9 @@ def with_retry(max_attempts=3, base_delay=1.0, backoff_factor=2.0):
         backoff_factor (float): Multiplier applied to delay after each failure.
     """
 
-    def decorator(func):
+    def decorator(func: F) -> F:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             logger = logging.getLogger(func.__module__)
             attempt = 1
             delay = base_delay
@@ -46,7 +46,7 @@ def with_retry(max_attempts=3, base_delay=1.0, backoff_factor=2.0):
                     delay *= backoff_factor
                     attempt += 1
 
-        return wrapper
+        return wrapper  # type: ignore
 
     return decorator
 
