@@ -48,7 +48,7 @@ class TestConfigLoading:
             [{"type": "missing", "loc": ("PRIMARY_SERVICEBUS_CONN",), "input": {}}],
         )
         
-        with pytest.raises(Exception):
+        with pytest.raises(PydanticValidationError):
             mock_config()
 
 

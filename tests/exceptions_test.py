@@ -46,4 +46,5 @@ class TestExceptions:
             except ValueError as e:
                 raise ReplicationError("Replication failed") from e
         
+        # Check that the cause was properly set
         assert exc_info.value.__cause__ == original_error
