@@ -2,7 +2,6 @@
 Unit tests for retry utilities module.
 """
 
-import time
 from typing import cast
 from unittest.mock import Mock, patch
 
