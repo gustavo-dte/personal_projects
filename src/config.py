@@ -1,10 +1,6 @@
-"""
-Configuration handling for the Service Bus replication function.
-"""
-
 from __future__ import annotations
 
-from typing import Optional, Union, cast  # noqa: F401
+from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -63,19 +59,11 @@ class ReplicationConfig(BaseSettings):
     """
     Configuration for Service Bus message replication.
 
-    This Pydantic settings model automatically loads configuration from
-    environment variables following the Twelve Factor App methodology.
-
-    Required environment variables:
-    - PRIMARY_SERVICEBUS_CONN: Source Service Bus connection string
-    - SECONDARY_SERVICEBUS_CONN: Destination Service Bus connection string
-
-    The function will dynamically discover all topics and subscriptions in the
-    primary namespace and replicate messages to corresponding topics in the
-    secondary namespace.
+    Automatically loads configuration from environment variables
+    (Twelve-Factor App compliant).
     """
 
-    # Service Bus connection strings
+    # --- Connection strings ---
     primary_conn_str: Optional[str] = Field(
         default=None,
         alias="PRIMARY_SERVICEBUS_CONN",
@@ -87,12 +75,12 @@ class ReplicationConfig(BaseSettings):
         description="Secondary Service Bus connection string",
     )
 
-    # Timing configuration
+    # --- Timing configuration ---
     rto_minutes: int = Field(
         default=DEFAULT_RTO_MINUTES,
         alias="RTO_MINUTES",
         ge=1,
-        le=1440,  # 24 hours
+        le=1440,
         description="Recovery Time Objective in minutes",
     )
     delta_minutes: int = Field(
@@ -103,24 +91,18 @@ class ReplicationConfig(BaseSettings):
         description="Additional buffer time in minutes",
     )
 
-    # Nested configuration objects
-    retry_config: RetryConfig = Field(
-        default_factory=RetryConfig, description="Retry configuration"
-    )
-    dead_letter_config: DeadLetterConfig = Field(
-        default_factory=DeadLetterConfig, description="Dead letter queue configuration"
-    )
+    # --- Nested configuration ---
+    retry_config: RetryConfig = Field(default_factory=RetryConfig)
+    dead_letter_config: DeadLetterConfig = Field(default_factory=DeadLetterConfig)
 
-    # Application Insights / Azure Monitor configuration
+    # --- Monitoring ---
     app_insights_connection_string: Optional[str] = Field(
         default=None,
         alias="APPLICATIONINSIGHTS_CONNECTION_STRING",
-        description="Application Insights connection string for telemetry",
     )
     app_insights_instrumentation_key: Optional[str] = Field(
         default=None,
         alias="APPINSIGHTS_INSTRUMENTATIONKEY",
-        description="Application Insights instrumentation key for telemetry",
     )
 
     model_config = SettingsConfigDict(
@@ -130,28 +112,27 @@ class ReplicationConfig(BaseSettings):
         extra="forbid",
     )
 
+    # ------------------------------------------------------------------
+
     @model_validator(mode="after")
-    def validate_connection_config(self):
+    def validate_connection_config(self) -> ReplicationConfig:
         """Validate that required connection strings are provided."""
         # For dynamic replication, both primary and secondary
         # connection strings are required
         if not self.primary_conn_str:
-            raise ConfigError(
-                "PRIMARY_SERVICEBUS_CONN is required for dynamic replication"
-            )
+            raise ConfigError("PRIMARY_SERVICEBUS_CONN is required for dynamic replication")
 
         if not self.secondary_conn_str:
-            raise ConfigError(
-                "SECONDARY_SERVICEBUS_CONN is required for dynamic replication"
-            )
+            raise ConfigError("SECONDARY_SERVICEBUS_CONN is required for dynamic replication")
 
         return self
+
+    # ------------------------------------------------------------------
 
     @property
     def ttl_seconds(self) -> int:
         """Calculate the Time To Live for replicated messages in seconds."""
-        total_minutes: int = self.rto_minutes + self.delta_minutes
-        return total_minutes * SECONDS_PER_MINUTE
+        return (self.rto_minutes + self.delta_minutes) * SECONDS_PER_MINUTE
 
     @property
     def direction(self) -> str:
@@ -159,34 +140,17 @@ class ReplicationConfig(BaseSettings):
         return "Primary → Secondary"
 
     def get_destination_config(self, topic_name: str) -> tuple[str, str, str]:
-        """
-        Get destination connection information.
-
-        Args:
-            topic_name: The name of the topic to replicate to
-
-        Returns:
-            Tuple of (connection_string, topic_name, direction_description)
-
-        Note:
-            Validation is handled by Pydantic validators during model instantiation,
-            so configuration is guaranteed to be valid when this method is called.
-
-        Raises:
-            ConfigError: If any required configuration is missing
-        """
-        # If we have both connection strings, use secondary as destination
+        """Return destination connection info."""
         if self.primary_conn_str and self.secondary_conn_str:
-            return (cast(str, self.secondary_conn_str), topic_name, self.direction)
-        # If we only have primary connection, use it
-        elif self.primary_conn_str:
-            return (cast(str, self.primary_conn_str), topic_name, self.direction)
-        # Otherwise use secondary connection
-        return (cast(str, self.secondary_conn_str), topic_name, self.direction)
+            return (self.secondary_conn_str, topic_name, self.direction)
+        if self.primary_conn_str:
+            return (self.primary_conn_str, topic_name, self.direction)
+        # fallback (validated above)
+        return (self.secondary_conn_str or "", topic_name, self.direction)
 
     @property
     def has_app_insights_config(self) -> bool:
-        """Check if Application Insights configuration is available."""
+        """True if Application Insights configuration is present."""
         return bool(
             self.app_insights_connection_string or self.app_insights_instrumentation_key
         )
