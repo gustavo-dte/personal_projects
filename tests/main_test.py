@@ -234,5 +234,100 @@ class TestErrorCases:
         receiver.abandon_message.assert_called_once_with(msg)
 
 
+class TestMainFunctionExceptions:
+    """Test exception handling in the main function."""
+
+    @patch("src.main.app_logger")
+    @patch("src.main.ReplicationConfig")
+    def test_config_error_handling(self, mock_config: Mock, mock_app_logger: Mock) -> None:
+        """Test ConfigError handling in main function."""
+        from src.exceptions import ConfigError
+        
+        # Make config raise ConfigError
+        mock_config.side_effect = ConfigError("Missing required configuration")
+        
+        # Import and call main
+        from src.main import main
+        timer_request = Mock()
+        
+        main(timer_request)
+        
+        # Verify error was logged
+        mock_app_logger.error.assert_called_with("❌ Configuration error: Missing required configuration")
+
+    @patch("src.main.app_logger")
+    @patch("src.main.ReplicationConfig")
+    def test_general_exception_handling(self, mock_config: Mock, mock_app_logger: Mock) -> None:
+        """Test general exception handling in main function."""
+        # Make config raise a general exception
+        mock_config.side_effect = RuntimeError("Unexpected error")
+        
+        # Import and call main
+        from src.main import main
+        timer_request = Mock()
+        
+        main(timer_request)
+        
+        # Verify exception was logged
+        mock_app_logger.exception.assert_called_with("❌ Replication cron failed: Unexpected error")
+
+
+class TestConfigValidation:
+    """Test configuration validation scenarios."""
+
+    def test_config_missing_primary_connection(self) -> None:
+        """Test config validation when primary connection is missing."""
+        from src.config import ReplicationConfig
+        from src.exceptions import ConfigError
+        import os
+        
+        # Clear environment variables
+        old_primary = os.environ.get("PRIMARY_SERVICEBUS_CONN")
+        old_secondary = os.environ.get("SECONDARY_SERVICEBUS_CONN")
+        
+        try:
+            # Remove both to test validation
+            if "PRIMARY_SERVICEBUS_CONN" in os.environ:
+                del os.environ["PRIMARY_SERVICEBUS_CONN"]
+            if "SECONDARY_SERVICEBUS_CONN" in os.environ:
+                del os.environ["SECONDARY_SERVICEBUS_CONN"]
+            
+            with pytest.raises(ConfigError, match="PRIMARY_SERVICEBUS_CONN is required"):
+                ReplicationConfig()
+        finally:
+            # Restore environment variables
+            if old_primary:
+                os.environ["PRIMARY_SERVICEBUS_CONN"] = old_primary
+            if old_secondary:
+                os.environ["SECONDARY_SERVICEBUS_CONN"] = old_secondary
+
+    def test_config_missing_secondary_connection(self) -> None:
+        """Test config validation when secondary connection is missing."""
+        from src.config import ReplicationConfig
+        from src.exceptions import ConfigError
+        import os
+        
+        # Set primary but not secondary
+        old_primary = os.environ.get("PRIMARY_SERVICEBUS_CONN")
+        old_secondary = os.environ.get("SECONDARY_SERVICEBUS_CONN")
+        
+        try:
+            os.environ["PRIMARY_SERVICEBUS_CONN"] = "test-primary"
+            if "SECONDARY_SERVICEBUS_CONN" in os.environ:
+                del os.environ["SECONDARY_SERVICEBUS_CONN"]
+            
+            with pytest.raises(ConfigError, match="SECONDARY_SERVICEBUS_CONN is required"):
+                ReplicationConfig()
+        finally:
+            # Restore environment variables
+            if old_primary:
+                os.environ["PRIMARY_SERVICEBUS_CONN"] = old_primary
+            else:
+                if "PRIMARY_SERVICEBUS_CONN" in os.environ:
+                    del os.environ["PRIMARY_SERVICEBUS_CONN"]
+            if old_secondary:
+                os.environ["SECONDARY_SERVICEBUS_CONN"] = old_secondary
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
