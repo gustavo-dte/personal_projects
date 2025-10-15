@@ -1,19 +1,18 @@
 """
 Test constants for the Service Bus replication function.
-
-This module contains constants used specifically for testing purposes.
 """
 
-# Test connection strings (for testing purposes only)
-TEST_SERVICEBUS_CONNECTION_STRING = "Endpoint=sb://test.servicebus.windows.net/"
+# Connection strings (dummy values for local tests)
+TEST_PRIMARY_CONN = "Endpoint=sb://primary-test.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=mockkey"
+TEST_SECONDARY_CONN = "Endpoint=sb://secondary-test.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=mockkey"
 
-# Test topic/queue names
-TEST_PRIMARY_TOPIC_NAME = "test-primary-topic"
-TEST_SECONDARY_TOPIC_NAME = "test-secondary-topic"
-TEST_SUBSCRIPTION_NAME = "test-subscription"
+# Topics and subscriptions
+TEST_TOPICS = ["topic-a", "topic-b"]
+TEST_SUBSCRIPTIONS = ["sub-a", "sub-b"]
 
-# Test configuration values
-TEST_RTO_MINUTES = 5
-TEST_DELTA_MINUTES = 1
-TEST_MAX_RETRY_ATTEMPTS = 2
-TEST_BASE_RETRY_DELAY = 0.5
+# Replication configuration defaults
+TEST_REPLICATION_TYPE = "primary_to_secondary"
+TEST_RTO_MINUTES = 10
+TEST_DELTA_MINUTES = 2
+TEST_MAX_RETRY_ATTEMPTS = 3
+TEST_BASE_RETRY_DELAY = 1.0
