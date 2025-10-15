@@ -5,19 +5,16 @@ This module contains all constant values used throughout the application,
 following the Twelve Factor App methodology by avoiding hardcoded values.
 """
 
-from typing import Literal
-
-# Replication types
-REPLICATION_TYPE_PRIMARY_TO_SECONDARY: Literal["primary_to_secondary"] = (
-    "primary_to_secondary"
-)
-REPLICATION_TYPE_SECONDARY_TO_PRIMARY: Literal["secondary_to_primary"] = (
-    "secondary_to_primary"
-)
-
-# Direction labels
-DIRECTION_PRIMARY_TO_SECONDARY = "Primary → Secondary"
-DIRECTION_SECONDARY_TO_PRIMARY = "Secondary → Primary"
+# Environment variable names
+ENV_PRIMARY_SERVICEBUS_CONN = "PRIMARY_SERVICEBUS_CONN"
+ENV_SECONDARY_SERVICEBUS_CONN = "SECONDARY_SERVICEBUS_CONN"
+ENV_RTO_MINUTES = "RTO_MINUTES"
+ENV_DELTA_MINUTES = "DELTA_MINUTES"
+ENV_DLQ_ENABLED = "DLQ_ENABLED"
+ENV_MAX_DELIVERY_COUNT = "MAX_DELIVERY_COUNT"
+ENV_DLQ_TTL_MINUTES = "DLQ_TTL_MINUTES"
+ENV_MAX_RETRY_ATTEMPTS = "MAX_RETRY_ATTEMPTS"
+ENV_BASE_RETRY_DELAY = "BASE_RETRY_DELAY"
 
 # Default values
 DEFAULT_RTO_MINUTES = 10
@@ -36,6 +33,7 @@ CONTENT_TYPE_TEXT_UTF8 = "text/plain; charset=utf-8"
 LOGGER_NAME = "servicebus.replication"
 
 # Alert severity levels
+ALERT_SEVERITY_LOW = "low"
 ALERT_SEVERITY_MEDIUM = "medium"
 ALERT_SEVERITY_HIGH = "high"
 ALERT_SEVERITY_CRITICAL = "critical"

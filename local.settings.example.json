@@ -4,6 +4,9 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
     "PRIMARY_SERVICEBUS_CONN": "<primary_connection_string>",
-    "SECONDARY_SERVICEBUS_CONN": "<secondary_connection_string>"
+    "SECONDARY_SERVICEBUS_CONN": "<secondary_connection_string>",
+    "RTO_MINUTES": "10",
+    "DELTA_MINUTES": "2",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "<optional_app_insights_connection_string>"
   }
 }
