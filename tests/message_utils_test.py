@@ -4,12 +4,12 @@ Unit tests for message utilities module.
 
 from unittest.mock import Mock
 
+from src.constants import CORRELATION_ID_PREFIX
 from src.message_utils import (
+    create_enhanced_properties,
     generate_correlation_id,
     process_message_body,
-    create_enhanced_properties,
 )
-from src.constants import CORRELATION_ID_PREFIX
 
 
 class TestMessageUtils:
@@ -19,7 +19,7 @@ class TestMessageUtils:
         """Test generating correlation ID when message already has one."""
         msg = Mock()
         msg.correlation_id = "existing-id"
-        
+
         result = generate_correlation_id(msg)
         assert result == "existing-id"
 
@@ -27,7 +27,7 @@ class TestMessageUtils:
         """Test generating correlation ID when message doesn't have one."""
         msg = Mock()
         msg.correlation_id = None
-        
+
         result = generate_correlation_id(msg)
         assert result.startswith(CORRELATION_ID_PREFIX)
 
@@ -35,9 +35,9 @@ class TestMessageUtils:
         """Test processing message body that's already bytes."""
         body = b"test message"
         content_type = "application/octet-stream"
-        
+
         processed_body, final_content_type = process_message_body(body, content_type)
-        
+
         assert processed_body == body
         assert final_content_type == content_type
 
@@ -45,9 +45,9 @@ class TestMessageUtils:
         """Test processing message body that's a string."""
         body = "test message"
         content_type = "text/plain"
-        
+
         processed_body, final_content_type = process_message_body(body, content_type)
-        
+
         assert processed_body == b"test message"
         assert final_content_type == content_type
 
@@ -56,10 +56,10 @@ class TestMessageUtils:
         msg = Mock()
         msg.message_id = "test-msg-id"
         msg.application_properties = {"key": "value"}
-        
+
         correlation_id = "test-correlation-id"
-        
+
         result = create_enhanced_properties(msg, correlation_id)
-        
+
         assert isinstance(result, dict)
         assert "key" in result  # Original properties preserved

@@ -16,7 +16,9 @@ from .constants import ALERT_SEVERITY_HIGH, ALERT_SEVERITY_MEDIUM
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def with_retry(max_attempts: int = 3, base_delay: float = 1.0, backoff_factor: float = 2.0) -> Callable[[F], F]:
+def with_retry(
+    max_attempts: int = 3, base_delay: float = 1.0, backoff_factor: float = 2.0
+) -> Callable[[F], F]:
     """
     Decorator for retrying a function if it raises an exception.
     Args:

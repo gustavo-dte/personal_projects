@@ -11,7 +11,7 @@ from .config import ReplicationConfig
 from .error_handlers import (
     handle_unexpected_error,
 )
-from .logging_utils import configure_logger
+from .logging_utils import configure_logger, sanitize_error_message, truncate_correlation_id
 from .message_utils import create_replicated_message
 from .retry_utils import with_retry
 
@@ -36,10 +36,10 @@ def main(timer: func.TimerRequest) -> None:
         # Create admin client to list topics and subscriptions dynamically
         # ------------------------------------------------------------------
         with ServiceBusClient.from_connection_string(
-            config.primary_conn_str
+            config.source_conn_str
         ) as source_client:
             admin_client = ServiceBusAdministrationClient.from_connection_string(
-                config.primary_conn_str
+                config.source_conn_str
             )
             topics = [t.name for t in admin_client.list_topics()]
             app_logger.info(f"Found {len(topics)} topics: {topics}")
@@ -73,12 +73,12 @@ def main(timer: func.TimerRequest) -> None:
 # MESSAGE PROCESSING
 # --------------------------------------------------------------------------
 def process_subscription_messages(
-    client: ServiceBusClient, 
-    topic: str, 
-    subscription: str, 
-    dest_conn: str, 
-    direction: str, 
-    logger: logging.Logger
+    client: ServiceBusClient,
+    topic: str,
+    subscription: str,
+    dest_conn: str,
+    direction: str,
+    logger: logging.Logger,
 ) -> None:
     """Read messages from one subscription and replicate them safely."""
 
@@ -111,23 +111,21 @@ def process_subscription_messages(
                 receiver.complete_message(msg)
                 logger.info(
                     "✅ Replicated message %s from %s/%s",
-                    correlation_id,
+                    truncate_correlation_id(correlation_id),
                     topic,
                     subscription,
                 )
-
 
             except Exception as e:
                 # Log & abandon to retry later
                 receiver.abandon_message(msg)
                 logger.error(
                     "❌ Failed to replicate message %s from %s/%s: %s",
-                    correlation_id,
+                    truncate_correlation_id(correlation_id),
                     topic,
                     subscription,
-                    e,
+                    sanitize_error_message(str(e)),
                 )
-
 
 
 # --------------------------------------------------------------------------
@@ -158,11 +156,11 @@ def orchestrate_replication(
 # CORE REPLICATION
 # --------------------------------------------------------------------------
 def replicate_message_to_destination(
-    source_message: func.ServiceBusMessage, 
-    dest_conn: str, 
-    dest_topic: str, 
-    direction: str, 
-    correlation_id: str
+    source_message: func.ServiceBusMessage,
+    dest_conn: str,
+    dest_topic: str,
+    direction: str,
+    correlation_id: str,
 ) -> None:
     """Send one message to the secondary topic."""
     try:
@@ -190,10 +188,7 @@ def replicate_message_to_destination(
 # EXCEPTION HANDLERS
 # --------------------------------------------------------------------------
 def _handle_replication_exceptions(
-    send_fn: Any, 
-    correlation_id: str, 
-    direction: str, 
-    dest_topic: str
+    send_fn: Any, correlation_id: str, direction: str, dest_topic: str
 ) -> None:
     try:
         send_fn(correlation_id=correlation_id)
@@ -201,7 +196,9 @@ def _handle_replication_exceptions(
         handle_unexpected_error(e, correlation_id, direction, dest_topic, app_logger)
 
 
-def _log_successful_replication(direction: str, topic: str, correlation_id: str) -> None:
+def _log_successful_replication(
+    direction: str, topic: str, correlation_id: str
+) -> None:
     msg = f"✅ Message replicated successfully ({direction}) to topic: {topic}"
-    msg += f" | Correlation ID: {correlation_id}"
+    msg += f" | Correlation ID: {truncate_correlation_id(correlation_id)}"
     app_logger.info(msg)

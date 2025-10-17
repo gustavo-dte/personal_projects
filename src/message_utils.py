@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime
 from datetime import timedelta
-from typing import Any, Union, cast
+from typing import Any, cast
 
 import azure.functions as func
 from azure.servicebus import ServiceBusMessage, ServiceBusReceivedMessage
@@ -24,7 +24,9 @@ from .constants import (
 )
 
 
-def generate_correlation_id(source_message: Union[func.ServiceBusMessage, ServiceBusReceivedMessage]) -> str:
+def generate_correlation_id(
+    source_message: func.ServiceBusMessage | ServiceBusReceivedMessage,
+) -> str:
     """
     Generate or extract correlation ID for message tracking.
 
@@ -73,7 +75,8 @@ def process_message_body(
 
 
 def create_enhanced_properties(
-    source_message: Union[func.ServiceBusMessage, ServiceBusReceivedMessage], correlation_id: str
+    source_message: func.ServiceBusMessage | ServiceBusReceivedMessage,
+    correlation_id: str,
 ) -> dict[str, Any]:
     """
     Create enhanced application properties with replication metadata.
@@ -121,7 +124,7 @@ def generate_replicated_message_id(
 
 
 def create_replicated_message(
-    source_message: Union[func.ServiceBusMessage, ServiceBusReceivedMessage],
+    source_message: func.ServiceBusMessage | ServiceBusReceivedMessage,
     correlation_id: str,
     ttl_seconds: int | None,
 ) -> ServiceBusMessage:
@@ -174,7 +177,6 @@ def create_replicated_message(
         ),
         "message_id": new_message_id,
     }
-
 
     # Only set TTL if valid and numeric
     if ttl_seconds is not None and isinstance(ttl_seconds, int | float):

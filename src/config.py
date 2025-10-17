@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,7 +12,10 @@ from .constants import (
     DEFAULT_DLQ_TTL_MINUTES,
     DEFAULT_MAX_DELIVERY_COUNT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
+    DEFAULT_REPLICATION_TYPE,
     DEFAULT_RTO_MINUTES,
+    REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
+    REPLICATION_TYPE_SECONDARY_TO_PRIMARY,
     SECONDS_PER_MINUTE,
 )
 from .exceptions import ConfigError
@@ -62,6 +65,13 @@ class ReplicationConfig(BaseSettings):
     Automatically loads configuration from environment variables
     (Twelve-Factor App compliant).
     """
+
+    # --- Replication configuration ---
+    replication_type: Literal["primary_to_secondary", "secondary_to_primary"] = Field(
+        default=DEFAULT_REPLICATION_TYPE,
+        alias="REPLICATION_TYPE",
+        description="Direction of message replication",
+    )
 
     # --- Connection strings ---
     primary_conn_str: str = Field(
@@ -120,10 +130,14 @@ class ReplicationConfig(BaseSettings):
         # For dynamic replication, both primary and secondary
         # connection strings are required
         if not self.primary_conn_str:
-            raise ConfigError("PRIMARY_SERVICEBUS_CONN is required for dynamic replication")
+            raise ConfigError(
+                "PRIMARY_SERVICEBUS_CONN is required for dynamic replication"
+            )
 
         if not self.secondary_conn_str:
-            raise ConfigError("SECONDARY_SERVICEBUS_CONN is required for dynamic replication")
+            raise ConfigError(
+                "SECONDARY_SERVICEBUS_CONN is required for dynamic replication"
+            )
 
         return self
 
@@ -137,11 +151,25 @@ class ReplicationConfig(BaseSettings):
     @property
     def direction(self) -> str:
         """Return a readable description of the replication direction."""
-        return "Primary → Secondary"
+        if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
+            return "Primary → Secondary"
+        else:  # REPLICATION_TYPE_SECONDARY_TO_PRIMARY
+            return "Secondary → Primary"
 
     def get_destination_config(self, topic_name: str) -> tuple[str, str, str]:
-        """Return destination connection info."""
-        return (self.secondary_conn_str, topic_name, self.direction)
+        """Return destination connection info based on replication direction."""
+        if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
+            return (self.secondary_conn_str, topic_name, self.direction)
+        else:  # REPLICATION_TYPE_SECONDARY_TO_PRIMARY
+            return (self.primary_conn_str, topic_name, self.direction)
+
+    @property
+    def source_conn_str(self) -> str:
+        """Return the source connection string based on replication direction."""
+        if self.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY:
+            return self.primary_conn_str
+        else:  # REPLICATION_TYPE_SECONDARY_TO_PRIMARY
+            return self.secondary_conn_str
 
     @property
     def has_app_insights_config(self) -> bool:

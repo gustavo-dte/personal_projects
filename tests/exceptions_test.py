@@ -14,7 +14,7 @@ class TestExceptions:
         """Test ConfigError can be created with a message."""
         message = "Configuration is invalid"
         error = ConfigError(message)
-        
+
         assert str(error) == message
         assert isinstance(error, Exception)
 
@@ -27,7 +27,7 @@ class TestExceptions:
         """Test ReplicationError can be created with a message."""
         message = "Replication failed"
         error = ReplicationError(message)
-        
+
         assert str(error) == message
         assert isinstance(error, Exception)
 
@@ -40,7 +40,7 @@ class TestExceptions:
         """Test ReplicationError can be chained with another exception."""
         original_error = ValueError("Original error")
         caught_error: ReplicationError | None = None
-        
+
         # Capture the exception
         try:
             try:
@@ -49,7 +49,7 @@ class TestExceptions:
                 raise ReplicationError("Replication failed") from e
         except ReplicationError as re:
             caught_error = re
-        
+
         # Verify the exception was caught and has proper cause
         assert caught_error is not None
         assert caught_error.__cause__ == original_error
