@@ -20,71 +20,71 @@ from .constants import ALERT_SEVERITY_HIGH, LOGGER_NAME
 def sanitize_error_message(error_message: str) -> str:
     """
     Sanitize error messages to remove potentially sensitive information.
-    
+
     This function removes or masks:
     - Connection strings
     - Access keys and secrets
     - IP addresses (partially)
     - Email addresses (partially)
     - Long hexadecimal strings that might be tokens
-    
+
     Args:
         error_message: The original error message
-        
+
     Returns:
         Sanitized error message safe for logging
     """
     if not error_message:
         return ""
-    
+
     sanitized = error_message
-    
+
     # Remove connection strings
     sanitized = re.sub(
         r'Endpoint=sb://[^;]+;SharedAccessKeyName=[^;]+;SharedAccessKey=[^;]+',
         'Endpoint=sb://***;SharedAccessKeyName=***;SharedAccessKey=***',
         sanitized
     )
-    
+
     # Remove access keys and secrets (any base64-like strings longer than 20 chars)
     sanitized = re.sub(
         r'[A-Za-z0-9+/]{20,}={0,2}',
         '***REDACTED***',
         sanitized
     )
-    
+
     # Partially mask IP addresses (keep first two octets)
     sanitized = re.sub(
         r'\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b',
         r'\1.*.*',
         sanitized
     )
-    
+
     # Partially mask email addresses (keep domain)
     sanitized = re.sub(
         r'\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Z|a-z]{2,})\b',
         r'***@\1',
         sanitized
     )
-    
+
     # Remove long hexadecimal strings that might be tokens
     sanitized = re.sub(
         r'\b[0-9a-fA-F]{16,}\b',
         '***TOKEN***',
         sanitized
     )
-    
+
     return sanitized
 
 
 def truncate_correlation_id(correlation_id: str, max_length: int = 8) -> str:
     """
     Truncate correlation ID for logging to avoid potential information leakage.
-    
+
     Args:
         correlation_id: The full correlation ID
         max_length: Maximum length to keep (default: 8)
-        
+
     Returns:
         Truncated correlation ID with suffix indicator
     """

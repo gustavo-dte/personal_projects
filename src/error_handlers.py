@@ -61,8 +61,9 @@ def handle_resource_not_found_error(
         destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_HIGH,
     )
+    sanitized_error = sanitize_error_message(str(error))
     raise ResourceNotFoundError(
-        f"Could not find destination topic '{destination_topic}': {sanitize_error_message(str(error))}"
+        f"Could not find destination topic '{destination_topic}': {sanitized_error}"
     ) from error
 
 
@@ -165,6 +166,7 @@ def handle_unexpected_error(
         destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_CRITICAL,
     )
+    sanitized_error = sanitize_error_message(str(error))
     raise ReplicationError(
-        f"Unexpected error during message replication: {sanitize_error_message(str(error))}"
+        f"Unexpected error during message replication: {sanitized_error}"
     ) from error
