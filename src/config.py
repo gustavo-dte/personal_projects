@@ -12,7 +12,6 @@ from .constants import (
     DEFAULT_DLQ_TTL_MINUTES,
     DEFAULT_MAX_DELIVERY_COUNT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
-    DEFAULT_REPLICATION_TYPE,
     DEFAULT_RTO_MINUTES,
     REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
     SECONDS_PER_MINUTE,
@@ -67,7 +66,7 @@ class ReplicationConfig(BaseSettings):
 
     # --- Replication configuration ---
     replication_type: Literal["primary_to_secondary", "secondary_to_primary"] = Field(
-        default=DEFAULT_REPLICATION_TYPE,
+        default="primary_to_secondary",
         alias="REPLICATION_TYPE",
         description="Direction of message replication",
     )

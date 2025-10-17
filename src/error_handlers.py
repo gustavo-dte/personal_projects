@@ -39,8 +39,9 @@ def handle_authentication_error(
         destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_CRITICAL,
     )
+    sanitized_error = sanitize_error_message(str(error))
     raise ClientAuthenticationError(
-        f"Failed to authenticate with Service Bus: {sanitize_error_message(str(error))}"
+        f"Failed to authenticate with Service Bus: {sanitized_error}"
     ) from error
 
 
