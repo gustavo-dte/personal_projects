@@ -41,38 +41,26 @@ def sanitize_error_message(error_message: str) -> str:
 
     # Remove connection strings
     sanitized = re.sub(
-        r'Endpoint=sb://[^;]+;SharedAccessKeyName=[^;]+;SharedAccessKey=[^;]+',
-        'Endpoint=sb://***;SharedAccessKeyName=***;SharedAccessKey=***',
-        sanitized
+        r"Endpoint=sb://[^;]+;SharedAccessKeyName=[^;]+;SharedAccessKey=[^;]+",
+        "Endpoint=sb://***;SharedAccessKeyName=***;SharedAccessKey=***",
+        sanitized,
     )
 
     # Remove access keys and secrets (any base64-like strings longer than 20 chars)
-    sanitized = re.sub(
-        r'[A-Za-z0-9+/]{20,}={0,2}',
-        '***REDACTED***',
-        sanitized
-    )
+    sanitized = re.sub(r"[A-Za-z0-9+/]{20,}={0,2}", "***REDACTED***", sanitized)
 
     # Partially mask IP addresses (keep first two octets)
     sanitized = re.sub(
-        r'\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b',
-        r'\1.*.*',
-        sanitized
+        r"\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b", r"\1.*.*", sanitized
     )
 
     # Partially mask email addresses (keep domain)
     sanitized = re.sub(
-        r'\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Z|a-z]{2,})\b',
-        r'***@\1',
-        sanitized
+        r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Z|a-z]{2,})\b", r"***@\1", sanitized
     )
 
     # Remove long hexadecimal strings that might be tokens
-    sanitized = re.sub(
-        r'\b[0-9a-fA-F]{16,}\b',
-        '***TOKEN***',
-        sanitized
-    )
+    sanitized = re.sub(r"\b[0-9a-fA-F]{16,}\b", "***TOKEN***", sanitized)
 
     return sanitized
 

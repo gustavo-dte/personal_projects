@@ -17,6 +17,11 @@ from .logging_utils import (
 from .message_utils import create_replicated_message
 from .retry_utils import with_retry
 
+# TODO: This aplplication is not compatible for Tier1 requirements.
+# In next release, address the following:
+# - Explore new options for continuous service bus replication using triggered functions
+# - Explore other azure service integrations to align with enterprise requirements
+
 # --------------------------------------------------------------------------
 # GLOBAL LOGGER
 # --------------------------------------------------------------------------
