@@ -1,16 +1,32 @@
-## Manifest for migration replication (phase_1)
+## Manifest for migration replication
 
 # Global defaults
+app_name: testApp
+environment: dev
+target_gh_repo: dteenergy/cloud-platform-isolation-zone-subscription-corpapps
 azure_migrate_project_name: azure-migrate-automation
 azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
+azure_migrate_subscription_id: 00d26f19-0dc3-4c90-9c6b-2e9ce8b14f5a
 target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
-target_resource_group: rg-cu-corpapps-dev
+target_resource_group: rg-cu-CorpApps-MigrationTest-Dev
 os_disk_scsi_id: scsi0:0
 
 # Azure Backup defaults
 recovery_vault_name: cloud-platform-prod-cu-backup-vault
 backup_policy_name: DefaultPolicy
 replication_threshold: 80
+
+# Azure VMSS defaults
+vmss_enabled: true
+vmss_config:
+  health_probe_settings:
+    protocol: http
+    port: 80
+    requestPath: /health
+  automatic_instance_repair:
+    enabled: true
+    grace_period: PT30M
+    repair_action: Restart
 
 # Network configuration
 target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
@@ -26,27 +42,12 @@ vms:
   - name: dca-dev7048
     description: "Server created to test migration pipeline"
     target_vm_size: Standard_D2s_v5
-    target_license_type: Windows_Server
+    target_license_type: WindowsServer
     target_disk_type: Standard_LRS
     portfolio: Test-Portfolio
     tier: 4
     env: dev
     app_name: test-app
-
-    backup:
-      recovery_vault_name: cloud-platform-prod-cu-backup-vault
-      backup_policy_name: DefaultPolicy
-      replication_threshold: 80
-
-  - name: dca-devFAKE
-    description: "Server created to test migration pipeline"
-    target_vm_size: Standard_D2s_v5
-    target_license_type: Windows_Server
-    target_disk_type: Standard_LRS
-    portfolio: Test-Portfolio
-    tier: 4
-    env: dev
-    app_name: fake-app
 
     backup:
       recovery_vault_name: cloud-platform-prod-cu-backup-vault

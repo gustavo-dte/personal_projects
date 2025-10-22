@@ -10,6 +10,10 @@ on:
         description: "Manifest name (directory in ansible/vars/)"
         required: true
         type: string
+      subscription_id:
+        description: "Azure Migrate Subscription ID"
+        required: true
+        type: string
       dry_run:
         description: "Dry run"
         required: false
@@ -31,7 +35,6 @@ jobs:
       - self-hosted
       - linux
       - non-prod
-      - container
       - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
@@ -45,20 +48,14 @@ jobs:
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: 🔧 Setup Ansible and Azure SDKs
-        if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/prereq
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
         with:
-          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
-          collections_requirements: ansible/requirements.yml
-
-      - name: 🔐 Azure Login
-        if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/azure-login
-        with:
-          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
-          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
 
       - name: 🔄 Set subscription (optional override)
         if: ${{ inputs.subscription_id != '' && !inputs.dry_run }}

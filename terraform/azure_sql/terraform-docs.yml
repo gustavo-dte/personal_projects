@@ -1,0 +1,260 @@
+version: ">= 0.14"
+
+formatter: "markdown table"
+
+header-from: main.tf
+footer-from: ""
+
+recursive:
+  enabled: true
+  path: modules
+
+sections:
+  hide: []
+  show: []
+
+content: |-
+  # Azure SQL Database Terraform Module
+
+  This Terraform module creates and manages Azure SQL Database resources including SQL Server, databases, security configurations, monitoring, and backup policies.
+
+  ## Architecture
+
+  The module creates the following resources:
+  - Azure SQL Server with authentication and security configurations
+  - Azure SQL Databases with configurable performance tiers
+  - Firewall rules and network access controls
+  - Advanced Threat Protection and auditing
+  - Backup and disaster recovery configurations
+  - Monitoring and diagnostic settings
+  - Resource tagging for governance
+
+  ## Features
+
+  - **Multi-Database Support**: Create multiple databases on a single SQL Server
+  - **Security**: Advanced Threat Protection, firewall rules, Azure AD authentication
+  - **Monitoring**: Integration with Azure Monitor and Log Analytics
+  - **Backup**: Configurable backup retention and geo-redundancy
+  - **Environment Support**: Separate configurations for dev, staging, and production
+  - **Compliance**: Auditing and diagnostic logging for compliance requirements
+
+  ## Usage
+
+  ### Basic Usage
+
+  ```hcl
+  module "azure_sql" {
+    source = "./terraform/azure_sql"
+
+    # Basic Configuration
+    resource_group_name = "rg-sql-example"
+    azure_location      = "East US"
+    sql_server_name     = "sql-server-example"
+
+    # Authentication
+    administrator_login          = "sqladmin"
+    administrator_login_password = var.sql_admin_password
+
+    # Databases
+    sql_databases = [
+      {
+        name         = "app-database"
+        max_size_gb  = 100
+        sku_name     = "S2"
+      }
+    ]
+
+    # Security
+    firewall_rules = [
+      {
+        name             = "AllowAzureServices"
+        start_ip_address = "0.0.0.0"
+        end_ip_address   = "0.0.0.0"
+      }
+    ]
+
+    tags = {
+      Environment = "Production"
+      Project     = "MyApp"
+    }
+  }
+  ```
+
+  ### Advanced Usage
+
+  ```hcl
+  module "azure_sql" {
+    source = "./terraform/azure_sql"
+
+    # Configuration
+    resource_group_name = "rg-sql-advanced"
+    azure_location      = "East US"
+    sql_server_name     = "sql-server-advanced"
+
+    # Authentication
+    administrator_login          = "sqladmin"
+    administrator_login_password = var.sql_admin_password
+
+    # Azure AD Authentication
+    azure_ad_admin = {
+      login_username = "admin@company.com"
+      object_id      = "12345678-1234-1234-1234-123456789012"
+      tenant_id      = var.azure_tenant_id
+    }
+
+    # Multiple Databases with different configurations
+    sql_databases = [
+      {
+        name                        = "production-app"
+        max_size_gb                = 500
+        sku_name                   = "S4"
+        zone_redundant             = true
+      },
+      {
+        name                        = "analytics-db"
+        max_size_gb                = 1000
+        sku_name                   = "P2"
+        zone_redundant             = true
+      },
+      {
+        name                        = "staging-app"
+        max_size_gb                = 100
+        sku_name                   = "S2"
+        zone_redundant             = false
+      }
+    ]
+
+    # Security Configuration
+    firewall_rules = [
+      {
+        name             = "AllowAzureServices"
+        start_ip_address = "0.0.0.0"
+        end_ip_address   = "0.0.0.0"
+      },
+      {
+        name             = "AllowOfficeNetwork"
+        start_ip_address = "203.0.113.0"
+        end_ip_address   = "203.0.113.255"
+      }
+    ]
+
+    # Advanced Threat Protection
+    enable_threat_detection = true
+    threat_detection_policy = {
+      retention_days       = 90
+      email_account_admins = true
+      email_addresses     = ["dba@company.com", "security@company.com"]
+    }
+
+    # Backup Configuration
+    backup_policy = {
+      retention_days               = 35
+      geo_redundant_backup_enabled = true
+      geo_backup_enabled          = true
+    }
+
+    # Monitoring
+    enable_monitoring           = true
+    log_analytics_workspace_id  = var.log_analytics_workspace_id
+    storage_account_id         = var.storage_account_id
+
+    tags = {
+      Environment   = "Production"
+      Project       = "Enterprise-App"
+      Owner         = "DBA-Team"
+      CostCenter    = "IT-Infrastructure"
+      Compliance    = "SOX-Required"
+    }
+  }
+  ```
+
+  ## Environment-Specific Deployment
+
+  The module supports environment-specific configurations:
+
+  ```bash
+  # Development
+  ./scripts/deploy.sh dev plan
+  ./scripts/deploy.sh dev apply
+
+  # Production
+  ./scripts/deploy.sh prod plan
+  ./scripts/deploy.sh prod apply
+  ```
+
+  Or using PowerShell:
+
+  ```powershell
+  # Development
+  .\scripts\deploy.ps1 -Environment dev -Action plan
+  .\scripts\deploy.ps1 -Environment dev -Action apply
+
+  # Production
+  .\scripts\deploy.ps1 -Environment prod -Action plan
+  .\scripts\deploy.ps1 -Environment prod -Action apply
+  ```
+
+  ## Security Considerations
+
+  - **Passwords**: Use Azure Key Vault or secure environment variables for passwords
+  - **Network Access**: Configure firewall rules to restrict access to trusted networks
+  - **Azure AD**: Enable Azure AD authentication for enhanced security
+  - **Encryption**: Transparent Data Encryption (TDE) is enabled by default
+  - **Auditing**: Enable auditing and threat detection for compliance
+  - **Backup**: Configure geo-redundant backups for disaster recovery
+
+  ## Monitoring and Alerting
+
+  The module provides comprehensive monitoring through:
+  - Azure Monitor diagnostic settings
+  - Log Analytics workspace integration
+  - Performance metrics and logs
+  - Security alert policies
+  - Audit log retention
+
+  ## Cost Optimization
+
+  - Choose appropriate SKU sizes based on workload requirements
+  - Use zone redundancy only for production databases
+  - Configure auto-pause for development databases (serverless SKUs)
+  - Monitor and adjust backup retention policies
+  - Use tags for cost allocation and tracking
+
+  {{ .Requirements }}
+
+  {{ .Providers }}
+
+  {{ .Modules }}
+
+  {{ .Resources }}
+
+  {{ .Inputs }}
+
+  {{ .Outputs }}
+
+output:
+  file: "README.md"
+  mode: inject
+  template: |-
+    <!-- BEGIN_TF_DOCS -->
+    {{ .Content }}
+    <!-- END_TF_DOCS -->
+
+sort:
+  enabled: true
+  by: name
+
+settings:
+  anchor: true
+  color: true
+  default: true
+  description: false
+  escape: true
+  hide-empty: false
+  html: true
+  indent: 2
+  lockfile: true
+  read-comments: true
+  required: true
+  sensitive: true
+  type: true

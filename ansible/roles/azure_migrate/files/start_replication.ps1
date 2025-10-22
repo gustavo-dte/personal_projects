@@ -5,21 +5,24 @@ Param(
   # Required parameters
   [Parameter(Mandatory=$true)][string]$ProjectName,
   [Parameter(Mandatory=$true)][string]$ProjectResourceGroup,
+  [Parameter(Mandatory=$true)][string]$ProjectSubscriptionId,
   [Parameter(Mandatory=$true)][string]$MachineName,
   [Parameter(Mandatory=$true)][string]$TargetResourceGroup,
+  [Parameter(Mandatory=$true)][string]$TargetSubscriptionId,
   [Parameter(Mandatory=$true)][string]$TargetNetworkId,
   [Parameter(Mandatory=$true)][string]$TargetSubnetName,
   [Parameter(Mandatory=$true)][string]$OSDiskScsiId,
 
   # Optional parameters
   [Parameter(Mandatory=$false)][string]$TargetVMName,
-  [Parameter(Mandatory=$false)][string]$SubscriptionId,
   [Parameter(Mandatory=$false)][string]$TargetVMSize = "Standard_DS2_v2",
   [Parameter(Mandatory=$false)][string]$LicenseType = "NoLicenseType",
   [Parameter(Mandatory=$false)][string]$TargetDiskType = "Standard_LRS",
   [Parameter(Mandatory=$false)][switch]$SkipOSVersionCheck,
   [Parameter(Mandatory=$false)][int]$MinWindowsBuild = 17763,
-  [Parameter(Mandatory=$false)][int]$MinRHELVersion = 8
+  [Parameter(Mandatory=$false)][int]$MinRHELVersion = 8,
+  [Parameter(Mandatory=$false)][string]$TargetRegion = "CentralUS",
+  [Parameter(Mandatory=$false)][string]$ScenarioChoice = "agentlessVMware"
 )
 
 # Import common utilities
@@ -33,11 +36,12 @@ if (Test-Path $UtilsPath) {
 
 # Initialize environment and import required modules
 Initialize-PowerShellEnvironment
-Import-AzureModules -RequiredModules @('Az.Accounts', 'Az.Migrate', 'Az.Resources', 'Az.Network')
+Import-AzureModules -RequiredModules @('Az.Accounts', 'Az.Migrate', 'Az.Resources', 'Az.Network', 'Az.Storage', 'Az.Compute')
 Test-RequiredCmdlets -RequiredCmdlets @('New-AzMigrateServerReplication', 'Get-AzMigrateDiscoveredServer', 'New-AzMigrateDiskMapping')
 
 # Set Azure context
-$SubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
+Write-Output "INFO: Setting Azure context to subscription: $TargetSubscriptionId"
+Set-AzureContext -SubscriptionId $TargetSubscriptionId
 
 # Get target resource group and virtual network using common utilities
 $targetRg = Get-AzureResource -ResourceType 'ResourceGroup' -ResourceName $TargetResourceGroup -Required
@@ -54,6 +58,10 @@ Write-Output "INFO: Target VM Name: $TargetVMName"
 Write-Output "INFO: Target Resource Group: $TargetResourceGroup"
 Write-Output "INFO: Target Network ID: $TargetNetworkId"
 Write-Output "INFO: Target Subnet: $TargetSubnetName"
+
+# Set Azure context
+Write-Output "INFO: Setting Azure context to subscription: $ProjectSubscriptionId"
+Set-AzureContext -SubscriptionId $ProjectSubscriptionId
 
 # Retrieve discovered server in the Migrate project (DisplayName is the VM name shown by Azure Migrate)
 $DiscoveredServer = Get-AzMigrateDiscoveredServer -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup -DisplayName $MachineName | Select-Object -First 1
@@ -176,7 +184,7 @@ Write-Output "INFO: Starting replication with parameters:"
 Write-Output "  - Source VM: $MachineName"
 Write-Output "  - Target VM Name: $TargetVMName"
 Write-Output "  - Target Resource Group ID: $targetRgId"
-Write-Output "  - Target Network ID: $targetVnetId"
+Write-Output "  - Target Network ID: $TargetNetworkId"
 Write-Output "  - Target Subnet: $TargetSubnetName"
 Write-Output "  - Target VM Size: $TargetVMSize"
 Write-Output "  - License Type: $LicenseType"
@@ -189,7 +197,7 @@ $params = @{
   DiskToInclude         = $DisksToInclude
   LicenseType           = $LicenseType
   TargetResourceGroupId = $targetRgId
-  TargetNetworkId       = $targetVnetId
+  TargetNetworkId       = $TargetNetworkId
   TargetSubnetName      = $TargetSubnetName
   TargetVMName          = $TargetVMName
 }
@@ -197,11 +205,90 @@ $params = @{
 # Add optional parameters only if they have values
 if ($TargetVMSize) { $params['TargetVMSize'] = $TargetVMSize }
 
-try {
-  $result = New-AzMigrateServerReplication @params
-  $result | ConvertTo-Json -Depth 6
+# Results tracking
+$Results = @{
+  VMName = $MachineName
+  TargetVMName = $TargetVMName
+  Success = $false
+  Error = $null
+  ReplicationId = $null
+  StartTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 }
-catch {
-  Write-Output ("ERROR: " + ($_.Exception.Message))
+
+try {
+  Write-Output "INFO: Starting replication for VM '$MachineName'..."
+  try {
+    $result = New-AzMigrateServerReplication @params
+  } catch {
+    if ($_.Exception.Message -match "replication infrastructure is not initialized") {
+      Write-Output "ERROR: Azure Migrate replication infrastructure is not initialized in the target subscription."
+      Write-Output "INFO: Attempting to initialize replication infrastructure automatically..."
+
+      # Try to initialize replication infrastructure automatically using our custom function
+      Write-Output "INFO: Calling Initialize-AzureMigrateReplicationInfrastructure function..."
+
+      # Call the function and capture the return value properly
+      $initResult = Initialize-AzureMigrateReplicationInfrastructure `
+        -ProjectName $ProjectName `
+        -ProjectResourceGroup $ProjectResourceGroup `
+        -Scenario $ScenarioChoice `
+        -TargetRegion $TargetRegion
+
+      Write-Output $initResult
+
+      # Catch the output has the word ERROR
+      if ($initResult -contains "ERROR") {
+        Write-Output "ERROR: Initialize-AzureMigrateReplicationInfrastructure failed."
+        Write-Output $initResult
+        throw "Replication infrastructure not initialized. Please initialize it first."
+      }
+
+      if ($initResult) {
+        Write-Output "INFO: Retrying replication after infrastructure initialization..."
+        $result = New-AzMigrateServerReplication @params
+      } else {
+        Write-Output "INFO: Automatic initialization failed. Please review the output above."
+        throw "Replication infrastructure not initialized. Please initialize it first."
+      }
+    } else {
+      throw
+    }
+  }
+
+  # Extract replication ID from result
+  $replicationId = $null
+  if ($result -and $result.Id) {
+    $replicationId = $result.Id
+  }
+
+  $Results.Success = $true
+  $Results.ReplicationId = $replicationId
+
+  Write-Output "SUCCESS: Replication started successfully for VM '$MachineName'"
+  if ($replicationId) {
+    Write-Output "INFO: Replication ID: $replicationId"
+  }
+
+  # Output result details
+  Write-Output "INFO: Replication result:"
+  $result | ConvertTo-Json -Depth 6
+
+} catch {
+  $errorMessage = $_.Exception.Message
+  $Results.Success = $false
+  $Results.Error = $errorMessage
+
+  Write-Output "ERROR: Failed to start replication for VM '$MachineName': $errorMessage"
   exit 1
+} finally {
+  # Output results as JSON for Ansible processing
+  $JsonOutput = $Results | ConvertTo-Json -Depth 3
+
+  # Write JSON to a file for Ansible to read
+  $OutputFile = "start_replication_result.json"
+  $JsonOutput | Out-File -FilePath $OutputFile -Encoding UTF8
+
+  # Also output to console for debugging
+  Write-Output "JSON output written to: $OutputFile"
+  Write-Output $JsonOutput
 }

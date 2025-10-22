@@ -15,6 +15,15 @@ on:
         description: "Type 'CONFIRM' to proceed with cutover (irreversible operation)"
         required: true
         type: string
+      dry_run:
+        description: "Dry run"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   id-token: write
@@ -22,9 +31,16 @@ permissions:
 
 jobs:
   migration-cutover:
-    runs-on: [self-hosted, vm-migrate, container]
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - container
+      - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,12 +60,14 @@ jobs:
           manifest: ${{ inputs.manifest }}
 
       - name: Setup Ansible and Azure SDKs
+        if: ${{ !inputs.dry_run }}
         uses: ./.github/actions/prereq
         with:
           ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
           collections_requirements: ansible/requirements.yml
 
       - name: Azure Login
+        if: ${{ !inputs.dry_run }}
         uses: ./.github/actions/azure-login
         with:
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
@@ -64,12 +82,18 @@ jobs:
           echo ""
           echo "Configuration validated"
           echo "Using manifest: ${{ inputs.manifest }}"
-          echo "Starting migration cutover..."
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🚀 Starting migration cutover..."
+          fi
 
       - name: Run playbook - migration cutover
         run: |
           ansible-playbook ansible/playbooks/migration-cutover.yml \
-            -e "manifest=${{ inputs.manifest }}"
+            -e "manifest=${{ inputs.manifest }}" \
+            -e "dry_run=${{ inputs.dry_run }}"
 
       - name: Upload Logs
         if: always()

@@ -24,13 +24,20 @@ Import-AzureModules -RequiredModules @('Az.Accounts', 'Az.Migrate')
 Test-RequiredCmdlets -RequiredCmdlets @('Get-AzMigrateServerReplication')
 
 # Set Azure context
+Write-Output "INFO: Setting Azure context to subscription: $SubscriptionId"
 $SubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
 
-# Parse VM names from JSON
+# Parse VM name from JSON (expecting a single VM per call)
 try {
   $VMNames = $VMNamesJson | ConvertFrom-Json
-  if (-not $VMNames -or $VMNames.Count -eq 0) {
-    Write-Output "ERROR: No VM names provided in manifest."
+  $VMName = $null
+  if ($VMNames -is [System.Array]) {
+    if ($VMNames.Count -gt 0) { $VMName = $VMNames[0] }
+  } else {
+    $VMName = [string]$VMNames
+  }
+  if (-not $VMName) {
+    Write-Output "ERROR: No VM name provided."
     exit 1
   }
 } catch {
@@ -38,36 +45,29 @@ try {
   exit 1
 }
 
-Write-Output "INFO: Checking Azure Migrate replication status for $($VMNames.Count) VMs..."
+Write-Output "INFO: Checking Azure Migrate replication status for VM '$VMName'..."
 
-# Results tracking
-$Results = @()
-$VmsAboveThreshold = 0
-$VmsBelowThreshold = 0
-$VmsWithErrors = 0
+# Result tracking (single object)
+$Result = $null
 
-# Check replication status for each VM
-foreach ($VMName in $VMNames) {
-  Write-Output "INFO: Checking replication status for VM '$VMName'..."
+try {
+  # Get replication status for the VM
+  $ReplicationStatus = Get-AzMigrateServerReplication -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup -MachineName $VMName -ErrorAction Stop
 
-  try {
-    # Get replication status for the VM
-    $ReplicationStatus = Get-AzMigrateServerReplication -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup -MachineName $VMName -ErrorAction SilentlyContinue
+  Write-Output "INFO: Replication status for VM '$VMName':"
+  Write-Output $ReplicationStatus
 
-    if (-not $ReplicationStatus) {
-      Write-Output "WARNING: No replication status found for VM '$VMName' in project '$ProjectName'"
-      $Results += @{
-        VMName = $VMName
-        ReplicationStatus = "Not Found"
-        ReplicationPercentage = 0
-        MeetsThreshold = $false
-        Error = "No replication status found"
-      }
-      $VmsWithErrors++
-      continue
+  if (-not $ReplicationStatus) {
+    Write-Output "INFO: No replication found for VM '$VMName' in project '$ProjectName' - treating as 0% replication"
+    $Result = @{
+      VMName = $VMName
+      ReplicationStatus = "Not Found"
+      ReplicationPercentage = 0
+      MeetsThreshold = $false
+      Error = $null
     }
-
-    # Extract replication percentage - try different property names based on Az.Migrate version
+  } else {
+    # Extract replication percentage/state - try different property names based on Az.Migrate version
     $ReplicationPercentage = 0
     $ReplicationState = "Unknown"
 
@@ -82,15 +82,11 @@ foreach ($VMName in $VMNames) {
     } elseif ($ReplicationStatus.ReplicationPercentage) {
       $ReplicationPercentage = $ReplicationStatus.ReplicationPercentage
       $ReplicationState = $ReplicationStatus.ReplicationState
-    } else {
-      # Try to extract from properties if available
-      if ($ReplicationStatus.Properties -and $ReplicationStatus.Properties.MigrationState) {
-        $ReplicationState = $ReplicationStatus.Properties.MigrationState.MigrationState
-        $ReplicationPercentage = $ReplicationStatus.Properties.MigrationState.PercentComplete
-      }
+    } elseif ($ReplicationStatus.Properties -and $ReplicationStatus.Properties.MigrationState) {
+      $ReplicationState = $ReplicationStatus.Properties.MigrationState.MigrationState
+      $ReplicationPercentage = $ReplicationStatus.Properties.MigrationState.PercentComplete
     }
 
-    # Ensure percentage is a number
     if ($ReplicationPercentage -is [string]) {
       $ReplicationPercentage = [int]($ReplicationPercentage -replace '%', '')
     }
@@ -99,41 +95,57 @@ foreach ($VMName in $VMNames) {
 
     if ($MeetsThreshold) {
       Write-Output "SUCCESS: VM '$VMName' meets threshold with $ReplicationPercentage% replication (>= $ReplicationThreshold%)"
-      $VmsAboveThreshold++
     } else {
       Write-Output "INFO: VM '$VMName' below threshold with $ReplicationPercentage% replication (< $ReplicationThreshold%)"
-      $VmsBelowThreshold++
     }
 
-    $Results += @{
+    $Result = @{
       VMName = $VMName
       ReplicationStatus = $ReplicationState
       ReplicationPercentage = $ReplicationPercentage
       MeetsThreshold = $MeetsThreshold
       Error = $null
     }
+  }
 
-  } catch {
-    Write-Output "ERROR: Failed to get replication status for VM '$VMName': $($_.Exception.Message)"
-    $Results += @{
+} catch {
+  $ErrorMessage = $_.Exception.Message
+
+  if ($ErrorMessage -match "not found|does not exist|not available|service not found|resource not found|solution not found" -or
+      $_.Exception.GetType().Name -match "ResourceNotFound|ServiceNotFound") {
+    Write-Output "INFO: No replication found for VM '$VMName' - treating as 0% replication"
+    $Result = @{
+      VMName = $VMName
+      ReplicationStatus = "Not Found"
+      ReplicationPercentage = 0
+      MeetsThreshold = $false
+      Error = $null
+    }
+  } else {
+    Write-Output "ERROR: Failed to get replication status for VM '$VMName': $ErrorMessage"
+    $Result = @{
       VMName = $VMName
       ReplicationStatus = "Error"
       ReplicationPercentage = 0
       MeetsThreshold = $false
-      Error = $_.Exception.Message
+      Error = $ErrorMessage
     }
-    $VmsWithErrors++
   }
 }
 
-# Output summary
+# Output summary (single VM)
 Write-Output ""
-Write-Output "=== AZURE MIGRATE REPLICATION STATUS SUMMARY ==="
-Write-Output "Total VMs checked: $($VMNames.Count)"
-Write-Output "VMs above threshold ($ReplicationThreshold%): $VmsAboveThreshold"
-Write-Output "VMs below threshold ($ReplicationThreshold%): $VmsBelowThreshold"
-Write-Output "VMs with errors: $VmsWithErrors"
+Write-Output "=== AZURE MIGRATE REPLICATION STATUS ==="
+Write-Output "VM checked: $VMName"
 Write-Output ""
 
-# Output detailed results as JSON for Ansible processing
-$Results | ConvertTo-Json -Depth 3
+# Output detailed result as JSON for Ansible processing (single object)
+$JsonOutput = $Result | ConvertTo-Json -Depth 3
+
+# Write JSON to a file for Ansible to read
+$OutputFile = "get_replication_status_result.json"
+$JsonOutput | Out-File -FilePath $OutputFile -Encoding UTF8
+
+# Also output to console for debugging
+Write-Output "JSON output written to: $OutputFile"
+Write-Output $JsonOutput

@@ -13,6 +13,37 @@ function Initialize-PowerShellEnvironment {
     }
 }
 
+# Resolve the current principal's AAD objectId for role queries
+function Get-CurrentPrincipalObjectId {
+    try {
+        $ctx = Get-AzContext -ErrorAction Stop
+        $accountType = $ctx.Account.Type
+        $accountId = $ctx.Account.Id
+
+        # Preferred: explicit username if provided by environment
+        if ($env:AZURE_USERNAME) {
+            $user = Get-AzADUser -UserPrincipalName $env:AZURE_USERNAME -ErrorAction SilentlyContinue
+            if ($user) { return $user.Id }
+        }
+
+        if ($accountType -eq 'User') {
+            $user = Get-AzADUser -UserPrincipalName $accountId -ErrorAction SilentlyContinue
+            if ($user) { return $user.Id }
+            $userByMail = Get-AzADUser -Mail $accountId -ErrorAction SilentlyContinue
+            if ($userByMail) { return $userByMail.Id }
+        } elseif ($accountType -eq 'ServicePrincipal' -or $accountType -eq 'ManagedService') {
+            # For SP contexts, Account.Id is typically the application (client) ID
+            $sp = Get-AzADServicePrincipal -ApplicationId $accountId -ErrorAction SilentlyContinue
+            if ($sp) { return $sp.Id }
+            $spByObj = Get-AzADServicePrincipal -ObjectId $accountId -ErrorAction SilentlyContinue
+            if ($spByObj) { return $spByObj.Id }
+        }
+    } catch {
+        # Fall through to null
+    }
+    return $null
+}
+
 # Import required Azure PowerShell modules with standardized error handling
 function Import-AzureModules {
     param(
@@ -118,5 +149,39 @@ function Get-AzureResource {
     }
 }
 
-# Export functions for use in other scripts
-Export-ModuleMember -Function Initialize-PowerShellEnvironment, Import-AzureModules, Test-RequiredCmdlets, Set-AzureContext, Get-AzureResource
+# Initialize Azure Migrate replication infrastructure
+function Initialize-AzureMigrateReplicationInfrastructure {
+    param(
+        [string]$ProjectName,
+        [string]$ProjectResourceGroup,
+        [string]$ScenarioChoice = "agentlessVMware",
+        [string]$TargetRegion = "CentralUS"
+    )
+
+    try {
+        Write-Output "INFO: Attempting to initialize Azure Migrate replication infrastructure...`n"
+        Write-Output "INFO: Project Name: $ProjectName`n"
+
+        # Check if Initialize-AzMigrateReplicationInfrastructure cmdlet exists
+        if (Get-Command -Name Initialize-AzMigrateReplicationInfrastructure -ErrorAction SilentlyContinue) {
+            Write-Output "INFO: Initialize-AzMigrateReplicationInfrastructure cmdlet found, attempting initialization...`n"
+
+            Write-Output "INFO: Initializing replication infrastructure...`n"
+            $initResult = Initialize-AzMigrateReplicationInfrastructure `
+                -ResourceGroupName $ProjectResourceGroup `
+                -ProjectName $ProjectName `
+                -Scenario $ScenarioChoice `
+                -TargetRegion $TargetRegion
+
+            Write-Output "SUCCESS: Replication infrastructure initialized successfully`n"
+            Write-Output "INFO: Initialization result: $initResult`n"
+        } else {
+            Write-Output "WARNING: Initialize-AzMigrateReplicationInfrastructure cmdlet not available`n"
+        }
+    }
+    catch {
+        Write-Output "ERROR: Failed to initialize replication infrastructure: $($_.Exception.Message)`n"
+        Write-Output "INFO: Exception details: $($_.Exception)`n"
+        Write-Output "INFO: Please initialize replication infrastructure manually in Azure Portal`n"
+    }
+}

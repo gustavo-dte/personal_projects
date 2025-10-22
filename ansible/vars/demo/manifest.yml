@@ -1,0 +1,79 @@
+## Manifest for migration replication
+
+# Global defaults
+app_name: testApp
+environment: dev
+target_gh_repo: dteenergy/cloud-platform-isolation-zone-subscription-corpapps
+azure_migrate_project_name: azure-migrate-automation
+azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
+target_subscription_id: c5818799-81a5-4132-915b-6197147270c9
+target_resource_group: rg-procas-dgray-import-demo-ue
+os_disk_scsi_id: scsi0:0
+
+# Azure Backup defaults
+recovery_vault_name: cloud-platform-prod-cu-backup-vault
+backup_policy_name: DefaultPolicy
+replication_threshold: 80
+
+# Azure VMSS defaults
+vmss_enabled: true
+vmss_config:
+  health_probe_settings:
+    protocol: http
+    port: 80
+    requestPath: /health
+  automatic_instance_repair:
+    enabled: true
+    grace_period: PT30M
+    repair_action: Restart
+
+# Network configuration
+target_network_id: /subscriptions/c5818799-81a5-4132-915b-6197147270c9/resourceGroups/rg-procas-dgray-import-demo-ue/providers/Microsoft.Network/virtualNetworks/vnet-procas-dgray-import-demo-ue
+target_subnet_name: /subscriptions/c5818799-81a5-4132-915b-6197147270c9/resourceGroups/rg-procas-dgray-import-demo-ue/providers/Microsoft.Network/virtualNetworks/vnet-procas-dgray-import-demo-ue/subnets/main
+
+# VM configuration
+target_vm_size: Standard_D4s_v5
+target_license_type: NoLicenseType
+target_disk_type: Standard_LRS
+
+# List of VMs to replicate
+vms:
+  - name: dca-dev8675309
+    description: "Server created to test migration pipeline"
+    target_vm_size: Standard_D2s_v5
+    target_license_type: Windows_Server
+    target_disk_type: Standard_LRS
+    portfolio: Test-Portfolio
+    tier: 4
+    env: dev
+    app_name: test-app
+    # Optional per-VM NSG configuration (either provide existing NSG id, or enable create with rules)
+    network_security_group_id: null
+    enable_nsg: true
+    nsg_rules:
+      allow-rdp:
+        priority: 1000
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        destination_port_range: "3389"
+        source_address_prefixes: ["10.0.0.0/8"]
+    # Optional per-VM VMSS overrides
+    vmss_config:
+      health_probe_settings:
+        protocol: tcp
+        port: 3389
+      automatic_instance_repair:
+        enabled: true
+        grace_period: PT10M
+        repair_action: Restart
+
+  - name: dca-dev424242
+    description: "Server created to test migration pipeline"
+    target_vm_size: Standard_D2s_v5
+    target_license_type: Windows_Server
+    target_disk_type: Standard_LRS
+    portfolio: Test-Portfolio
+    tier: 4
+    env: dev
+    app_name: test-app

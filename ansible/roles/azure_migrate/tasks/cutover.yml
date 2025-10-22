@@ -1,6 +1,11 @@
 ---
 # Perform migration cutover using Azure Migrate
 # Completes migration by creating target VMs in Azure
+# This task is designed to be called in a loop over VMs from a manifest
+
+- name: Skip if dry run
+  ansible.builtin.meta: end_play
+  when: dry_run | bool
 
 - name: Verify prerequisites for cutover
   ansible.builtin.include_role:

@@ -9,9 +9,11 @@ on:
       resource_group:
         description: "Azure Resource Group name to list resources from"
         required: true
+        type: string
       subscription_id:
-        description: "Override Azure Subscription ID (optional)"
-        required: false
+        description: "Azure Migrate Subscription ID"
+        required: true
+        type: string
       dry_run:
         description: "Dry run"
         required: false
@@ -29,7 +31,6 @@ jobs:
       - self-hosted
       - linux
       - non-prod
-      - container
       - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
@@ -38,20 +39,14 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🔧 Setup Ansible and Azure SDKs
-        if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/prereq
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
         with:
-          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
-          collections_requirements: ansible/requirements.yml
-
-      - name: 🔐 Azure Login
-        if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/azure-login
-        with:
-          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
-          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: false
 
       - name: 🔄 Set subscription (optional override)
         if: ${{ inputs.subscription_id != '' && !inputs.dry_run }}
@@ -68,12 +63,20 @@ jobs:
             echo "📋 Listing Azure Migrate projects..."
           fi
 
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "resource_group": "${{ inputs.resource_group }}",
+            "subscription_id": "${{ inputs.subscription_id }}",
+            "dry_run": ${{ inputs.dry_run }}
+          }
+          JSON
+
       - name: 🎬 Run playbook - list migrate projects
         run: |
           ansible-playbook ansible/playbooks/list-migrate-projects.yml \
-            -e "resource_group=${{ inputs.resource_group }}" \
-            -e "subscription_id=${{ inputs.subscription_id }}" \
-            -e "dry_run=${{ inputs.dry_run }}"
+            -e @ansible_extra_vars.json
 
       - name: 📤 Upload Logs
         if: always()

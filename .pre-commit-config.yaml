@@ -35,6 +35,7 @@ repos:
       - id: terraform_tflint
         args:
           - --hook-config=--delegate-chdir
+          - --args=--chdir=ansible/roles/terraform/files/modules/terraform-azurerm-imported-vm-pattern
       - id: terraform_docs
         args:
-          - --args=--config=terraform/.terraform-docs.yml
+          - --args=--config=ansible/roles/terraform/files/modules/terraform-azurerm-imported-vm-pattern/.terraform-docs.yml

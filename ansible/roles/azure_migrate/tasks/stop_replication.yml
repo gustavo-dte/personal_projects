@@ -1,0 +1,256 @@
+---
+# Stop migration replication using PowerShell cmdlets
+
+- name: Verify prerequisites for stop_replication
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: azure_verify_prerequisites
+
+- name: Assert additional required variables for stop_replication
+  ansible.builtin.assert:
+    that:
+      - (azure_migrate_project_name | default('')) | length > 0
+      - (azure_migrate_project_resource_group | default('')) | length > 0
+      - (azure_migrate_subscription_id | default('')) | length > 0
+      - (vm_name | default('')) | length > 0
+    fail_msg: |
+      Required variables missing. Please provide:
+      - azure_migrate_project_name: {{ azure_migrate_project_name | default('NOT SET') }}
+      - azure_migrate_project_resource_group: {{ azure_migrate_project_resource_group | default('NOT SET') }}
+      - azure_migrate_subscription_id: {{ azure_migrate_subscription_id | default('NOT SET') }}
+      - vm_name: {{ vm_name | default('NOT SET') }}
+
+- name: Check if replication exists for VM before stopping
+  block:
+    - name: Check replication status for single VM
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/get_replication_status.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -VMNamesJson '["{{ vm_name }}"]'
+        -ReplicationThreshold 0
+        -SubscriptionId {{ azure_migrate_subscription_id | default('') }}
+      register: existing_replication_check
+      changed_when: false
+      when: not (dry_run | default(false))
+
+    - name: Mock replication status check for dry run
+      ansible.builtin.set_fact:
+        existing_replication_check:
+          stdout: 'Some PowerShell output here\n[{"VMName":"{{ vm_name }}","ReplicationStatus":"In Progress","ReplicationPercentage":85,"MeetsThreshold":true}]'
+      when: dry_run | default(false)
+
+    - name: Debug PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Raw PowerShell output:
+          {{ existing_replication_check.stdout }}
+
+    - name: Read JSON results from file
+      ansible.builtin.slurp:
+        src: get_replication_status_result.json
+      register: json_file_content
+      when: not (dry_run | default(false))
+
+    - name: Parse JSON content and set replication data
+      ansible.builtin.set_fact:
+        replication_json: >-
+          {{
+            (json_file_content.content | b64decode | from_json)
+            if not (dry_run | default(false))
+            else {
+              'VMName': vm_name,
+              'ReplicationStatus': 'In Progress',
+              'ReplicationPercentage': 85,
+              'MeetsThreshold': true
+            }
+          }}
+
+    - name: Debug JSON parsing results
+      ansible.builtin.debug:
+        msg: |
+          JSON Parsing Debug:
+          - Source: {{ 'JSON file' if not (dry_run | default(false)) else 'Mock data' }}
+          - replication_json type: {{ replication_json | type_debug }}
+          - VM Name: {{ replication_json.VMName | default('N/A') }}
+          - Replication Status: {{ replication_json.ReplicationStatus | default('N/A') }}
+          - Error Message: {{ replication_json.Error | default('N/A') }}
+
+    - name: Set replication status flags
+      ansible.builtin.set_fact:
+        existing_replication_results: "{{ replication_json }}"
+        vm_has_active_replication: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus in ['In Progress', 'Initial Replication', 'Replicating'] }}"
+        replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
+        replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
+
+    - name: Handle "Solution not found" error
+      ansible.builtin.fail:
+        msg: |
+          ❌ Azure Migrate solution not found for VM '{{ vm_name }}'
+
+          This error typically means:
+          1. The Azure Migrate project '{{ azure_migrate_project_name }}' doesn't exist
+          2. The VM '{{ vm_name }}' hasn't been discovered/assessed yet
+          3. The project name or resource group is incorrect
+          4. Insufficient permissions to access the Azure Migrate project
+
+          Troubleshooting steps:
+          - Verify the Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check the project resource group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+          - Verify the Azure Migrate project subscription ID: {{ azure_migrate_subscription_id }}
+          - Ensure the VM has been discovered and assessed in Azure Migrate
+          - Verify you have proper permissions on the Azure Migrate subscription
+          - Check if the VM name matches exactly (case-sensitive)
+
+          Error details: {{ replication_error_message }}
+      when: replication_error and "Solution not found" in replication_error_message
+
+  rescue:
+    - name: Fail when replication status check fails
+      ansible.builtin.fail:
+        msg: |
+          Failed to check replication status for VM '{{ vm_name }}'.
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          To prevent stopping non-existent replication, the operation has been stopped.
+
+- name: Stop replication using PowerShell file
+  block:
+    - name: Run stop_replication.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/stop_replication.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+        -MachineName {{ vm_name }}
+      register: stop_replication_output
+      changed_when: stop_replication_output.rc == 0
+      when: not (dry_run | default(false))
+
+    - name: Read JSON results from stop_replication.ps1
+      ansible.builtin.slurp:
+        src: stop_replication_result.json
+      register: stop_replication_json_file
+      when: not (dry_run | default(false))
+
+    - name: Parse stop replication JSON content
+      ansible.builtin.set_fact:
+        stop_replication_json: "{{ stop_replication_json_file.content | b64decode | from_json if not (dry_run | default(false)) else {'VMName': vm_name, 'Success': true, 'Error': null, 'ReplicationId': 'mock-replication-id', 'StopTime': '2024-01-01 00:00:00'} }}"
+      when: not (dry_run | default(false))
+
+    - name: Debug stop replication JSON parsing results
+      ansible.builtin.debug:
+        msg: |
+          Stop Replication JSON Parsing Debug:
+          - Source: {{ 'JSON file' if not (dry_run | default(false)) else 'Mock data' }}
+          - stop_replication_json type: {{ stop_replication_json | type_debug }}
+          - VM Name: {{ stop_replication_json.VMName | default('N/A') }}
+          - Success: {{ stop_replication_json.Success | default('N/A') }}
+          - Error Message: {{ stop_replication_json.Error | default('N/A') }}
+          - Replication ID: {{ stop_replication_json.ReplicationId | default('N/A') }}
+
+    - name: Mock replication stop for dry run
+      ansible.builtin.set_fact:
+        stop_replication_output:
+          stdout: |
+            INFO: [DRY RUN] Would stop replication for VM {{ vm_name }}
+            Project: {{ azure_migrate_project_name }}
+            Resource Group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+          stderr: ""
+          rc: 0
+          changed: true
+        stop_replication_json:
+          VMName: "{{ vm_name }}"
+          Success: true
+          Error: null
+          ReplicationId: "mock-replication-id"
+          StopTime: "2024-01-01 00:00:00"
+      when: dry_run | default(false)
+
+  when: vm_has_active_replication
+  rescue:
+    - name: Replication stop failed
+      ansible.builtin.fail:
+        msg: |
+          ❌ Failed to stop replication for VM '{{ vm_name }}'
+          Error: {{ stop_replication_json.Error | default('Unknown error occurred') }}
+
+          This could be due to:
+          - Azure Migrate project not accessible or doesn't exist
+          - Insufficient permissions for replication operations
+          - Replication already stopped or doesn't exist
+          - Network connectivity issues
+          - Invalid project configuration parameters
+
+          Troubleshooting:
+          - Verify Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check permissions on project resource group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+          - Validate project configuration
+          - Review full output below for specific errors
+
+          Stderr: {{ stop_replication_output.stderr | default('') }}
+  always:
+    - name: Log replication stop operation (always)
+      ansible.builtin.debug:
+        msg: "Triggering log write for {{ vm_name }}"
+      vars:
+        log_prefix: "AzMigrate_StopReplication_"
+        log_title: "Stop Replication"
+        operation_output: "{{ stop_replication_output | default({'stdout': 'Operation failed before completion', 'rc': 1}) }}"
+        replication_result: "{{ stop_replication_json | default({'VMName': vm_name, 'Success': false, 'Error': 'Operation failed before completion'}) }}"
+      notify: write_operation_log
+    - name: Flush handlers to write log now
+      ansible.builtin.meta: flush_handlers
+
+- name: Set output for VM that has no active replication
+  ansible.builtin.set_fact:
+    stop_replication_output:
+      stdout: "INFO: No active replication found for '{{ vm_name }}'. Status: {{ existing_replication_results.ReplicationStatus | default('Not Found') }}. Skipping replication stop."
+      rc: 0
+      changed: false
+    stop_replication_json:
+      VMName: "{{ vm_name }}"
+      Success: true
+      Error: null
+      ReplicationId: "{{ existing_replication_results.ReplicationId | default('no-replication') }}"
+      StopTime: "{{ existing_replication_results.StopTime | default('N/A') }}"
+  when: not vm_has_active_replication
+
+- name: Display replication stop result
+  ansible.builtin.debug:
+    msg:
+      - "VM {{ vm_name }}: {{ 'No active replication found' if not vm_has_active_replication else 'Replication stopped' }}"
+      - "Changed: {{ stop_replication_output.changed | default(false) }}"
+      - "Success: {{ stop_replication_json.Success | default(false) }}"
+      - "Replication ID: {{ stop_replication_json.ReplicationId | default('N/A') }}"
+
+- name: Show detailed replication stop CLI output
+  ansible.builtin.debug:
+    var: stop_replication_output
+  when: ansible_verbosity >= 1
+
+- name: Show detailed replication stop JSON result
+  ansible.builtin.debug:
+    var: stop_replication_json
+  when: ansible_verbosity >= 1
+
+- name: Set replication stop output for main playbook
+  ansible.builtin.set_fact:
+    stop_replication_output: "{{ stop_replication_output }}"
+    stop_replication_json: "{{ stop_replication_json }}"
+
+- name: Add replication stop output to collection
+  ansible.builtin.set_fact:
+    all_stop_replication_outputs: >-
+      {{
+        all_stop_replication_outputs | default({}) | combine({
+          vm_name: {
+            'changed': stop_replication_output.changed | default(false),
+            'msg': stop_replication_output.msg | default(''),
+            'stdout': stop_replication_output.stdout | default(''),
+            'stderr': stop_replication_output.stderr | default(''),
+            'replication_json': stop_replication_json | default({})
+          }
+        })
+      }}

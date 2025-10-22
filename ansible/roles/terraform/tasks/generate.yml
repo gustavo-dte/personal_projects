@@ -1,0 +1,360 @@
+---
+# Generate Terraform configuration files for imported VMs
+
+- name: Remove existing app output directory (if any)
+  ansible.builtin.file:
+    path: "{{ terraform_output_dir }}/{{ app_name }}"
+    state: absent
+
+- name: Remove existing app root Terraform file (if any)
+  ansible.builtin.file:
+    path: "{{ terraform_output_dir }}/{{ app_name }}.tf"
+    state: absent
+
+- name: Create output directory
+  ansible.builtin.file:
+    path: "{{ terraform_output_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Compute app file basename (snake_case)
+  ansible.builtin.set_fact:
+    app_file_basename: "{{ app_name | regex_replace('([a-z0-9])([A-Z])', '\\1_\\2') | lower }}"
+
+- name: Generate target VM names for each VM in manifest
+  ansible.builtin.set_fact:
+    vms_with_target_names: "{{ (vms_with_target_names | default([])) + [
+      {
+        'name': item.name,
+        'target_vm_name': (item.name | compute_target_vm_name(item, item.target_vm_name | default(''))),
+        'description': item.description | default(''),
+        'target_vm_size': item.target_vm_size | default(target_vm_size),
+        'target_license_type': item.target_license_type | default(target_license_type),
+        'target_disk_type': item.target_disk_type | default(target_disk_type),
+        'portfolio': item.portfolio | default(portfolio),
+        'tier': item.tier | default(tier),
+        'env': item.env | default(target_environment),
+        'app_name': item.app_name | default(app_name),
+        'vmss_config': item.vmss_config | default({}),
+        'network_security_group_id': item.network_security_group_id | default(None),
+        'enable_nsg': item.enable_nsg | default(false),
+        'nsg_name': item.nsg_name | default(None),
+        'nsg_rules': item.nsg_rules | default({})
+      }
+    ] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+
+- name: Get Azure resource information for each VM
+  block:
+    - name: Get VM resource information
+      azure.azcollection.azure_rm_virtualmachine_info:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ item.target_vm_name }}"
+        subscription_id: "{{ target_subscription_id }}"
+      register: vm_info
+      loop: "{{ vms_with_target_names }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.target_vm_name }}"
+      when: not (dry_run | default(false))
+
+    # Output the raw vm_info value
+    - name: Debug VM info
+      ansible.builtin.debug:
+        msg: "{{ vm_info }}"
+
+    # Display each vm's info including os disk id and nic id
+    - name: Debug VM info
+      ansible.builtin.debug:
+        msg:
+          - "VM: {{ item.target_vm_name }}"
+          - "  os_disk_id: {{ item.ansible_facts.azure_vm.os_disk_id }}"
+          - "  nic_id: {{ item.ansible_facts.azure_vm.nic_id }}"
+      loop: "{{ vm_info.results | default([]) | selectattr('ansible_facts', 'defined') | list }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.target_vm_name }}"
+      when: not (dry_run | default(false))
+
+    - name: Get network interface information for each VM
+      azure.azcollection.azure_rm_networkinterface_info:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ item.ansible_facts.azure_vm.network_interface_names[0] }}"
+        subscription_id: "{{ target_subscription_id }}"
+      register: nic_info
+      loop: "{{ vm_info.results | default([]) | selectattr('ansible_facts', 'defined') | selectattr('ansible_facts.azure_vm.network_interface_names', 'defined') | list }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.ansible_facts.azure_vm.name | default('unknown') }}"
+      when:
+        - not (dry_run | default(false))
+        - item.ansible_facts.azure_vm.network_interface_names | length > 0
+
+    - name: Get OS disk information for each VM
+      azure.azcollection.azure_rm_manageddisk_info:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ item.ansible_facts.azure_vm.os_disk_name }}"
+        subscription_id: "{{ target_subscription_id }}"
+      register: os_disk_info
+      loop: "{{ vm_info.results | default([]) | selectattr('ansible_facts', 'defined') | list }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.ansible_facts.azure_vm.name | default('unknown') }}"
+      when: not (dry_run | default(false))
+
+    - name: Get data disk information for each VM
+      azure.azcollection.azure_rm_manageddisk_info:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ item }}"
+        subscription_id: "{{ target_subscription_id }}"
+      register: data_disk_info
+      loop: "{{ vm_info.results | default([]) | selectattr('ansible_facts', 'defined') | map('ansible_facts.azure_vm.data_disk_names') | flatten }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item }}"
+      when: not (dry_run | default(false))
+
+    # NIC and disk IDs are sourced from Azure facts gathered above
+
+    # No mock Azure lookups here; dry-run mode skips Azure calls entirely
+
+    - name: Debug Azure VM facts (name, id, NIC names, OS disk)
+      ansible.builtin.debug:
+        msg:
+          - "VM: {{ item.ansible_facts.azure_vm.name | default('n/a') }}"
+          - "  id: {{ item.ansible_facts.azure_vm.id | default('n/a') }}"
+          - "  nic_names: {{ item.ansible_facts.azure_vm.network_interface_names | default([]) }}"
+          - "  os_disk_name: {{ item.ansible_facts.azure_vm.os_disk_name | default('n/a') }}"
+      loop: "{{ vm_info.results | default([]) | selectattr('ansible_facts', 'defined') | list }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.ansible_facts.azure_vm.name | default('unknown') }}"
+      when: not (dry_run | default(false))
+
+    - name: Debug NIC info summary (name, id)
+      ansible.builtin.debug:
+        msg:
+          - "NIC: {{ item.ansible_facts.azure_networkinterface.name | default('n/a') }}"
+          - "  id: {{ item.ansible_facts.azure_networkinterface.id | default('n/a') }}"
+      loop: "{{ nic_info.results | default([]) | selectattr('ansible_facts', 'defined') | list }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.ansible_facts.azure_networkinterface.name | default('unknown') }}"
+      when: not (dry_run | default(false))
+
+    - name: Debug OS disk info summary (name, id)
+      ansible.builtin.debug:
+        msg:
+          - "OS Disk: {{ item.ansible_facts.azure_managed_disk.name | default('n/a') }}"
+          - "  id: {{ item.ansible_facts.azure_managed_disk.id | default('n/a') }}"
+      loop: "{{ os_disk_info.results | default([]) | selectattr('ansible_facts', 'defined') | list }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.ansible_facts.azure_managed_disk.name | default('unknown') }}"
+      when: not (dry_run | default(false))
+
+    - name: Debug data disk info summary (name, id, create_option)
+      ansible.builtin.debug:
+        msg:
+          - "Data Disk: {{ item.ansible_facts.azure_managed_disk.name | default('n/a') }}"
+          - "  id: {{ item.ansible_facts.azure_managed_disk.id | default('n/a') }}"
+          - "  create_option: {{ item.ansible_facts.azure_managed_disk.create_option | default('n/a') }}"
+          - "  disk_size_gb: {{ item.ansible_facts.azure_managed_disk.disk_size_gb | default('n/a') }}"
+          - "  storage_account_type: {{ item.ansible_facts.azure_managed_disk.storage_account_type | default('n/a') }}"
+          - "  zone: {{ item.ansible_facts.azure_managed_disk.zone | default('n/a') }}"
+      loop: "{{ data_disk_info.results | default([]) | selectattr('ansible_facts', 'defined') | list }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.ansible_facts.azure_managed_disk.name | default('unknown') }}"
+      when: not (dry_run | default(false))
+
+  rescue:
+    - name: Handle Azure resource lookup failure
+      ansible.builtin.fail:
+        msg: |
+          Failed to get Azure resource information for VMs.
+          This could be due to:
+          - VMs not existing in the target resource group (expected before migration)
+          - Insufficient permissions to read Azure resources
+          - Network connectivity issues
+
+          For generating Terraform before migration, use dry_run mode:
+          ansible-playbook generate-terraform.yml -e "manifest=phase_1" -e "dry_run=true"
+
+
+
+- name: Build comprehensive VM data with resource IDs
+  ansible.builtin.set_fact:
+    vms_with_resource_ids: "{{ vms_with_resource_ids | default([]) + [vm_data] }}"
+  loop: "{{ vms_with_target_names }}"
+  loop_control:
+    loop_var: vm
+    label: "{{ vm.target_vm_name }}"
+  vars:
+    matched_vm_candidates: "{{ (vm_info.results | default([])
+      | selectattr('vms', 'defined')
+      | map(attribute='vms') | flatten
+      | selectattr('name', 'defined')
+      | selectattr('name', 'equalto', vm.target_vm_name)
+      | list) if not (dry_run | default(false)) else [] }}"
+    azure_vm: "{{ (matched_vm_candidates[0] | default({})) if (matched_vm_candidates | length) > 0 else {} }}"
+    vm_id_from_azure: "{{ azure_vm.id | default('', true) }}"
+    nic_name_from_azure: "{{ (azure_vm.network_interface_names | default([]) | length > 0) | ternary(azure_vm.network_interface_names[0], '') }}"
+    os_disk_name_from_azure: "{{ azure_vm.os_disk.name | default('', true) }}"
+    matched_nic_candidates: "{{ (nic_info.results | default([])
+      | selectattr('networkinterfaces', 'defined')
+      | map(attribute='networkinterfaces') | flatten
+      | selectattr('name', 'defined')
+      | selectattr('name', 'equalto', nic_name_from_azure)
+      | list) if not (dry_run | default(false)) else [] }}"
+    nic_id_from_azure: "{{ (matched_nic_candidates[0].id | default('', true)) if (matched_nic_candidates | length) > 0 and (matched_nic_candidates[0] is mapping) else '' }}"
+    # OS disk id/name available directly on VM facts
+    os_disk_create_option_from_azure: "{{ azure_vm.os_disk.create_option | default('', true) }}"
+    os_disk_id_from_azure: "{{ azure_vm.os_disk.managed_disk.id | default('', true) }}"
+    os_disk_caching_from_azure: "{{ azure_vm.os_disk.caching | default('', true) }}"
+    os_disk_size_gb_from_azure: "{{ azure_vm.os_disk.disk_size_gb | default(0) }}"
+    os_disk_storage_account_type_from_azure: "{{ azure_vm.os_disk.managed_disk.storage_account_type | default('', true) }}"
+    os_type_from_azure: "{{ azure_vm.os_disk.os_type | default('', true) }}"
+    # Data disks from Azure VM facts
+    data_disks_from_azure: "{{ azure_vm.data_disks | default([]) }}"
+    # Prefer Azure-discovered values; fall back to deterministic placeholders even when not in dry_run
+    final_nic_name: "{{ (nic_name_from_azure | length > 0) | ternary(nic_name_from_azure, vm.target_vm_name + '-nic') }}"
+    final_os_disk_name: "{{ (os_disk_name_from_azure | length > 0) | ternary(os_disk_name_from_azure, vm.target_vm_name + '_OsDisk_1') }}"
+    final_vm_id: "{{ (vm_id_from_azure | length > 0) | ternary(vm_id_from_azure, '/subscriptions/' + target_subscription_id + '/resourceGroups/' + target_resource_group + '/providers/Microsoft.Compute/virtualMachines/' + vm.target_vm_name) }}"
+    final_nic_id: "{{ (nic_id_from_azure | length > 0) | ternary(nic_id_from_azure, '/subscriptions/' + target_subscription_id + '/resourceGroups/' + target_resource_group + '/providers/Microsoft.Network/networkInterfaces/' + final_nic_name) }}"
+    final_os_disk_id: "{{ (os_disk_id_from_azure | length > 0) | ternary(os_disk_id_from_azure, '/subscriptions/' + target_subscription_id + '/resourceGroups/' + target_resource_group + '/providers/Microsoft.Compute/disks/' + final_os_disk_name) }}"
+    vm_data:
+      # Basic VM info
+      name: "{{ vm.name }}"
+      target_vm_name: "{{ vm.target_vm_name }}"
+      vmss_name: "{{ vm.vmss_config.name | default(vm.vmss_name | default(manifest_data.vmss_name | default('vmss-' ~ vm.target_vm_name))) }}"
+      description: "{{ vm.description }}"
+      target_vm_size: "{{ vm.target_vm_size }}"
+      target_license_type: "{{ vm.target_license_type }}"
+      target_disk_type: "{{ vm.target_disk_type }}"
+      portfolio: "{{ vm.portfolio }}"
+      tier: "{{ vm.tier }}"
+      env: "{{ vm.env }}"
+      app_name: "{{ vm.app_name }}"
+      # NSG from per-VM manifest
+      network_security_group_id: "{{ vm.network_security_group_id | default(None) }}"
+      enable_nsg: "{{ vm.enable_nsg | default(false) }}"
+      nsg_name: "{{ vm.nsg_name | default(None) }}"
+      nsg_rules: "{{ vm.nsg_rules | default({}) }}"
+      # Resource IDs - prefer Azure facts; fallback to deterministic placeholders when unavailable
+      vm_resource_id: "{{ final_vm_id }}"
+      nic_resource_id: "{{ final_nic_id }}"
+      nic_name: "{{ final_nic_name }}"
+      os_disk_resource_id: "{{ final_os_disk_id }}"
+      os_disk_name: "{{ final_os_disk_name }}"
+      os_disk_caching: "{{ (os_disk_caching_from_azure | length > 0) | ternary(os_disk_caching_from_azure, 'ReadWrite') }}"
+      os_disk_size_gb: "{{ (os_disk_size_gb_from_azure | int) if (os_disk_size_gb_from_azure | int) > 0 else 127 }}"
+      os_disk_storage_account_type: "{{ (os_disk_storage_account_type_from_azure | length > 0) | ternary(os_disk_storage_account_type_from_azure, 'Standard_LRS') }}"
+      os_disk_create_option: "{{ (os_disk_create_option_from_azure | length > 0) | ternary(os_disk_create_option_from_azure, 'Empty') }}"
+      os_disk_os_type: "{{ os_type_from_azure | default('') }}"
+      # Data disks from Azure VM facts and managed disk info
+      data_disk_resource_ids: |
+        {%- set data_disk_map = {} -%}
+        {%- set vm_zone = azure_vm.zones[0] if azure_vm.zones is defined and azure_vm.zones | length > 0 else none -%}
+        {%- for disk in data_disks_from_azure -%}
+        {%- set managed_disk_info = data_disk_info.results | selectattr('ansible_facts.azure_managed_disk.name', 'equalto', disk.name) | first | default({}) -%}
+        {%- set managed_disk = managed_disk_info.ansible_facts.azure_managed_disk | default({}) -%}
+        {%- set _ = data_disk_map.update({disk.name: {
+          'lun': disk.lun,
+          'caching': disk.caching,
+          'write_accelerator_enabled': disk.write_accelerator_enabled | default(false),
+          'resource_id': disk.managed_disk_id,
+          'disk_size_gb': managed_disk.disk_size_gb | default(disk.disk_size_gb),
+          'storage_account_type': managed_disk.storage_account_type | default(disk.managed_disk_type),
+        }}) -%}
+        {%- endfor -%}
+        {{ data_disk_map }}
+      # VM-specific VMSS config
+      vmss_config: "{{ vm.vmss_config | default({}) }}"
+
+- name: Optionally create and configure VMSS for VMs
+  include_tasks: vmss.yml
+  loop: "{{ vms_with_resource_ids }}"
+  loop_control:
+    loop_var: vm
+    label: "{{ vm.target_vm_name }}"
+
+- name: Merge per-VM VMSS outputs into VM data set
+  ansible.builtin.set_fact:
+    vms_with_resource_ids: |
+      {{ (vms_with_resource_ids | default([])) | zip(vms_enriched | default(vms_with_resource_ids)) | map('last') | list }}
+
+- name: Debug built VM data (resource IDs)
+  ansible.builtin.debug:
+    msg:
+      - "Built VM: {{ item.target_vm_name }}"
+      - "  vm_resource_id: {{ item.vm_resource_id }}"
+      - "  nic_resource_id: {{ item.nic_resource_id }}"
+      - "  os_disk_resource_id: {{ item.os_disk_resource_id }}"
+  loop: "{{ vms_with_resource_ids | default([]) }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item.target_vm_name | default('unknown') }}"
+
+- name: Create modules directory (root)
+  ansible.builtin.file:
+    path: "{{ terraform_output_dir }}/modules"
+    state: directory
+    mode: '0755'
+
+- name: Copy terraform-azurerm-imported-vm-pattern module
+  ansible.builtin.copy:
+    src: "{{ role_path }}/files/modules/terraform-azurerm-imported-vm-pattern"
+    dest: "{{ terraform_output_dir }}/modules/"
+    mode: '0755'
+
+- name: Generate root Terraform file (locals + for_each modules + imports)
+  ansible.builtin.template:
+    src: "app_main.tf.j2"
+    dest: "{{ terraform_output_dir }}/{{ app_file_basename }}_vm.tf"
+    mode: '0644'
+  vars:
+    app_name: "{{ app_name }}"
+    env: "{{ target_environment }}"
+    target_resource_group: "{{ target_resource_group }}"
+    primary_region: "{{ primary_region }}"
+    target_subscription_id: "{{ target_subscription_id }}"
+    target_network_id: "{{ target_network_id }}"
+    target_subnet_name: "{{ target_subnet_name }}"
+    target_vm_size: "{{ target_vm_size }}"
+    target_license_type: "{{ target_license_type }}"
+    target_disk_type: "{{ target_disk_type }}"
+    portfolio: "{{ portfolio }}"
+    bill_to: "{{ bill_to }}"
+    contact_email: "{{ contact_email }}"
+    tier: "{{ tier }}"
+    vms: "{{ vms_with_resource_ids }}"
+
+- name: Format generated Terraform file
+  ansible.builtin.command:
+    cmd: terraform fmt -write=true {{ terraform_output_dir }}/{{ app_file_basename }}_vm.tf
+  register: fmt_result
+  changed_when: "'Reformatted' in (fmt_result.stdout | default('')) or 'Reformatting' in (fmt_result.stdout | default(''))"
+
+- name: Display generation summary
+  ansible.builtin.debug:
+    msg:
+      - "Terraform generation completed successfully!"
+      - "Output directory: {{ terraform_output_dir }}"
+      - "App file: {{ app_file_basename }}_vm.tf"
+      - "VM files generated: {{ vms_with_resource_ids | length }} VMs"
+      - "VMs: {{ vms_with_resource_ids | map(attribute='target_vm_name') | list | join(', ') }}"
+  when: not (dry_run | default(false))
+
+- name: Display dry run summary
+  ansible.builtin.debug:
+    msg:
+      - "DRY RUN - Azure lookups skipped; Terraform files generated:"
+      - "Output directory: {{ terraform_output_dir }}"
+      - "App file: {{ app_file_basename }}_vm.tf"
+      - "VM files generated: {{ vms_with_resource_ids | length }} VMs"
+      - "VMs: {{ vms_with_resource_ids | map(attribute='target_vm_name') | list | join(', ') }}"
+  when: dry_run | default(false)

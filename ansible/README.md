@@ -23,6 +23,9 @@ ansible-playbook playbooks/azure-backup-protection.yml --list-tasks
 ansible-playbook playbooks/azure-backup-protection.yml --list-tags
 ```
 
+## Manifests
+- See `ansible/vars/README.md` for how to structure and use `manifest.yml` files: [vars/README.md](vars/README.md)
+
 ## Playbooks and abilities
 
 ### 1) Azure VM Backup Orchestrator (`playbooks/azure-backup-protection.yml`)

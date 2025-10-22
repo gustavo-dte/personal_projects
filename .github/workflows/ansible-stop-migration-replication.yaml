@@ -1,0 +1,105 @@
+name: Ansible-Stop-Migration-Replication
+
+# This workflow stops Azure Migrate replication for VMs defined in a manifest
+# It mirrors the patterns used by Ansible-Start-Migration-Replication
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      vm_names:
+        description: "Comma-delimited VM names to stop replication; use STOP_ALL to stop all from manifest"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Dry run"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  stop-migration-replication:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🗂️  VM names filter: ${{ inputs.vm_names }}"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🛑 Stopping migration replication..."
+          fi
+
+      - name: 🚫 Fail early if no VM names provided and not STOP_ALL
+        shell: bash
+        run: |
+          VM_NAMES_INPUT="${{ inputs.vm_names }}"
+          if [ -z "$VM_NAMES_INPUT" ]; then
+            echo "❌ No VM names provided. Specify 'vm_names' (comma-delimited) or use STOP_ALL to stop all from manifest."
+            exit 1
+          fi
+
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }},
+            "vm_names": "${{ inputs.vm_names }}",
+            "migration_action": "stop_replication"
+          }
+          JSON
+
+      - name: 🎬 Run playbook - stop migration replication
+        run: |
+          ansible-playbook ansible/playbooks/start-migration-replication.yml \
+            -e @ansible_extra_vars.json
+
+      - name: 📤 Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-stop-replication-logs
+          path: ansible/logs/AzMigrate_StopReplication_*.log
+          if-no-files-found: warn
+          retention-days: 90

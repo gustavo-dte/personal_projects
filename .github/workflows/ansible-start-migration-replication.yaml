@@ -31,7 +31,6 @@ jobs:
       - self-hosted
       - linux
       - non-prod
-      - container
       - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
@@ -45,20 +44,14 @@ jobs:
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: 🔧 Setup Ansible and Azure SDKs
-        if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/prereq
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
         with:
-          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
-          collections_requirements: ansible/requirements.yml
-
-      - name: 🔐 Azure Login
-        if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/azure-login
-        with:
-          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
-          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
 
       - name: 📊 Display configuration
         run: |
@@ -71,11 +64,19 @@ jobs:
             echo "🚀 Starting migration replication..."
           fi
 
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }}
+          }
+          JSON
+
       - name: 🎬 Run playbook - start migration replication
         run: |
           ansible-playbook ansible/playbooks/start-migration-replication.yml \
-            -e "manifest=${{ inputs.manifest }}" \
-            -e "dry_run=${{ inputs.dry_run }}"
+            -e @ansible_extra_vars.json
 
       - name: 📤 Upload Logs
         if: always()

@@ -55,6 +55,7 @@
     - name: Check if target resource group exists
       azure.azcollection.azure_rm_resourcegroup_info:
         name: "{{ target_resource_group }}"
+        subscription_id: "{{ target_subscription_id | default(omit) }}"
       register: resource_group_info
       when: not (dry_run | default(false))
       no_log: true
@@ -70,6 +71,13 @@
     - name: Display resource group verification success
       ansible.builtin.debug:
         msg: "✓ Resource group verified: {{ resource_group_info.resourcegroups[0].name }}"
+      when: resource_group_info.resourcegroups | length > 0
+
+    - name: Fail if resource group not found
+      ansible.builtin.fail:
+        msg: >-
+          Resource group not found: {{ target_resource_group }}
+      when: resource_group_info.resourcegroups | length == 0
 
   rescue:
     - name: Handle resource group verification failure
@@ -77,3 +85,32 @@
         msg: >-
           Failed to verify resource group '{{ target_resource_group }}':
           {{ ansible_failed_result.msg | default('Resource group not found or inaccessible') }}
+
+- name: Verify Azure Migrate project resource group exists (optional)
+  block:
+    - name: Check if Azure Migrate project resource group exists
+      azure.azcollection.azure_rm_resourcegroup_info:
+        name: "{{ azure_migrate_project_resource_group }}"
+        subscription_id: "{{ azure_migrate_subscription_id | default(omit) }}"
+      register: migrate_rg_info
+      when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
+      no_log: true
+
+    - name: Mock Azure Migrate project RG verification for dry run
+      ansible.builtin.set_fact:
+        migrate_rg_info:
+          resourcegroups:
+            - name: "{{ azure_migrate_project_resource_group }}"
+              location: "eastus"
+      when: (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
+
+    - name: Display Azure Migrate project RG verification success
+      ansible.builtin.debug:
+        msg: "✓ Azure Migrate project resource group verified: {{ migrate_rg_info.resourcegroups[0].name }}"
+      when: (azure_migrate_project_resource_group | default('')) | length > 0 and (migrate_rg_info.resourcegroups | length > 0)
+
+    - name: Fail if Azure Migrate project RG not found
+      ansible.builtin.fail:
+        msg: >-
+          Azure Migrate project resource group not found: {{ azure_migrate_project_resource_group }}
+      when: (azure_migrate_project_resource_group | default('')) | length > 0 and (migrate_rg_info.resourcegroups | length == 0)

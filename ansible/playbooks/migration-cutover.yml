@@ -16,25 +16,6 @@
         - name: Exit playbook when 'az account show' fails
           ansible.builtin.fail:
             msg: "az account show failed; exiting"
-
-    - name: Display cutover operation warning
-      ansible.builtin.debug:
-        msg:
-          - "WARNING: This playbook performs CUTOVER operations"
-          - "This will create target VMs in Azure and complete migration"
-          - "Ensure replication is complete before proceeding"
-          - "This operation cannot be undone"
-
-    - name: Pause for confirmation
-      ansible.builtin.pause:
-        prompt: "Proceed with cutover? (yes/no)"
-      register: cutover_confirmation
-
-    - name: Validate confirmation
-      ansible.builtin.fail:
-        msg: "Cutover cancelled by user"
-      when: cutover_confirmation.user_input | lower not in ['yes', 'y']
-
   vars:
     migration_action: cutover
   roles:

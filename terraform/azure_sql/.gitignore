@@ -1,0 +1,40 @@
+# Terraform files
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars.backup
+.terraform/
+.terraform.lock.hcl
+
+# Environment-specific files (keep templates)
+terraform.tfvars
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Sensitive information
+*.pem
+*.key
+secrets.*
+.env
+
+# Backup files
+*.backup
+*.bak
+
+# Terraform documentation output (auto-generated)
+docs/

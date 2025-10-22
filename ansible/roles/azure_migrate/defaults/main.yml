@@ -3,12 +3,14 @@
 migration_action: "start_replication"
 migration_actions:
   - start_replication
+  - stop_replication
   - cutover
   - list_projects
   - get_replication_status
 
 manifest_dependent_actions:
   - start_replication
+  - stop_replication
   - cutover
   - get_replication_status
 
