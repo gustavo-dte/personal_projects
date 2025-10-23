@@ -1,23 +1,4 @@
-ruff check...............................................................Failed
-- hook id: ruff-check
-- exit code: 1
-
-src\error_handlers.py:65:89: E501 Line too long (103 > 88)
-   |
-63 |     )
-64 |     raise ResourceNotFoundError(
-65 |         f"Could not find destination topic '{destination_topic}': {sanitize_error_message(str(error))}"
-   |                                                                                         ^^^^^^^^^^^^^^^ E501
-66 |     ) from error
-   |
-
-src\error_handlers.py:169:89: E501 Line too long (92 > 88)
-    |
-167 |     )
-168 |     raise ReplicationError(
-169 |         f"Unexpected error during message replication: {sanitize_error_message(str(error))}"
-    |                                                                                         ^^^^ E501
-170 |     ) from error
-    |
-
-Found 2 errors.
+[2025-10-23T13:14:58.493Z] The listener for function 'Functions.ServiceBusReplication' was unable to start.
+[2025-10-23T13:14:58.494Z] The listener for function 'Functions.ServiceBusReplication' was unable to start. Azure.Core: Retry failed after 6 tries. Retry settings can be adjusted in ClientOptions.Retry or by configuring a custom retry policy in ClientOptions.RetryPolicy. (No connection could be made because the target machine actively refused it. (127.0.0.1:10000)) (No connection could be made because the target machine actively refused it. (127.0.0.1:10000)) (No connection could be made because the target machine actively refused it. (127.0.0.1:10000)) (No connection could be made because the target machine actively refused it. (127.0.0.1:10000)) (No connection could be made because the target machine actively refused it. (127.0.0.1:10000)) (No connection could be made because the target machine actively refused it. (127.0.0.1:10000)). Azure.Core: No connection could be made because the target machine actively refused it. (127.0.0.1:10000). System.Net.Http: No connection could be made because the target machine actively refused it. (127.0.0.1:10000). System.Net.Sockets: No connection could be made because the target machine actively refused it.
+[2025-10-23T13:15:06.356Z] The listener for function 'Functions.ServiceBusReplication' was unable to start.
+[2025-10-23T13:15:06.358Z] The listener for function 'Functions.ServiceBusReplication' was unable to start. System.Private.CoreLib: A task was canceled.
