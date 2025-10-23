@@ -45,7 +45,7 @@ jobs:
 
     - name: Run unit tests with pytest
       run: |
-        pytest tests/ --cov=src --cov-report=xml --cov-report=term-missing --cov-fail-under=70 -v
+        pytest tests/ --cov=src.ServiceBusReplication --cov-report=xml --cov-report=term-missing --cov-fail-under=70 -v
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v4
@@ -152,9 +152,18 @@ jobs:
         test -f host.json || (echo "Missing host.json" && exit 1)
         test -f requirements.txt || (echo "Missing requirements.txt" && exit 1)
         test -d src/ || (echo "Missing src/ directory" && exit 1)
+        
+        # Check Azure Function specific structure
+        test -d src/ServiceBusReplication/ || (echo "Missing src/ServiceBusReplication/ directory" && exit 1)
+        test -f src/ServiceBusReplication/__init__.py || (echo "Missing ServiceBusReplication entry point" && exit 1)
+        test -f src/ServiceBusReplication/function.json || (echo "Missing function.json configuration" && exit 1)
 
-        # Validate host.json
+        # Validate configuration files
         python -c "import json; json.load(open('host.json'))" || (echo "Invalid host.json" && exit 1)
+        python -c "import json; json.load(open('src/ServiceBusReplication/function.json'))" || (echo "Invalid function.json" && exit 1)
+        
+        # Validate that the main function can be imported
+        python -c "from src.ServiceBusReplication import main; print('✅ Main function import successful')" || (echo "Failed to import main function" && exit 1)
 
         echo "Azure Function structure validation passed"
 
