@@ -8,12 +8,77 @@ following the Twelve Factor App methodology.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from azure.monitor.opentelemetry import configure_azure_monitor
 
 from .config import ReplicationConfig
 from .constants import ALERT_SEVERITY_HIGH, LOGGER_NAME
+
+
+def sanitize_error_message(error_message: str) -> str:
+    """
+    Sanitize error messages to remove potentially sensitive information.
+
+    This function removes or masks:
+    - Connection strings
+    - Access keys and secrets
+    - IP addresses (partially)
+    - Email addresses (partially)
+    - Long hexadecimal strings that might be tokens
+
+    Args:
+        error_message: The original error message
+
+    Returns:
+        Sanitized error message safe for logging
+    """
+    if not error_message:
+        return ""
+
+    sanitized = error_message
+
+    # Remove connection strings
+    sanitized = re.sub(
+        r"Endpoint=sb://[^;]+;SharedAccessKeyName=[^;]+;SharedAccessKey=[^;]+",
+        "Endpoint=sb://***;SharedAccessKeyName=***;SharedAccessKey=***",
+        sanitized,
+    )
+
+    # Remove access keys and secrets (any base64-like strings longer than 20 chars)
+    sanitized = re.sub(r"[A-Za-z0-9+/]{20,}={0,2}", "***REDACTED***", sanitized)
+
+    # Partially mask IP addresses (keep first two octets)
+    sanitized = re.sub(
+        r"\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b", r"\1.*.*", sanitized
+    )
+
+    # Partially mask email addresses (keep domain)
+    sanitized = re.sub(
+        r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Z|a-z]{2,})\b", r"***@\1", sanitized
+    )
+
+    # Remove long hexadecimal strings that might be tokens
+    sanitized = re.sub(r"\b[0-9a-fA-F]{16,}\b", "***TOKEN***", sanitized)
+
+    return sanitized
+
+
+def truncate_correlation_id(correlation_id: str, max_length: int = 8) -> str:
+    """
+    Truncate correlation ID for logging to avoid potential information leakage.
+
+    Args:
+        correlation_id: The full correlation ID
+        max_length: Maximum length to keep (default: 8)
+
+    Returns:
+        Truncated correlation ID with suffix indicator
+    """
+    if len(correlation_id) <= max_length:
+        return correlation_id
+    return f"{correlation_id[:max_length]}..."
 
 
 def configure_logger(config: ReplicationConfig | None = None) -> logging.Logger:
@@ -37,9 +102,10 @@ def configure_logger(config: ReplicationConfig | None = None) -> logging.Logger:
     # Load configuration if not provided
     if config is None:
         try:
+            # Try to load config, but it might fail if required env vars are missing
             config = ReplicationConfig()
         except Exception:
-            # If config loading fails, use standard logging
+            # If config loading fails (e.g., missing env vars), use standard logging
             config = None
 
     # Check if Azure Monitor configuration is available

@@ -8,11 +8,11 @@ during replication, following separation of concerns principle.
 from __future__ import annotations
 
 import datetime
+from datetime import timedelta
 from typing import Any, cast
 
 import azure.functions as func
-from azure.servicebus import ServiceBusMessage
-from azure.servicebus.management import ServiceBusAdministrationClient
+from azure.servicebus import ServiceBusMessage, ServiceBusReceivedMessage
 
 from .constants import (
     CONTENT_TYPE_BINARY,
@@ -24,7 +24,9 @@ from .constants import (
 )
 
 
-def generate_correlation_id(source_message: func.ServiceBusMessage) -> str:
+def generate_correlation_id(
+    source_message: func.ServiceBusMessage | ServiceBusReceivedMessage,
+) -> str:
     """
     Generate or extract correlation ID for message tracking.
 
@@ -73,7 +75,8 @@ def process_message_body(
 
 
 def create_enhanced_properties(
-    source_message: func.ServiceBusMessage, correlation_id: str
+    source_message: func.ServiceBusMessage | ServiceBusReceivedMessage,
+    correlation_id: str,
 ) -> dict[str, Any]:
     """
     Create enhanced application properties with replication metadata.
@@ -121,67 +124,63 @@ def generate_replicated_message_id(
 
 
 def create_replicated_message(
-    source_message: func.ServiceBusMessage, correlation_id: str, ttl_seconds: int
+    source_message: func.ServiceBusMessage | ServiceBusReceivedMessage,
+    correlation_id: str,
+    ttl_seconds: int | None,
 ) -> ServiceBusMessage:
     """
     Create a new ServiceBusMessage for replication with all properties preserved.
-
-    Args:
-        source_message: The original Service Bus message
-        correlation_id: Correlation ID for tracking
-        ttl_seconds: Time-to-live for the replicated message
-
-    Returns:
-        New ServiceBusMessage ready for replication
     """
-    # Process message body and content type
-    source_body = source_message.body if hasattr(source_message, 'body') else source_message.get_body()
+    # --- Extract and normalize body ------------------------------------------
+    if hasattr(source_message, "get_body"):
+        # Legacy SDK compatibility
+        source_body = source_message.get_body()
+    elif hasattr(source_message, "body") and source_message.body is not None:
+        # ServiceBusReceivedMessage has body attribute
+        if isinstance(source_message.body, bytes):
+            source_body = source_message.body
+        else:
+            # Handle iterable body content
+            try:
+                source_body = b"".join(source_message.body)
+            except (TypeError, AttributeError):
+                source_body = b""
+    else:
+        # Fallback for different message types
+        source_body = b""
+
     original_content_type = getattr(source_message, "content_type", None)
     processed_body, final_content_type = process_message_body(
         source_body, original_content_type
     )
 
-    # Create enhanced properties with replication metadata
+    # --- Enhanced metadata ---------------------------------------------------
     enhanced_properties = create_enhanced_properties(source_message, correlation_id)
-
-    # Generate new message ID
     new_message_id = generate_replicated_message_id(
-        correlation_id, source_message.message_id
+        correlation_id, getattr(source_message, "message_id", None)
     )
 
-    # Set up TTL
-    message_ttl = datetime.timedelta(seconds=ttl_seconds)
-
-    # Create the replicated message with all properties preserved
-    return ServiceBusMessage(
-        processed_body,
-        time_to_live=message_ttl,
-        application_properties=cast(Any, enhanced_properties),
-        content_type=final_content_type,
-        correlation_id=correlation_id,
-        subject=getattr(source_message, "subject", None),
-        session_id=getattr(source_message, "session_id", None),
-        to=getattr(source_message, "to", None),
-        reply_to=getattr(source_message, "reply_to", None),
-        reply_to_session_id=getattr(source_message, "reply_to_session_id", None),
-        partition_key=getattr(source_message, "partition_key", None),
-        scheduled_enqueue_time_utc=getattr(
+    # --- TTL handling (avoid NoneType errors) -------------------------------
+    msg_kwargs = {
+        "body": processed_body,
+        "application_properties": cast(Any, enhanced_properties),
+        "content_type": final_content_type,
+        "correlation_id": correlation_id,
+        "subject": getattr(source_message, "subject", None),
+        "session_id": getattr(source_message, "session_id", None),
+        "to": getattr(source_message, "to", None),
+        "reply_to": getattr(source_message, "reply_to", None),
+        "reply_to_session_id": getattr(source_message, "reply_to_session_id", None),
+        "partition_key": getattr(source_message, "partition_key", None),
+        "scheduled_enqueue_time_utc": getattr(
             source_message, "scheduled_enqueue_time_utc", None
         ),
-        message_id=new_message_id,
-    )
+        "message_id": new_message_id,
+    }
 
-def list_topics_and_subscriptions(conn_str: str) -> dict[str, list[str]]:
-    """
-    List all topics and their subscriptions in the Service Bus namespace.
-    Args:
-        conn_str: Connection string for the Service Bus namespace
-    Returns:
-        Dictionary mapping topic names to lists of subscription names
-    """
-    client = ServiceBusAdministrationClient.from_connection_string(conn_str)
-    result = {}
-    for topic in client.list_topics():
-        subs = [s.subscription_name for s in client.list_subscriptions(topic.name)]
-        result[topic.name] = subs
-    return result
+    # Only set TTL if valid and numeric
+    if ttl_seconds is not None and isinstance(ttl_seconds, int | float):
+        msg_kwargs["time_to_live"] = timedelta(seconds=int(ttl_seconds))
+
+    # --- Construct replicated message ---------------------------------------
+    return ServiceBusMessage(**msg_kwargs)

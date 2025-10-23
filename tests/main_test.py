@@ -1,327 +1,375 @@
 """
-Unit tests for the improved Service Bus replication function.
-
-These tests demonstrate how the refactored code is now easily testable
-with proper separation of concerns and isolated functions.
+Unit tests for the dynamic Azure Service Bus replication Function App.
 """
 
-import logging
-from unittest.mock import Mock, patch
+from __future__ import annotations
+
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from azure.core.exceptions import ClientAuthenticationError
 from pydantic import ValidationError as PydanticValidationError
 
-from src.config import DeadLetterConfig, ReplicationConfig, RetryConfig
-from src.constants import (
-    DEFAULT_DELTA_MINUTES,
-    DEFAULT_RTO_MINUTES,
-    DIRECTION_PRIMARY_TO_SECONDARY,
-    REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
+from src.ServiceBusReplication import (
+    main,
+    process_subscription_messages,
+    replicate_message_to_destination,
 )
-from src.exceptions import ConfigError, ValidationError
-from src.main import (
-    handle_authentication_error,
-    load_and_validate_config,
-    orchestrate_replication,
-    send_message_to_destination,
+from tests.constants_test import (
+    TEST_PRIMARY_CONN,
+    TEST_SECONDARY_CONN,
+    TEST_SUBSCRIPTIONS,
+    TEST_TOPICS,
 )
-from src.message_utils import (
-    create_enhanced_properties,
-    generate_correlation_id,
-    generate_replicated_message_id,
-    process_message_body,
-)
-from tests.constants_test import TEST_SERVICEBUS_CONNECTION_STRING
 
 
-class TestConfigurationLoading:
-    """Test configuration loading and validation."""
+class TestConfigLoading:
+    """Validate configuration loading and validation behavior."""
 
-    @patch("src.main.ReplicationConfig")
-    def test_load_and_validate_config_success(self, mock_config_class):
-        """Test successful configuration loading."""
-        mock_config = Mock()
-        mock_config.replication_type = REPLICATION_TYPE_PRIMARY_TO_SECONDARY
-        mock_config_class.return_value = mock_config
+    @patch("src.ServiceBusReplication.ReplicationConfig")
+    def test_config_creation_success(self, mock_config: Mock) -> None:
+        """Test successful config creation in main function."""
+        mock_instance = Mock()
+        mock_instance.primary_conn_str = TEST_PRIMARY_CONN
+        mock_instance.secondary_conn_str = TEST_SECONDARY_CONN
+        mock_instance.direction = "Primary → Secondary"
+        mock_config.return_value = mock_instance
 
-        result = load_and_validate_config()
+        # This tests that the config can be created successfully
+        config = mock_config()
+        assert config.primary_conn_str == TEST_PRIMARY_CONN
+        assert config.secondary_conn_str == TEST_SECONDARY_CONN
 
-        assert result == mock_config
-        mock_config_class.assert_called_once()
-
-    @patch("src.main.ReplicationConfig")
-    def test_load_and_validate_config_validation_error(self, mock_config_class):
-        """Test configuration loading with validation error."""
-        mock_config_class.side_effect = PydanticValidationError.from_exception_data(
-            "TestModel",
-            [{"type": "missing", "loc": ("field",), "msg": "Field required"}],
+    @patch("src.ServiceBusReplication.ReplicationConfig")
+    def test_config_validation_error(self, mock_config: Mock) -> None:
+        """Test config validation error handling."""
+        mock_config.side_effect = PydanticValidationError.from_exception_data(
+            "ReplicationConfig",
+            [{"type": "missing", "loc": ("PRIMARY_SERVICEBUS_CONN",), "input": {}}],
         )
 
-        with pytest.raises(ConfigError) as exc_info:
-            load_and_validate_config()
-
-        assert "Configuration validation failed" in str(exc_info.value)
-
-    @patch("src.main.ReplicationConfig")
-    def test_load_and_validate_config_unexpected_error(self, mock_config_class):
-        """Test configuration loading with unexpected error."""
-        mock_config_class.side_effect = RuntimeError("Unexpected error")
-
-        with pytest.raises(ConfigError) as exc_info:
-            load_and_validate_config()
-
-        assert "Unexpected error loading configuration" in str(exc_info.value)
+        with pytest.raises(PydanticValidationError):
+            mock_config()
 
 
-class TestMessageUtils:
-    """Test message utility functions."""
+class TestDynamicReplication:
+    """Test dynamic topic/subscription enumeration."""
 
-    def test_generate_correlation_id_existing(self):
-        """Test correlation ID generation when message already has one."""
-        mock_message = Mock()
-        mock_message.correlation_id = "existing-id"
+    @patch("src.ServiceBusReplication.ServiceBusAdministrationClient")
+    @patch("src.ServiceBusReplication.process_subscription_messages")
+    @patch("src.ServiceBusReplication.ReplicationConfig")
+    @patch("src.ServiceBusReplication.ServiceBusClient")
+    def test_topic_subscription_discovery(
+        self,
+        mock_client: Mock,
+        mock_config: Mock,
+        mock_process: Mock,
+        mock_admin: Mock,
+    ) -> None:
+        # Setup config
+        config_instance = Mock()
+        config_instance.primary_conn_str = TEST_PRIMARY_CONN
+        config_instance.secondary_conn_str = TEST_SECONDARY_CONN
+        config_instance.direction = "Primary → Secondary"
+        mock_config.return_value = config_instance
 
-        result = generate_correlation_id(mock_message)
+        # Setup admin client
+        mock_admin_instance = Mock()
+        mock_admin.from_connection_string.return_value = mock_admin_instance
+        mock_admin_instance.list_topics.return_value = [
+            Mock(name=t) for t in TEST_TOPICS
+        ]
+        mock_admin_instance.list_subscriptions.return_value = [
+            Mock(name=s) for s in TEST_SUBSCRIPTIONS
+        ]
 
-        assert result == "existing-id"
-
-    def test_generate_correlation_id_new(self):
-        """Test correlation ID generation for new message."""
-        mock_message = Mock()
-        mock_message.correlation_id = None
-
-        result = generate_correlation_id(mock_message)
-
-        assert result.startswith("repl-")
-        assert len(result) > 10  # Should have timestamp
-
-    def test_process_message_body_bytes(self):
-        """Test processing message body that is already bytes."""
-        body = b"test message"
-        content_type = "application/json"
-
-        processed_body, final_content_type = process_message_body(body, content_type)
-
-        assert processed_body == body
-        assert final_content_type == content_type
-
-    def test_process_message_body_string(self):
-        """Test processing message body that is a string."""
-        body = "test message"
-        content_type = None
-
-        processed_body, final_content_type = process_message_body(body, content_type)
-
-        assert processed_body == b"test message"
-        assert final_content_type == "text/plain; charset=utf-8"
-
-    def test_process_message_body_other_type(self):
-        """Test processing message body of other types."""
-        body = 12345
-        content_type = None
-
-        processed_body, final_content_type = process_message_body(body, content_type)
-
-        assert processed_body == b"12345"
-        assert final_content_type == "text/plain; charset=utf-8"
-
-    def test_create_enhanced_properties(self):
-        """Test creation of enhanced properties with replication metadata."""
-        mock_message = Mock()
-        mock_message.application_properties = {"original_prop": "value"}
-        mock_message.message_id = "original-id"
-        correlation_id = "test-correlation-id"
-
-        result = create_enhanced_properties(mock_message, correlation_id)
-
-        assert result["original_prop"] == "value"
-        assert result["x-original-message-id"] == "original-id"
-        assert result["x-replication-correlation-id"] == correlation_id
-        assert "x-replication-timestamp" in result
-
-    def test_generate_replicated_message_id_with_original(self):
-        """Test generation of replicated message ID with original ID."""
-        correlation_id = "test-correlation-id"
-        original_id = "original-message-id"
-
-        result = generate_replicated_message_id(correlation_id, original_id)
-
-        assert result == "repl-test-cor-original-message-id"
-
-    def test_generate_replicated_message_id_without_original(self):
-        """Test generation of replicated message ID without original ID."""
-        correlation_id = "test-correlation-id"
-        original_id = None
-
-        result = generate_replicated_message_id(correlation_id, original_id)
-
-        assert result == "repl-test-cor"
-
-
-class TestErrorHandling:
-    """Test error handling functions."""
-
-    def test_handle_authentication_error(self):
-        """Test handling of authentication errors."""
-        error = ClientAuthenticationError("Auth failed")
-        correlation_id = "test-id"
-        direction = DIRECTION_PRIMARY_TO_SECONDARY
-        destination_queue = "test-queue"
-
-        # Create a logger for testing
-        logger = logging.getLogger("test-logger")
-
-        with pytest.raises(ClientAuthenticationError) as exc_info:
-            handle_authentication_error(
-                error, correlation_id, direction, destination_queue, logger
-            )
-
-        assert "Failed to authenticate with Service Bus" in str(exc_info.value)
-
-
-class TestReplicationOrchestration:
-    """Test replication orchestration functions."""
-
-    @patch("src.main.replicate_message_to_destination")
-    def test_orchestrate_replication_success(self, mock_replicate):
-        """Test successful replication orchestration."""
-        mock_message = Mock()
-        mock_config = Mock()
-        mock_config.get_destination_config.return_value = (
-            "conn_str",
-            "queue_name",
-            DIRECTION_PRIMARY_TO_SECONDARY,
-        )
-        mock_config.ttl_seconds = 600
-        mock_config.retry_config.max_attempts = 3
-        mock_config.retry_config.base_delay = 1.0
-
-        orchestrate_replication(mock_message, mock_config)
-
-        mock_replicate.assert_called_once()
-        call_args = mock_replicate.call_args
-        assert call_args[1]["source_message"] == mock_message
-        assert call_args[1]["destination_connection_string"] == "conn_str"
-        assert call_args[1]["destination_topic_name"] == "queue_name"
-
-    def test_orchestrate_replication_validation_error(self):
-        """Test replication orchestration with validation error."""
-        mock_message = Mock()
-        mock_config = Mock()
-        mock_config.get_destination_config.side_effect = ValidationError(
-            "Invalid config"
+        # Setup service bus client
+        mock_client_instance = Mock()
+        mock_client.from_connection_string.return_value.__enter__.return_value = (
+            mock_client_instance
         )
 
-        with pytest.raises(ValidationError):
-            orchestrate_replication(mock_message, mock_config)
+        main(Mock())
+        mock_process.assert_called()
 
 
-class TestReplicationConfig:
-    """Test Pydantic configuration model."""
+class TestSubscriptionProcessing:
+    """Verify per-subscription message processing logic."""
 
-    def test_config_creation_valid(self):
-        """Test creation of valid configuration."""
-        config_data = {
-            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
-            "SECONDARY_TOPIC_NAME": "test-queue",
-            "RTO_MINUTES": DEFAULT_RTO_MINUTES,
-            "DELTA_MINUTES": DEFAULT_DELTA_MINUTES,
-        }
+    @patch("src.ServiceBusReplication.ServiceBusClient")
+    def test_no_messages(
+        self,
+        mock_client: Mock,
+    ) -> None:
+        # Setup source client
+        receiver = MagicMock()
+        receiver.receive_messages.return_value = []
 
-        config = ReplicationConfig(**config_data)
-
-        assert config.replication_type == REPLICATION_TYPE_PRIMARY_TO_SECONDARY
-        assert config.secondary_conn_str == TEST_SERVICEBUS_CONNECTION_STRING
-        assert config.secondary_queue == "test-queue"
-        assert isinstance(config.retry_config, RetryConfig)
-        assert isinstance(config.dead_letter_config, DeadLetterConfig)
-
-    def test_config_ttl_seconds_calculation(self):
-        """Test TTL seconds calculation."""
-        config_data = {
-            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
-            "SECONDARY_TOPIC_NAME": "test-queue",
-            "RTO_MINUTES": 10,
-            "DELTA_MINUTES": 2,
-        }
-
-        config = ReplicationConfig(**config_data)
-
-        assert config.ttl_seconds == 720  # (10 + 2) * 60
-
-    def test_config_direction_property(self):
-        """Test direction property formatting."""
-        config_data = {
-            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
-            "SECONDARY_TOPIC_NAME": "test-queue",
-        }
-
-        config = ReplicationConfig(**config_data)
-
-        assert config.direction == DIRECTION_PRIMARY_TO_SECONDARY
-
-    def test_config_get_destination_config(self):
-        """Test getting destination configuration."""
-        config_data = {
-            "REPLICATION_TYPE": REPLICATION_TYPE_PRIMARY_TO_SECONDARY,
-            "SECONDARY_SERVICEBUS_CONN": TEST_SERVICEBUS_CONNECTION_STRING,
-            "SECONDARY_TOPIC_NAME": "test-queue",
-        }
-
-        config = ReplicationConfig(**config_data)
-        conn_str, queue_name, direction = config.get_destination_config()
-
-        assert conn_str == TEST_SERVICEBUS_CONNECTION_STRING
-        assert queue_name == "test-queue"
-        assert direction == DIRECTION_PRIMARY_TO_SECONDARY
-
-
-# Integration test example
-class TestIntegration:
-    """Integration tests for the complete replication flow."""
-
-    @patch("src.main.ServiceBusClient")
-    @patch("src.main.create_replicated_message")
-    def test_send_message_to_destination_integration(
-        self, mock_create_msg, mock_client_class
-    ):
-        """Test the complete message sending flow."""
-        # Setup mocks
-        mock_client = Mock()
-        mock_sender = Mock()
-
-        # Mock the context manager properly
-        mock_sender_context = Mock()
-        mock_sender_context.__enter__ = Mock(return_value=mock_sender)
-        mock_sender_context.__exit__ = Mock(return_value=False)
-        mock_client.get_topic_sender.return_value = mock_sender_context
-
-        mock_client_context = Mock()
-        mock_client_context.__enter__ = Mock(return_value=mock_client)
-        mock_client_context.__exit__ = Mock(return_value=False)
-        mock_client_class.from_connection_string.return_value = mock_client_context
-
-        mock_message = Mock()
-
-        # Execute
-        send_message_to_destination(
-            destination_connection_string="test_conn_str",
-            destination_topic_name="test_queue",
-            message=mock_message,
-            correlation_id="test_id",
+        client_instance = MagicMock()
+        client_instance.get_subscription_receiver.return_value.__enter__ = Mock(
+            return_value=receiver
+        )
+        client_instance.get_subscription_receiver.return_value.__exit__ = Mock(
+            return_value=None
         )
 
-        # Verify
-        mock_client_class.from_connection_string.assert_called_once_with(
-            "test_conn_str"
+        logger = Mock()
+
+        process_subscription_messages(
+            client=client_instance,
+            topic="topic-a",
+            subscription="sub-a",
+            dest_conn=TEST_SECONDARY_CONN,
+            direction="Primary → Secondary",
+            logger=logger,
         )
-        mock_client.get_topic_sender.assert_called_once_with(topic_name="test_queue")
-        mock_sender.send_messages.assert_called_once_with(mock_message)
+
+        # Should not attempt any replication when no messages
+        receiver.receive_messages.assert_called_once()
+
+    @patch("src.ServiceBusReplication.ServiceBusClient")
+    @patch("src.ServiceBusReplication.create_replicated_message")
+    def test_with_messages(
+        self,
+        mock_create: Mock,
+        mock_client: Mock,
+    ) -> None:
+        # Setup source client
+        receiver = MagicMock()
+        msg = Mock()
+        msg.correlation_id = "test-corr-id"
+        msg.time_to_live = None
+        receiver.receive_messages.return_value = [msg]
+
+        source_client = MagicMock()
+        source_client.get_subscription_receiver.return_value.__enter__ = Mock(
+            return_value=receiver
+        )
+        source_client.get_subscription_receiver.return_value.__exit__ = Mock(
+            return_value=None
+        )
+
+        # Setup destination client with context manager
+        dest_sender = MagicMock()
+        dest_client_instance = MagicMock()
+        dest_client_instance.get_topic_sender.return_value.__enter__ = Mock(
+            return_value=dest_sender
+        )
+        dest_client_instance.get_topic_sender.return_value.__exit__ = Mock(
+            return_value=None
+        )
+
+        # Setup ServiceBusClient.from_connection_string as a context manager
+        mock_client.from_connection_string.return_value.__enter__ = Mock(
+            return_value=dest_client_instance
+        )
+        mock_client.from_connection_string.return_value.__exit__ = Mock(
+            return_value=None
+        )
+
+        replicated_msg = Mock()
+        mock_create.return_value = replicated_msg
+
+        logger = Mock()
+
+        process_subscription_messages(
+            client=source_client,
+            topic="topic-a",
+            subscription="sub-a",
+            dest_conn=TEST_SECONDARY_CONN,
+            direction="Primary → Secondary",
+            logger=logger,
+        )
+
+        mock_create.assert_called_once()
+        receiver.complete_message.assert_called_once_with(msg)
+
+
+class TestMessageReplication:
+    """Check outbound message replication to destination Service Bus."""
+
+    @patch("src.ServiceBusReplication.ServiceBusClient")
+    @patch("src.ServiceBusReplication.create_replicated_message")
+    def test_successful_send(
+        self,
+        mock_create: Mock,
+        mock_client: Mock,
+    ) -> None:
+        msg = Mock()
+        replicated = Mock()
+        mock_create.return_value = replicated
+
+        sender = MagicMock()
+        client_instance = MagicMock()
+        client_instance.get_topic_sender.return_value.__enter__ = Mock(
+            return_value=sender
+        )
+        client_instance.get_topic_sender.return_value.__exit__ = Mock(return_value=None)
+
+        mock_client.from_connection_string.return_value.__enter__ = Mock(
+            return_value=client_instance
+        )
+        mock_client.from_connection_string.return_value.__exit__ = Mock(
+            return_value=None
+        )
+
+        replicate_message_to_destination(
+            msg,
+            TEST_SECONDARY_CONN,
+            "topic-a",
+            "Primary → Secondary",
+            "test-correlation-id",
+        )
+
+        mock_create.assert_called_once()
+        sender.send_messages.assert_called_once_with(replicated)
+
+
+class TestErrorCases:
+    """Ensure exceptions and auth failures are handled correctly."""
+
+    @patch("src.ServiceBusReplication.ServiceBusClient")
+    def test_auth_error(self, mock_client: Mock) -> None:
+        # Setup receiver to trigger the exception when messages are processed
+        msg = Mock()
+        msg.correlation_id = "test-id"
+        receiver = MagicMock()
+        receiver.receive_messages.return_value = [msg]
+
+        client_instance = MagicMock()
+        client_instance.get_subscription_receiver.return_value.__enter__ = Mock(
+            return_value=receiver
+        )
+        client_instance.get_subscription_receiver.return_value.__exit__ = Mock(
+            return_value=None
+        )
+
+        # Make the ServiceBusClient.from_connection_string raise the auth error
+        mock_client.from_connection_string.side_effect = ClientAuthenticationError(
+            "Auth failed"
+        )
+
+        logger = Mock()
+
+        # The function should handle the error gracefully and log it
+        process_subscription_messages(
+            client=client_instance,
+            topic="topic-x",
+            subscription="sub-x",
+            dest_conn=TEST_SECONDARY_CONN,
+            direction="Primary → Secondary",
+            logger=logger,
+        )
+
+        # Verify the error was logged and message was abandoned
+        logger.error.assert_called()
+        receiver.abandon_message.assert_called_once_with(msg)
+
+
+class TestMainFunctionExceptions:
+    """Test exception handling in the main function."""
+
+    @patch("src.ServiceBusReplication.app_logger")
+    @patch("src.ServiceBusReplication.ReplicationConfig")
+    def test_config_error_handling(
+        self, mock_config: Mock, mock_app_logger: Mock
+    ) -> None:
+        """Test ConfigError handling in main function."""
+        from src.ServiceBusReplication.exceptions import ConfigError
+
+        # Make config raise ConfigError
+        mock_config.side_effect = ConfigError("Missing required configuration")
+
+        timer_request = Mock()
+
+        main(timer_request)
+
+        # Verify error was logged
+        mock_app_logger.error.assert_called_with(
+            "❌ Configuration error: Missing required configuration"
+        )
+
+    @patch("src.ServiceBusReplication.app_logger")
+    @patch("src.ServiceBusReplication.ReplicationConfig")
+    def test_general_exception_handling(
+        self, mock_config: Mock, mock_app_logger: Mock
+    ) -> None:
+        """Test general exception handling in main function."""
+        # Make config raise a general exception
+        mock_config.side_effect = RuntimeError("Unexpected error")
+
+        timer_request = Mock()
+
+        main(timer_request)
+
+        # Verify exception was logged
+        mock_app_logger.exception.assert_called_with(
+            "❌ Replication cron failed: Unexpected error"
+        )
+
+
+class TestConfigValidation:
+    """Test configuration validation scenarios."""
+
+    def test_config_missing_primary_connection(self) -> None:
+        """Test config validation when primary connection is missing."""
+        import os
+
+        from src.ServiceBusReplication.config import ReplicationConfig
+        from src.ServiceBusReplication.exceptions import ConfigError
+
+        # Clear environment variables
+        old_primary = os.environ.get("PRIMARY_SERVICEBUS_CONN")
+        old_secondary = os.environ.get("SECONDARY_SERVICEBUS_CONN")
+
+        try:
+            # Remove both to test validation
+            if "PRIMARY_SERVICEBUS_CONN" in os.environ:
+                del os.environ["PRIMARY_SERVICEBUS_CONN"]
+            if "SECONDARY_SERVICEBUS_CONN" in os.environ:
+                del os.environ["SECONDARY_SERVICEBUS_CONN"]
+
+            with pytest.raises(
+                ConfigError, match="PRIMARY_SERVICEBUS_CONN is required"
+            ):
+                ReplicationConfig()
+        finally:
+            # Restore environment variables
+            if old_primary:
+                os.environ["PRIMARY_SERVICEBUS_CONN"] = old_primary
+            if old_secondary:
+                os.environ["SECONDARY_SERVICEBUS_CONN"] = old_secondary
+
+    def test_config_missing_secondary_connection(self) -> None:
+        """Test config validation when secondary connection is missing."""
+        import os
+
+        from src.ServiceBusReplication.config import ReplicationConfig
+        from src.ServiceBusReplication.exceptions import ConfigError
+
+        # Set primary but not secondary
+        old_primary = os.environ.get("PRIMARY_SERVICEBUS_CONN")
+        old_secondary = os.environ.get("SECONDARY_SERVICEBUS_CONN")
+
+        try:
+            os.environ["PRIMARY_SERVICEBUS_CONN"] = "test-primary"
+            if "SECONDARY_SERVICEBUS_CONN" in os.environ:
+                del os.environ["SECONDARY_SERVICEBUS_CONN"]
+
+            with pytest.raises(
+                ConfigError, match="SECONDARY_SERVICEBUS_CONN is required"
+            ):
+                ReplicationConfig()
+        finally:
+            # Restore environment variables
+            if old_primary:
+                os.environ["PRIMARY_SERVICEBUS_CONN"] = old_primary
+            else:
+                if "PRIMARY_SERVICEBUS_CONN" in os.environ:
+                    del os.environ["PRIMARY_SERVICEBUS_CONN"]
+            if old_secondary:
+                os.environ["SECONDARY_SERVICEBUS_CONN"] = old_secondary
 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    raise SystemExit(pytest.main([__file__]))

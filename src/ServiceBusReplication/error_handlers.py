@@ -19,7 +19,7 @@ from azure.servicebus.exceptions import ServiceBusError
 
 from .constants import ALERT_SEVERITY_CRITICAL, ALERT_SEVERITY_HIGH
 from .exceptions import ReplicationError
-from .logging_utils import log_replication_error
+from .logging_utils import log_replication_error, sanitize_error_message
 
 
 def handle_authentication_error(
@@ -34,13 +34,14 @@ def handle_authentication_error(
         logger=logger,
         correlation_id=correlation_id,
         error_type="authentication_error",
-        error_message=str(error),
+        error_message=sanitize_error_message(str(error)),
         direction=direction,
         destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_CRITICAL,
     )
+    sanitized_error = sanitize_error_message(str(error))
     raise ClientAuthenticationError(
-        f"Failed to authenticate with Service Bus: {error}"
+        f"Failed to authenticate with Service Bus: {sanitized_error}"
     ) from error
 
 
@@ -56,13 +57,14 @@ def handle_resource_not_found_error(
         logger=logger,
         correlation_id=correlation_id,
         error_type="resource_not_found",
-        error_message=str(error),
+        error_message=sanitize_error_message(str(error)),
         direction=direction,
         destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_HIGH,
     )
+    sanitized_error = sanitize_error_message(str(error))
     raise ResourceNotFoundError(
-        f"Could not find destination topic '{destination_topic}': {error}"
+        f"Could not find destination topic '{destination_topic}': {sanitized_error}"
     ) from error
 
 
@@ -160,11 +162,12 @@ def handle_unexpected_error(
         logger=logger,
         correlation_id=correlation_id,
         error_type="unexpected_error",
-        error_message=str(error),
+        error_message=sanitize_error_message(str(error)),
         direction=direction,
         destination_queue=destination_topic,
         alert_severity=ALERT_SEVERITY_CRITICAL,
     )
+    sanitized_error = sanitize_error_message(str(error))
     raise ReplicationError(
-        f"Unexpected error during message replication: {error}"
+        f"Unexpected error during message replication: {sanitized_error}"
     ) from error

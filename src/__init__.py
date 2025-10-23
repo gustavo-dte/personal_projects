@@ -1,1 +1,1 @@
-"""Service Bus replication function package."""
+"""Source package for Azure ServiceBus replication function."""

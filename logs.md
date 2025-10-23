@@ -1,5 +1,23 @@
-[2025-10-13T20:20:00.294Z] Replication cron failed: 'ServiceBusClient' object has no attribute '_management_client'
-Traceback (most recent call last):
-  File "C:\Users\u69819\Documents\DevOps\service_bus\personal\personal_projects\src\main.py", line 430, in main
-    topics = [t.name for t in client._management_client.list_topics()]  # or via mgmt API
-AttributeError: 'ServiceBusClient' object has no attribute '_management_client'
+ruff check...............................................................Failed
+- hook id: ruff-check
+- exit code: 1
+
+src\error_handlers.py:65:89: E501 Line too long (103 > 88)
+   |
+63 |     )
+64 |     raise ResourceNotFoundError(
+65 |         f"Could not find destination topic '{destination_topic}': {sanitize_error_message(str(error))}"
+   |                                                                                         ^^^^^^^^^^^^^^^ E501
+66 |     ) from error
+   |
+
+src\error_handlers.py:169:89: E501 Line too long (92 > 88)
+    |
+167 |     )
+168 |     raise ReplicationError(
+169 |         f"Unexpected error during message replication: {sanitize_error_message(str(error))}"
+    |                                                                                         ^^^^ E501
+170 |     ) from error
+    |
+
+Found 2 errors.

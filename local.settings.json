@@ -1,0 +1,9 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "PRIMARY_SERVICEBUS_CONN": "<primary_connection_string>",
+    "SECONDARY_SERVICEBUS_CONN": "<secondary_connection_string>"
+  }
+}

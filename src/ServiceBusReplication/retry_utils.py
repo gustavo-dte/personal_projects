@@ -11,67 +11,42 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from azure.core.exceptions import HttpResponseError, ServiceRequestError
-from azure.servicebus.exceptions import ServiceBusError
-
 from .constants import ALERT_SEVERITY_HIGH, ALERT_SEVERITY_MEDIUM
-from .exceptions import ReplicationError
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def exponential_backoff_retry(
-    max_attempts: int, base_delay: float, logger: logging.Logger
+def with_retry(
+    max_attempts: int = 3, base_delay: float = 1.0, backoff_factor: float = 2.0
 ) -> Callable[[F], F]:
     """
-    Decorator that implements exponential backoff retry for transient failures.
-
-    This provides a configurable retry mechanism for handling transient Azure
-    service failures with exponential backoff strategy.
-
+    Decorator for retrying a function if it raises an exception.
     Args:
-        max_attempts: Maximum number of retry attempts
-        base_delay: Base delay in seconds, exponentially increased
-        logger: Logger instance for retry logging
-
-    Returns:
-        Decorator function that wraps the target function with retry logic
+        max_attempts (int): Maximum number of attempts before giving up.
+        base_delay (float): Initial delay between retries (in seconds).
+        backoff_factor (float): Multiplier applied to delay after each failure.
     """
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            last_exception = None
+            logger = logging.getLogger(func.__module__)
+            attempt = 1
+            delay = base_delay
 
-            for attempt in range(max_attempts):
+            while attempt <= max_attempts:
                 try:
                     return func(*args, **kwargs)
-                except (ServiceRequestError, HttpResponseError, ServiceBusError) as e:
-                    last_exception = e
-                    if attempt < max_attempts - 1:  # Not the last attempt
-                        delay = base_delay * (2**attempt)  # Exponential backoff
-                        log_retry_attempt(
-                            logger=logger,
-                            attempt=attempt + 1,
-                            max_attempts=max_attempts,
-                            delay=delay,
-                            error=e,
-                        )
-                        time.sleep(delay)
-                    else:
-                        # Last attempt failed
-                        log_retry_exhausted(
-                            logger=logger, max_attempts=max_attempts, final_error=e
-                        )
-
-            # Re-raise the last exception wrapped in ReplicationError
-            if last_exception:
-                correlation_id = kwargs.get("correlation_id", "unknown")
-                raise ReplicationError(
-                    f"All {max_attempts} retry attempts failed: {str(last_exception)}",
-                    correlation_id=correlation_id,
-                    retry_count=max_attempts,
-                ) from last_exception
+                except Exception as e:
+                    if attempt == max_attempts:
+                        logger.error(f"Retry failed after {max_attempts} attempts: {e}")
+                        raise
+                    logger.warning(
+                        f"Attempt {attempt} failed: {e}. Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                    delay *= backoff_factor
+                    attempt += 1
 
         return wrapper  # type: ignore
 
