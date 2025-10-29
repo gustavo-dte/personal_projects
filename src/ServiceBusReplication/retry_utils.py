@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from .constants import ALERT_SEVERITY_HIGH, ALERT_SEVERITY_MEDIUM
+from .constants import ALERT_SEVERITY_MEDIUM
 
 F = TypeVar("F", bound=Callable[..., Any])
 

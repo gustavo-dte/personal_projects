@@ -101,40 +101,54 @@ def process_subscription_messages(
         logger.info(f"🔁 Found {len(messages)} messages in {topic}/{subscription}")
 
         # Create destination client once and reuse for all messages
-        with ServiceBusClient.from_connection_string(dest_conn) as dest_client:
-            with dest_client.get_topic_sender(topic_name=topic) as sender:
-                for msg in messages:
-                    correlation_id = getattr(msg, "correlation_id", None) or "replica"
-                    ttl_seconds = getattr(msg, "time_to_live", None)
-
-                    try:
-                        # Create replicated copy
-                        replicated = create_replicated_message(
-                            msg, correlation_id=correlation_id, ttl_seconds=ttl_seconds
+        try:
+            with ServiceBusClient.from_connection_string(dest_conn) as dest_client:
+                with dest_client.get_topic_sender(topic_name=topic) as sender:
+                    for msg in messages:
+                        correlation_id = (
+                            getattr(msg, "correlation_id", None) or "replica"
                         )
+                        ttl_seconds = getattr(msg, "time_to_live", None)
 
-                        # Send to destination using the reused sender
-                        sender.send_messages(replicated)
+                        try:
+                            # Create replicated copy
+                            replicated = create_replicated_message(
+                                msg,
+                                correlation_id=correlation_id,
+                                ttl_seconds=ttl_seconds,
+                            )
 
-                        # Complete only after successful send
-                        receiver.complete_message(msg)
-                        logger.info(
-                            "✅ Replicated message %s from %s/%s",
-                            truncate_correlation_id(correlation_id),
-                            topic,
-                            subscription,
-                        )
+                            # Send to destination using the reused sender
+                            sender.send_messages(replicated)
 
-                    except Exception as e:
-                        # Log & abandon to retry later
-                        receiver.abandon_message(msg)
-                        logger.error(
-                            "❌ Failed to replicate message %s from %s/%s: %s",
-                            truncate_correlation_id(correlation_id),
-                            topic,
-                            subscription,
-                            sanitize_error_message(str(e)),
-                        )
+                            # Complete only after successful send
+                            receiver.complete_message(msg)
+                            logger.info(
+                                "✅ Replicated message %s from %s/%s",
+                                truncate_correlation_id(correlation_id),
+                                topic,
+                                subscription,
+                            )
+
+                        except Exception as e:
+                            # Log & abandon to retry later
+                            receiver.abandon_message(msg)
+                            logger.error(
+                                "❌ Failed to replicate message %s from %s/%s: %s",
+                                truncate_correlation_id(correlation_id),
+                                topic,
+                                subscription,
+                                sanitize_error_message(str(e)),
+                            )
+        except Exception as e:
+            # Handle authentication and other connection errors
+            error_msg = sanitize_error_message(str(e))
+            logger.error(
+                f"❌ Failed to connect to destination service bus: {error_msg}"
+            )
+            # Abandon all messages so they can be retried later
+            for msg in messages:
+                receiver.abandon_message(msg)
 
 
 # --------------------------------------------------------------------------
