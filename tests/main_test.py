@@ -68,14 +68,17 @@ class TestDynamicReplication:
     ) -> None:
         # Setup config
         config_instance = Mock()
-        config_instance.primary_conn_str = TEST_PRIMARY_CONN
+        config_instance.source_conn_str = TEST_PRIMARY_CONN
         config_instance.secondary_conn_str = TEST_SECONDARY_CONN
         config_instance.direction = "Primary → Secondary"
         mock_config.return_value = config_instance
 
-        # Setup admin client
+        # Setup admin client context manager
         mock_admin_instance = Mock()
-        mock_admin.from_connection_string.return_value = mock_admin_instance
+        mock_admin.from_connection_string.return_value.__enter__.return_value = (
+            mock_admin_instance
+        )
+        mock_admin.from_connection_string.return_value.__exit__.return_value = None
         mock_admin_instance.list_topics.return_value = [
             Mock(name=t) for t in TEST_TOPICS
         ]
@@ -83,11 +86,12 @@ class TestDynamicReplication:
             Mock(name=s) for s in TEST_SUBSCRIPTIONS
         ]
 
-        # Setup service bus client
+        # Setup service bus client context manager
         mock_client_instance = Mock()
         mock_client.from_connection_string.return_value.__enter__.return_value = (
             mock_client_instance
         )
+        mock_client.from_connection_string.return_value.__exit__.return_value = None
 
         main(Mock())
         mock_process.assert_called()
@@ -268,6 +272,49 @@ class TestErrorCases:
 
 class TestMainFunctionExceptions:
     """Test exception handling in the main function."""
+
+    @patch("src.ServiceBusReplication.app_logger")
+    @patch("src.ServiceBusReplication.ServiceBusAdministrationClient")
+    @patch("src.ServiceBusReplication.ReplicationConfig")
+    @patch("src.ServiceBusReplication.ServiceBusClient")
+    def test_auth_error(
+        self,
+        mock_client: Mock,
+        mock_config: Mock,
+        mock_admin: Mock,
+        mock_app_logger: Mock,
+    ) -> None:
+        """Test authentication error handling in main function."""
+        from azure.servicebus.exceptions import ServiceBusAuthenticationError
+
+        # Setup config
+        config_instance = Mock()
+        config_instance.source_conn_str = TEST_PRIMARY_CONN
+        config_instance.secondary_conn_str = TEST_SECONDARY_CONN
+        config_instance.direction = "Primary → Secondary"
+        mock_config.return_value = config_instance
+
+        # Setup admin client - successful
+        mock_admin_instance = Mock()
+        mock_admin.from_connection_string.return_value.__enter__.return_value = (
+            mock_admin_instance
+        )
+        mock_admin.from_connection_string.return_value.__exit__.return_value = None
+        mock_admin_instance.list_topics.return_value = [Mock(name="test_topic")]
+        mock_admin_instance.list_subscriptions.return_value = [Mock(name="test_sub")]
+
+        # Setup client to throw auth error immediately on creation
+        mock_client.from_connection_string.side_effect = ServiceBusAuthenticationError(
+            message="Authentication failed"
+        )
+
+        # The function should handle the error gracefully and log it
+        main(Mock())
+
+        # Verify the error was logged
+        mock_app_logger.exception.assert_called_with(
+            "❌ Replication cron failed: Authentication failed"
+        )
 
     @patch("src.ServiceBusReplication.app_logger")
     @patch("src.ServiceBusReplication.ReplicationConfig")
