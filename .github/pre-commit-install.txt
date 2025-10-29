@@ -1,2 +1,0 @@
-This file is used to check if pre-commit is installed.
-Please install pre-commit to remove this file from your branch.

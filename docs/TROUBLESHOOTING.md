@@ -42,7 +42,7 @@
 3. Check if using correct SharedAccessKeyName (usually `RootManageSharedAccessKey`)
 4. Verify namespace-level vs entity-level permissions
 
-#### Issue: "Token expired" 
+#### Issue: "Token expired"
 **Symptoms:**
 - Intermittent authentication failures
 - Works initially then fails after time
@@ -190,7 +190,7 @@ az functionapp config appsettings set \
 // Function execution summary
 requests
 | where name contains "ServiceBusReplication"
-| summarize 
+| summarize
     ExecutionCount = count(),
     AvgDuration = avg(duration),
     SuccessRate = avg(toint(success)) * 100

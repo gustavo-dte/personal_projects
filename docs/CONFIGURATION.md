@@ -18,7 +18,7 @@ REPLICATION_TYPE=primary_to_secondary
 # Primary Service Bus (source) - REQUIRED for primary_to_secondary mode
 PRIMARY_SERVICEBUS_CONN="Endpoint=sb://your-primary.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=your-key"
 
-# Secondary Service Bus (destination) - REQUIRED for primary_to_secondary mode  
+# Secondary Service Bus (destination) - REQUIRED for primary_to_secondary mode
 SECONDARY_SERVICEBUS_CONN="Endpoint=sb://your-secondary.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=your-key"
 ```
 
@@ -38,7 +38,7 @@ SECONDARY_SERVICEBUS_CONN="Endpoint=sb://your-secondary.servicebus.windows.net/;
 # Recovery Time Objective in minutes (default: 10)
 RTO_MINUTES=10
 
-# Additional buffer time in minutes (default: 2) 
+# Additional buffer time in minutes (default: 2)
 DELTA_MINUTES=2
 ```
 

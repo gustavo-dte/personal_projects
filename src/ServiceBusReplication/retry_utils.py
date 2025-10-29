@@ -83,26 +83,3 @@ def log_retry_attempt(
             "alert_severity": ALERT_SEVERITY_MEDIUM,
         },
     )
-
-
-def log_retry_exhausted(
-    logger: logging.Logger, max_attempts: int, final_error: Exception
-) -> None:
-    """
-    Log when all retry attempts are exhausted.
-
-    Args:
-        logger: Logger instance
-        max_attempts: Maximum number of attempts that were made
-        final_error: The final exception that caused failure
-    """
-    logger.error(
-        "All %d retry attempts failed",
-        max_attempts,
-        extra={
-            "max_attempts": max_attempts,
-            "final_error_type": type(final_error).__name__,
-            "final_error_message": str(final_error),
-            "alert_severity": ALERT_SEVERITY_HIGH,
-        },
-    )

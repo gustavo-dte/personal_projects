@@ -1,3 +1,0 @@
-WEBSITE_RUN_FROM_PACKAGE = 1: When WEBSITE_RUN_FROM_PACKAGE is enabled, check the package on the SCM site contains the updated files. Go to your app's SCM endpoint (https://'functionAppName'.scm.azurewebsites.net) and in the Debug Console go to 'd:\home\data\packages' directory to verify this.
-Linux Deployments with Remote Build: The Zip will be uploaded to the Storage account specified in the AzureWebJobsStorage application setting. This storage account will have a zip file in the scm-releases container. This zip file will be named scm-latest-'sitename'.zip.
-Note: For Linux Consumption sites this zip file could be using the SquashFS filesystem rather than the zip file format.

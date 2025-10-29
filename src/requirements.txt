@@ -1,38 +1,39 @@
-# Azure Functions and Service Bus dependencies (Updated Sept 2025)
-azure-functions>=1.23.0,<2.0.0
-azure-servicebus>=7.14.0,<8.0.0
-grpcio>=1.62.0  # Required for Python 3.12 compatibility
+# Azure Functions and Service Bus dependencies (Updated for Python 3.10)
+azure-functions>=1.18.0,<2.0.0
+azure-servicebus>=7.12.0,<8.0.0
 
 # Core Azure libraries
-azure-core>=1.30.0,<2.0.0
-azure-identity>=1.17.0,<2.0.0
+azure-core>=1.28.0,<2.0.0
+azure-identity>=1.15.0,<2.0.0
 
-# Configuration and validation with Pydantic v2
-pydantic>=2.9.0,<3.0.0
-pydantic-settings>=2.9.0,<3.0.0
+# Configuration and validation with Pydantic v2 (Python 3.10 compatible)
+pydantic>=2.0.0,<3.0.0
+pydantic-core>=2.0.0,<3.0.0
+pydantic-settings>=2.0.0,<3.0.0
 
 # Monitoring and telemetry
-azure-monitor-opentelemetry>=1.5.0,<2.0.0
+azure-monitor-opentelemetry>=1.2.0,<2.0.0
 
-# Standard library typing extensions (for Python 3.10+ compatibility)
-typing-extensions>=4.12.0,<5.0.0
+# Standard library typing extensions (for Python 3.10 compatibility)
+typing-extensions>=4.8.0,<5.0.0
 
-# Development and testing dependencies
-pytest>=8.3.0,<9.0.0
-pytest-mock>=3.14.0,<4.0.0
-pytest-asyncio>=0.24.0,<1.0.0
-pytest-cov>=5.0.0,<6.0.0
+# Development and testing dependencies (Python 3.10 compatible)
+pytest>=7.4.0,<8.0.0
+pytest-mock>=3.12.0,<4.0.0
+pytest-asyncio>=0.21.0,<1.0.0
+pytest-cov>=4.1.0,<5.0.0
 
-# Code quality tools (for development)
-ruff>=0.7.0,<1.0.0
-mypy>=1.11.0,<2.0.0
+# Code quality tools (Python 3.10 compatible)
+ruff>=0.1.0,<1.0.0
+mypy>=1.8.0,<2.0.0
 
-# Security fixes for known vulnerabilities
+# Security fixes for known vulnerabilities (Python 3.10 compatible)
 # setuptools: Fix for CVE-2022-40897, CVE-2025-47273, CVE-2024-6345
-setuptools>=78.1.1,<79.0.0
+setuptools>=65.0.0,<70.0.0
 # black: Fix for CVE-2024-21503
-black>=24.3.0,<25.0.0
+black>=23.0.0,<25.0.0
 
-# Security scanning tools
+# Security scanning tools (Python 3.10 compatible)
 bandit[toml]>=1.7.0,<2.0.0
-safety>=3.2.0,<4.0.0
+safety>=2.3.0,<4.0.0
+cryptography==43.0.3

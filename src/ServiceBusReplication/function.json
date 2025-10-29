@@ -3,7 +3,7 @@
     {
       "direction": "in",
       "name": "timer",
-      "schedule": "* */5 * * * *",
+      "schedule": "0 * * * * *",
       "type": "timerTrigger"
     }
   ],

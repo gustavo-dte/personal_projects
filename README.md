@@ -7,7 +7,7 @@ A reliable, enterprise-grade Azure Function for dynamically replicating messages
 This application automatically discovers and replicates messages from ALL topics and subscriptions in one Azure Service Bus namespace to another, helping you:
 
 - **🔄 Disaster Recovery**: Keep your messages safe if one region goes down
-- **🌍 Cross-Region Backup**: Maintain message copies across different Azure regions  
+- **🌍 Cross-Region Backup**: Maintain message copies across different Azure regions
 - **📈 Business Continuity**: Meet your RTO (Recovery Time Objective) requirements
 - **💾 Zero Message Loss**: Ensure critical business messages aren't lost during outages
 - **🎯 Dynamic Discovery**: Automatically replicates ALL topics and subscriptions without manual configuration
@@ -39,13 +39,13 @@ This application automatically discovers and replicates messages from ALL topics
    ```bash
    # Create and activate virtual environment
    python -m venv .venv
-   
+
    # Windows
    .venv\Scripts\activate
-   
+
    # Linux/Mac
    source .venv/bin/activate
-   
+
    # Install dependencies (includes both runtime and development dependencies)
    pip install -r requirements.txt
    ```
@@ -54,7 +54,7 @@ This application automatically discovers and replicates messages from ALL topics
    ```bash
    # Install pre-commit hooks for code quality
    pre-commit install
-   
+
    # Run initial quality checks
    pre-commit run --all-files
    ```
@@ -65,7 +65,7 @@ This application automatically discovers and replicates messages from ALL topics
    ```bash
    # Replication direction
    REPLICATION_TYPE=primary_to_secondary
-   
+
    # Connection strings
    PRIMARY_SERVICEBUS_CONN="Endpoint=sb://your-primary.servicebus.windows.net/;..."
    SECONDARY_SERVICEBUS_CONN="Endpoint=sb://your-secondary.servicebus.windows.net/;..."
@@ -79,7 +79,7 @@ This application automatically discovers and replicates messages from ALL topics
 # Start the Azure Functions runtime
 func start --python
 
-# The function will run every 30 seconds and replicate messages
+# The function will run every minute and replicate messages
 ```
 
 ## 📖 Documentation

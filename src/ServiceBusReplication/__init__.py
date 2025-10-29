@@ -46,28 +46,28 @@ def main(timer: func.TimerRequest) -> None:
         with ServiceBusClient.from_connection_string(
             config.source_conn_str
         ) as source_client:
-            admin_client = ServiceBusAdministrationClient.from_connection_string(
+            with ServiceBusAdministrationClient.from_connection_string(
                 config.source_conn_str
-            )
-            topics = [t.name for t in admin_client.list_topics()]
-            app_logger.info(f"Found {len(topics)} topics: {topics}")
+            ) as admin_client:
+                topics = [t.name for t in admin_client.list_topics()]
+                app_logger.info(f"Found {len(topics)} topics: {topics}")
 
-            for topic in topics:
-                subs = [s.name for s in admin_client.list_subscriptions(topic)]
-                app_logger.info(
-                    f"Found {len(subs)} subscriptions for topic '{topic}': {subs}"
-                )
-
-                for sub in subs:
-                    app_logger.info(f"Processing {topic}/{sub}")
-                    process_subscription_messages(
-                        client=source_client,
-                        topic=topic,
-                        subscription=sub,
-                        dest_conn=config.secondary_conn_str,
-                        direction="Primary → Secondary",
-                        logger=app_logger,
+                for topic in topics:
+                    subs = [s.name for s in admin_client.list_subscriptions(topic)]
+                    app_logger.info(
+                        f"Found {len(subs)} subscriptions for topic '{topic}': {subs}"
                     )
+
+                    for sub in subs:
+                        app_logger.info(f"Processing {topic}/{sub}")
+                        process_subscription_messages(
+                            client=source_client,
+                            topic=topic,
+                            subscription=sub,
+                            dest_conn=config.secondary_conn_str,
+                            direction="Primary → Secondary",
+                            logger=app_logger,
+                        )
 
         app_logger.info("✅ Replication cycle completed successfully.")
 
@@ -100,40 +100,41 @@ def process_subscription_messages(
 
         logger.info(f"🔁 Found {len(messages)} messages in {topic}/{subscription}")
 
-        for msg in messages:
-            correlation_id = getattr(msg, "correlation_id", None) or "replica"
-            ttl_seconds = getattr(msg, "time_to_live", None)
+        # Create destination client once and reuse for all messages
+        with ServiceBusClient.from_connection_string(dest_conn) as dest_client:
+            with dest_client.get_topic_sender(topic_name=topic) as sender:
+                for msg in messages:
+                    correlation_id = getattr(msg, "correlation_id", None) or "replica"
+                    ttl_seconds = getattr(msg, "time_to_live", None)
 
-            try:
-                # Create replicated copy
-                replicated = create_replicated_message(
-                    msg, correlation_id=correlation_id, ttl_seconds=ttl_seconds
-                )
+                    try:
+                        # Create replicated copy
+                        replicated = create_replicated_message(
+                            msg, correlation_id=correlation_id, ttl_seconds=ttl_seconds
+                        )
 
-                # Send to destination
-                with ServiceBusClient.from_connection_string(dest_conn) as dest_client:
-                    with dest_client.get_topic_sender(topic_name=topic) as sender:
+                        # Send to destination using the reused sender
                         sender.send_messages(replicated)
 
-                # Complete only after successful send
-                receiver.complete_message(msg)
-                logger.info(
-                    "✅ Replicated message %s from %s/%s",
-                    truncate_correlation_id(correlation_id),
-                    topic,
-                    subscription,
-                )
+                        # Complete only after successful send
+                        receiver.complete_message(msg)
+                        logger.info(
+                            "✅ Replicated message %s from %s/%s",
+                            truncate_correlation_id(correlation_id),
+                            topic,
+                            subscription,
+                        )
 
-            except Exception as e:
-                # Log & abandon to retry later
-                receiver.abandon_message(msg)
-                logger.error(
-                    "❌ Failed to replicate message %s from %s/%s: %s",
-                    truncate_correlation_id(correlation_id),
-                    topic,
-                    subscription,
-                    sanitize_error_message(str(e)),
-                )
+                    except Exception as e:
+                        # Log & abandon to retry later
+                        receiver.abandon_message(msg)
+                        logger.error(
+                            "❌ Failed to replicate message %s from %s/%s: %s",
+                            truncate_correlation_id(correlation_id),
+                            topic,
+                            subscription,
+                            sanitize_error_message(str(e)),
+                        )
 
 
 # --------------------------------------------------------------------------

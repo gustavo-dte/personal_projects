@@ -95,7 +95,7 @@ pytest tests/ -k "test_message" -v
 ```
 tests/
 ├── main_test.py                  # Main functionality tests
-├── error_handlers_test.py        # Error handling tests  
+├── error_handlers_test.py        # Error handling tests
 ├── message_utils_test.py         # Message utilities tests
 ├── retry_utils_test.py           # Retry mechanism tests
 ├── exceptions_test.py            # Custom exception tests
@@ -116,10 +116,10 @@ def test_should_enhance_message_with_replication_metadata():
     # Arrange
     original_message = ServiceBusReceivedMessage(...)
     correlation_id = "test-correlation-123"
-    
+
     # Act
     enhanced_message = enhance_message(original_message, correlation_id)
-    
+
     # Assert
     assert enhanced_message.application_properties["x-replication-correlation-id"] == correlation_id
     assert enhanced_message.application_properties["x-original-message-id"] == original_message.message_id
