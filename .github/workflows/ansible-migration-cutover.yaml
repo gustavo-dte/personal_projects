@@ -47,46 +47,41 @@ jobs:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
     steps:
-      - name: Checkout repository
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate confirmation
+      - name: ✅ Validate confirmation
         run: |
           if [ "${{ inputs.confirmation }}" != "CONFIRM" ]; then
-            echo "Invalid confirmation. You must type 'CONFIRM' to proceed."
+            echo "❌ Invalid confirmation. You must type 'CONFIRM' to proceed."
             echo "This is a safety measure for irreversible operations."
             exit 1
           fi
-          echo "Confirmation validated. Proceeding with cutover."
+          echo "✅ Confirmation validated. Proceeding with cutover."
 
-      - name: Validate manifest
+      - name: ✅ Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: Setup Ansible and Azure SDKs
+      - name: 🔐 Azure Login with user-assigned managed identity
         if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/prereq
+        uses: azure/login@v2
         with:
-          ansible_version: ${{ vars.ANSIBLE_CORE_VERSION || '>=2.15' }}
-          collections_requirements: ansible/requirements.yml
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
 
-      - name: Azure Login
-        if: ${{ !inputs.dry_run }}
-        uses: ./.github/actions/azure-login
-        with:
-          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
-          tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Display cutover warning and configuration
+      - name: 📊 Display cutover warning and configuration
         run: |
-          echo "WARNING: MIGRATION CUTOVER OPERATION"
+          echo "⚠️  WARNING: MIGRATION CUTOVER OPERATION"
           echo "This will create target VMs in Azure and complete migration"
           echo "This operation is IRREVERSIBLE once started"
           echo ""
-          echo "Configuration validated"
-          echo "Using manifest: ${{ inputs.manifest }}"
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
           echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
           echo "🔌 Shutdown source VM: ${{ inputs.shutdown_source_vm }}"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
@@ -100,14 +95,22 @@ jobs:
             fi
           fi
 
-      - name: Run playbook - migration cutover
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "shutdown_source_vm": ${{ inputs.shutdown_source_vm }},
+            "dry_run": ${{ inputs.dry_run }}
+          }
+          JSON
+
+      - name: 🎬 Run playbook - migration cutover
         run: |
           ansible-playbook ansible/playbooks/migration-cutover.yml \
-            -e "manifest=${{ inputs.manifest }}" \
-            -e "shutdown_source_vm=${{ inputs.shutdown_source_vm }}" \
-            -e "dry_run=${{ inputs.dry_run }}"
+            -e @ansible_extra_vars.json
 
-      - name: Upload Logs
+      - name: 📤 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -116,16 +119,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: Post-cutover guidance
+      - name: 📋 Post-cutover guidance
         if: success()
         run: |
           echo "Migration cutover workflow completed"
           echo ""
           echo "Next steps:"
           echo "1. Monitor migration jobs in Azure portal"
-          echo "2. Verify target VMs are created"
+          echo "2. Verify target VMs are created and running"
           echo "3. Test target VM functionality"
-          echo "4. Shutdown source VMs if needed"
-          echo "5. Update DNS and networking"
+          echo "4. Validate applications are working"
+          echo "5. Update DNS and networking as needed"
+          echo "6. Shutdown source VMs manually if not done automatically"
           echo ""
           echo "Check uploaded logs for detailed results"
