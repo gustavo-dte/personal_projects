@@ -46,6 +46,8 @@
     target_disk_type: "{{ vm_spec.target_disk_type | default(manifest_data.target_disk_type | default('')) }}"
     target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
     os_disk_scsi_id: "{{ vm_spec.os_disk_scsi_id | default(manifest_data.os_disk_scsi_id | default('')) }}"
+    global_tags: "{{ manifest_data.global_tags | default({}) }}"
+    vm_tags: "{{ vm_spec.tags | default({}) }}"
     dry_run: "{{ dry_run | default(false) }}"
 
 - name: Collect replication results
@@ -64,6 +66,15 @@
       output: "{{ all_replication_outputs[vm_item.name].stdout | default('') }}"
   when: migration_action == 'start_replication' and all_replication_outputs is defined
 
+- name: Build replication summary details
+  ansible.builtin.set_fact:
+    replication_summary_details: "{{ replication_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_replication_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: migration_action == 'start_replication' and all_replication_results is defined and all_replication_results | length > 0
+
 - name: Display migration replication summary
   ansible.builtin.debug:
     msg:
@@ -73,7 +84,7 @@
       - "Already configured: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'already_configured') | list | length }}"
       - "Failed: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
       - "VM Details:"
-      - "{{ all_replication_results | default([]) | map('combine', {'summary': item.vm_name + ': ' + item.status}) | map(attribute='summary') | list | join('\n  ') }}"
+      - "{{ replication_summary_details | default([]) | join('\n  ') }}"
   when: migration_action == 'start_replication' and all_replication_results is defined
 
 - name: Include stop replication tasks
@@ -89,6 +100,7 @@
     azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
     azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
     target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
     dry_run: "{{ dry_run | default(false) }}"
 
 - name: Collect stop replication results
@@ -107,6 +119,15 @@
       output: "{{ all_stop_replication_outputs[vm_item.name].stdout | default('') }}"
   when: migration_action == 'stop_replication' and all_stop_replication_outputs is defined
 
+- name: Build stop replication summary details
+  ansible.builtin.set_fact:
+    stop_replication_summary_details: "{{ stop_replication_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_stop_replication_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: migration_action == 'stop_replication' and all_stop_replication_results is defined and all_stop_replication_results | length > 0
+
 - name: Display migration stop replication summary
   ansible.builtin.debug:
     msg:
@@ -116,7 +137,7 @@
       - "No active replication: {{ all_stop_replication_results | default([]) | selectattr('status', 'equalto', 'no_replication') | list | length }}"
       - "Failed: {{ all_stop_replication_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
       - "VM Details:"
-      - "{{ all_stop_replication_results | default([]) | map('combine', {'summary': item.vm_name + ': ' + item.status}) | map(attribute='summary') | list | join('\n  ') }}"
+      - "{{ stop_replication_summary_details | default([]) | join('\n  ') }}"
   when: migration_action == 'stop_replication' and all_stop_replication_results is defined
 
 - name: Include list projects tasks
@@ -148,3 +169,102 @@
     target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
     shutdown_source_vm: "{{ vm_spec.shutdown_source_vm | default(manifest_data.shutdown_source_vm | default(false)) }}"
     dry_run: "{{ dry_run | default(false) }}"
+
+- name: Include start test migration tasks
+  ansible.builtin.include_tasks: start_test_migration.yml
+  when: migration_action == 'test_migration'
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
+    azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
+    test_network_id: "{{ vm_spec.test_network_id | default(manifest_data.test_network_id | default('')) }}"
+
+- name: Collect test migration results
+  ansible.builtin.set_fact:
+    all_test_migration_results: "{{ all_test_migration_results | default([]) + [vm_result] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: "{{ 'success' if (all_test_migration_outputs[vm_item.name].changed | default(false)) else 'failed' }}"
+      changed: "{{ all_test_migration_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_test_migration_outputs[vm_item.name].stderr | default('') }}"
+      output: "{{ all_test_migration_outputs[vm_item.name].stdout | default('') }}"
+  when: migration_action == 'test_migration' and all_test_migration_outputs is defined
+
+- name: Build test migration summary details
+  ansible.builtin.set_fact:
+    test_migration_summary_details: "{{ test_migration_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_test_migration_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: migration_action == 'test_migration' and all_test_migration_results is defined and all_test_migration_results | length > 0
+
+- name: Display test migration summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration test migration summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_test_migration_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Failed: {{ all_test_migration_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ test_migration_summary_details | default([]) | join('\n  ') }}"
+  when: migration_action == 'test_migration' and all_test_migration_results is defined
+
+- name: Include start test migration cleanup tasks
+  ansible.builtin.include_tasks: start_test_migration_cleanup.yml
+  when: migration_action == 'test_migration_cleanup'
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
+    azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
+
+- name: Collect test migration cleanup results
+  ansible.builtin.set_fact:
+    all_test_migration_cleanup_results: "{{ all_test_migration_cleanup_results | default([]) + [vm_result] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: "{{ 'success' if (all_test_migration_cleanup_outputs[vm_item.name].changed | default(false)) else 'failed' }}"
+      changed: "{{ all_test_migration_cleanup_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_test_migration_cleanup_outputs[vm_item.name].stderr | default('') }}"
+      output: "{{ all_test_migration_cleanup_outputs[vm_item.name].stdout | default('') }}"
+  when: migration_action == 'test_migration_cleanup' and all_test_migration_cleanup_outputs is defined
+
+- name: Build test migration cleanup summary details
+  ansible.builtin.set_fact:
+    test_migration_cleanup_summary_details: "{{ test_migration_cleanup_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_test_migration_cleanup_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: migration_action == 'test_migration_cleanup' and all_test_migration_cleanup_results is defined and all_test_migration_cleanup_results | length > 0
+
+- name: Display test migration cleanup summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration test migration cleanup summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_test_migration_cleanup_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Failed: {{ all_test_migration_cleanup_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ test_migration_cleanup_summary_details | default([]) | join('\n  ') }}"
+  when: migration_action == 'test_migration_cleanup' and all_test_migration_cleanup_results is defined

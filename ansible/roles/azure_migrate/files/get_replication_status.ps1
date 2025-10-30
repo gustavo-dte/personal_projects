@@ -52,58 +52,40 @@ $Result = $null
 
 try {
   # Get replication status for the VM
-  $ReplicationStatus = Get-AzMigrateServerReplication -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup -MachineName $VMName -ErrorAction Stop
+  $Response = Get-AzMigrateServerReplication -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup -MachineName $VMName -ErrorAction Stop
 
   Write-Output "INFO: Replication status for VM '$VMName':"
-  Write-Output $ReplicationStatus
+  Write-Output $Response
 
-  if (-not $ReplicationStatus) {
+  if (-not $Response) {
     Write-Output "INFO: No replication found for VM '$VMName' in project '$ProjectName' - treating as 0% replication"
     $Result = @{
       VMName = $VMName
       ReplicationStatus = "Not Found"
       ReplicationPercentage = 0
-      MeetsThreshold = $false
       Error = $null
     }
   } else {
     # Extract replication percentage/state - try different property names based on Az.Migrate version
-    $ReplicationPercentage = 0
-    $ReplicationState = "Unknown"
+    $ReplicationPercentage = 0 # Currently not supported by the API
 
-    if ($ReplicationStatus.MigrationState) {
-      $ReplicationState = $ReplicationStatus.MigrationState.MigrationState
-      if ($ReplicationStatus.MigrationState.PercentComplete) {
-        $ReplicationPercentage = $ReplicationStatus.MigrationState.PercentComplete
-      }
-    } elseif ($ReplicationStatus.PercentComplete) {
-      $ReplicationPercentage = $ReplicationStatus.PercentComplete
-      $ReplicationState = $ReplicationStatus.MigrationState
-    } elseif ($ReplicationStatus.ReplicationPercentage) {
-      $ReplicationPercentage = $ReplicationStatus.ReplicationPercentage
-      $ReplicationState = $ReplicationStatus.ReplicationState
-    } elseif ($ReplicationStatus.Properties -and $ReplicationStatus.Properties.MigrationState) {
-      $ReplicationState = $ReplicationStatus.Properties.MigrationState.MigrationState
-      $ReplicationPercentage = $ReplicationStatus.Properties.MigrationState.PercentComplete
-    }
-
-    if ($ReplicationPercentage -is [string]) {
-      $ReplicationPercentage = [int]($ReplicationPercentage -replace '%', '')
-    }
-
-    $MeetsThreshold = $ReplicationPercentage -ge $ReplicationThreshold
-
-    if ($MeetsThreshold) {
-      Write-Output "SUCCESS: VM '$VMName' meets threshold with $ReplicationPercentage% replication (>= $ReplicationThreshold%)"
+    if ($Response.ReplicationStatus) {
+      $ReplicationStatus = $Response.ReplicationStatus
     } else {
-      Write-Output "INFO: VM '$VMName' below threshold with $ReplicationPercentage% replication (< $ReplicationThreshold%)"
+      $ReplicationStatus = "Unknown"
+    }
+
+    # Extract replication ID (TargetObjectID)
+    $ReplicationId = $null
+    if ($Response.Id) {
+      $ReplicationId = $Response.Id
     }
 
     $Result = @{
       VMName = $VMName
-      ReplicationStatus = $ReplicationState
+      ReplicationStatus = $ReplicationStatus
       ReplicationPercentage = $ReplicationPercentage
-      MeetsThreshold = $MeetsThreshold
+      ReplicationId = $ReplicationId
       Error = $null
     }
   }
@@ -118,7 +100,6 @@ try {
       VMName = $VMName
       ReplicationStatus = "Not Found"
       ReplicationPercentage = 0
-      MeetsThreshold = $false
       Error = $null
     }
   } else {
@@ -127,7 +108,6 @@ try {
       VMName = $VMName
       ReplicationStatus = "Error"
       ReplicationPercentage = 0
-      MeetsThreshold = $false
       Error = $ErrorMessage
     }
   }

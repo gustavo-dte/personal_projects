@@ -13,3 +13,7 @@ api_version_migrate: "2020-01-01"
 
 # Dry run mode - when true, only print commands that would be executed
 dry_run: false
+
+# Paths
+# Default logs directory - always relative to repo root
+logs_dir: ansible/logs

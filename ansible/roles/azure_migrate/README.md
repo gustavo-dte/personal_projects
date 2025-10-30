@@ -15,6 +15,8 @@
 Orchestrates common Azure Migrate actions for discovered servers:
 - **list_projects**: Enumerate Azure Migrate projects in a resource group.
 - **start_replication**: Initiate server replication for one or more machines into a target resource group/network using Az PowerShell `Az.Migrate`.
+- **test_migration**: Start test migration for VMs with active replication to validate migration before cutover.
+- **stop_replication**: Stop replication for VMs (requires vm_names or STOP_ALL)
 - **cutover**: Placeholder for future implementation.
 
 Authentication can be handled automatically via PowerShell (managed identity, service principal, or bridged Azure CLI token) or skipped if an existing context is already established.
@@ -34,7 +36,7 @@ Authentication can be handled automatically via PowerShell (managed identity, se
   - `vm_name` (cutover; not yet implemented)
 
 - **Behavior**
-  - `migration_action`: One of `start_replication`, `cutover`, `list_projects` (default: `start_replication`)
+  - `migration_action`: One of `start_replication`, `stop_replication`, `test_migration`, `cutover`, `list_projects`, `get_replication_status` (default: `start_replication`)
   - `migration_actions`: Allowed values list; used for validation
   - `api_version_migrate`: API version used for `list_projects` (default: `2020-05-01`)
 
@@ -48,6 +50,7 @@ Authentication can be handled automatically via PowerShell (managed identity, se
   - `target_network_id` (required): Full Azure resource ID of the target virtual network (e.g., `/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/vnet-name`)
   - `target_subnet_name` (required): Name of the subnet within the target virtual network
   - `os_disk_scsi_id` (default: `scsi0:0`)
+  - `test_network_id` (required for test_migration): Full Azure resource ID of the test virtual network for test migration validation
   - `target_vm_name` (optional): Custom name for the target VM. If not specified, generates name using pattern: `vm-{os_prefix}-{env}-{appName}`
     - `os_prefix`: Extracted from source VM name (dca for Windows, lnx for Linux)
     - `env`: From VM spec in manifest (e.g., dev, prod)
@@ -136,11 +139,31 @@ ansible-playbook my-playbook.yml -e "manifest=phase_2"
           rhel_major: 9                               # require RHEL 9 or later
 ```
 
+#### Start test migration (manifest-driven)
+```yaml
+- hosts: localhost
+  gather_facts: false
+  roles:
+    - role: azure_migrate
+      vars:
+        migration_action: test_migration                # action: start test migration
+        manifest: "{{ manifest }}"                      # pass through manifest variable (never hardcode)
+```
+
+**Command line usage:**
+```bash
+ansible-playbook ansible/playbooks/start-test-migration.yml \
+  -e "manifest=phase_1"
+```
+
+**Note**: Test migration requires `test_network_id` to be configured in the manifest (global or per-VM).
+
 ### Notes
 - The role performs early validation and will fail if required variables are missing for the chosen action.
 - `cutover` is scaffolded but not yet implemented in tasks.
 - **Authentication**: This role expects Azure authentication to be handled externally. Run `az login` before executing the playbook locally, or use GitHub Actions which handles authentication automatically.
 - `start_replication` invokes the `Az.Migrate` cmdlet `New-AzMigrateServerReplication` under the hood via `files/start_replication.ps1`. Ensure required modules are installed on the runner.
+- **Test Migration**: `test_migration` starts a test migration for VMs with active replication. Requires `test_network_id` in the manifest. The replication object ID is automatically extracted from the replication status check.
 - **OS Version Validation**: By default, the role validates that VMs meet minimum OS version requirements before starting replication. Default requirements are Windows Server 2019+ (build 17763) and RHEL 8+. These requirements are configurable via the `min_os_versions` variable. Use `skip_os_version_check: true` to bypass this validation if needed.
 - **Idempotency**: Starting replication now includes pre-checks to skip VMs that already have replication enabled, making it safe to re-run.
 
@@ -193,6 +216,9 @@ target_vm_size: Standard_D4s_v5
 target_license_type: NoLicenseType
 target_disk_type: Premium_LRS
 os_disk_scsi_id: scsi0:0
+
+# Test network for test_migration action
+test_network_id: /subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/vnet-test
 
 # List of VMs to replicate
 vms:

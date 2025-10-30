@@ -1,0 +1,132 @@
+# tasks/assign_policy.yml
+- name: Assign policy to scope and create remediation task
+  block:
+    - name: Set policy assignment scope
+      ansible.builtin.set_fact:
+        policy_assignment_scope: >-
+          {{ "/subscriptions/" ~ manifest_data.target_subscription_id ~
+             ("/resourceGroups/" ~ manifest_data.target_resource_group
+              if manifest_data.target_resource_group is defined else '') }}
+
+    - name: Detect OS types by querying each VM with az (preferred)
+      block:
+        - name: Query VM info for each VM using azure.azcollection
+          azure.azcollection.azure_rm_virtualmachine_info:
+            resource_group: "{{ manifest_data.target_resource_group }}"
+            name: "{{ item.name }}"
+            subscription_id: "{{ manifest_data.target_subscription_id }}"
+          register: vm_os_lookup
+          changed_when: false
+          loop: "{{ manifest_data.vms }}"
+          loop_control:
+            loop_var: item
+
+        - name: Build vm_os_map from lookup results
+          ansible.builtin.set_fact:
+            vm_os_map: "{}"
+
+        - name: Populate vm_os_map entries from azure module results
+          ansible.builtin.set_fact:
+            vm_os_map: "{{ vm_os_map | combine({ item.item.name: ( (item.vms[0].os_info | default('Windows')) | lower ) }) }}"
+          loop: "{{ vm_os_lookup.results }}"
+          loop_control:
+            loop_var: item
+
+        - name: Set has_windows/has_linux from vm_os_map
+          ansible.builtin.set_fact:
+            has_windows: "{{ (vm_os_map.values() | select('match','(?i)windows') | list | length) > 0 }}"
+            has_linux: "{{ (vm_os_map.values() | select('match','(?i)linux') | list | length) > 0 }}"
+      when: not dry_run | bool
+
+    - name: Dry-run fallback - build vm_os_map from manifest (no az calls)
+      ansible.builtin.set_fact:
+        vm_os_map: >-
+          {{ dict( (manifest_data.vms | default([])) | map(attribute='name') | zip((manifest_data.vms | default([])) | map(attribute='os') | map('default','windows') | map('lower')) ) }}
+        has_windows: "{{ (vm_os_map.values() | select('match','(?i)windows') | list | length) > 0 }}"
+        has_linux: "{{ (vm_os_map.values() | select('match','(?i)linux') | list | length) > 0 }}"
+      when: dry_run | bool
+
+    - name: Assign policy definition for Windows if present
+      ansible.builtin.command: >
+        az policy assignment create
+        --name "{{ manifest_data.update_manager.policy_assignment_name | default(policy_assignment_name) }}"
+        --scope "{{ policy_assignment_scope }}"
+        --policy "{{ policy_def_name.stdout }}"
+        --params '{{ {
+          "assessmentMode": {"value": "AutomaticByPlatform"},
+          "operatingSystems": {"value": ["Windows"]}
+        } | to_json }}'
+      register: policy_assignment_result_windows
+      when: has_windows and not dry_run | bool
+
+    - name: Mock policy assignment result for Windows (dry-run)
+      ansible.builtin.set_fact:
+        policy_assignment_result_windows:
+          changed: false
+          name: "{{ manifest_data.update_manager.policy_assignment_name | default(policy_assignment_name) }}"
+          id: "/subscriptions/{{ manifest_data.target_subscription_id }}/providers/Microsoft.Authorization/policyAssignments/{{ manifest_data.update_manager.policy_assignment_name | default(policy_assignment_name) }}"
+      when: has_windows and dry_run | bool
+
+    - name: Create remediation for Windows assignment
+      ansible.builtin.command: >
+        az policy remediation create
+        --name "{{ manifest_data.update_manager.remediation_name | default(remediation_name) }}"
+        --policy-assignment "{{ policy_assignment_result_windows.name }}"
+        {{ '--resource-group ' ~ manifest_data.target_resource_group if manifest_data.target_resource_group is defined else '' }}
+      register: remediation_result_windows
+      failed_when: false
+      when: has_windows and not dry_run | bool
+
+    - name: Mock remediation for Windows (dry-run)
+      ansible.builtin.set_fact:
+        remediation_result_windows:
+          changed: false
+          msg: "[DRY RUN] Would create remediation for policy assignment {{ policy_assignment_result_windows.name }}"
+      when: has_windows and dry_run | bool
+
+    - name: Assign policy definition for Linux if present
+      ansible.builtin.command: >
+        az policy assignment create
+        --name "{{ manifest_data.update_manager.policy_assignment_name_linux | default(policy_assignment_name_linux) }}"
+        --scope "{{ policy_assignment_scope }}"
+        --policy "{{ policy_def_name.stdout }}"
+        --params '{{ {
+          "assessmentMode": {"value": "AutomaticByPlatform"},
+          "operatingSystems": {"value": ["Linux"]}
+        } | to_json }}'
+      register: policy_assignment_result_linux
+      when: has_linux and not dry_run | bool
+
+    - name: Mock policy assignment result for Linux (dry-run)
+      ansible.builtin.set_fact:
+        policy_assignment_result_linux:
+          changed: false
+          name: "{{ manifest_data.update_manager.policy_assignment_name_linux | default(policy_assignment_name_linux) }}"
+          id: "/subscriptions/{{ manifest_data.target_subscription_id }}/providers/Microsoft.Authorization/policyAssignments/{{ manifest_data.update_manager.policy_assignment_name_linux | default(policy_assignment_name_linux) }}"
+      when: has_linux and dry_run | bool
+
+    - name: Create remediation for Linux assignment
+      ansible.builtin.command: >
+        az policy remediation create
+        --name "{{ manifest_data.update_manager.remediation_name_linux | default(remediation_name_linux) }}"
+        --policy-assignment "{{ policy_assignment_result_linux.name }}"
+        {{ '--resource-group ' ~ manifest_data.target_resource_group if manifest_data.target_resource_group is defined else '' }}
+      register: remediation_result_linux
+      failed_when: false
+      when: has_linux and not dry_run | bool
+
+    - name: Mock remediation for Linux (dry-run)
+      ansible.builtin.set_fact:
+        remediation_result_linux:
+          changed: false
+          msg: "[DRY RUN] Would create remediation for policy assignment {{ policy_assignment_result_linux.name }}"
+      when: has_linux and dry_run | bool
+
+    - name: Show policy and remediation result
+      ansible.builtin.debug:
+        msg:
+          - "Policy definition: {{ policy_def_name.stdout }}"
+          - "Windows assignment: {{ policy_assignment_result_windows.name | default('not created') }}"
+          - "Windows remediation: {{ remediation_result_windows.msg | default(remediation_result_windows.stdout | default('not created')) }}"
+          - "Linux assignment: {{ policy_assignment_result_linux.name | default('not created') }}"
+          - "Linux remediation: {{ remediation_result_linux.msg | default(remediation_result_linux.stdout | default('not created')) }}"

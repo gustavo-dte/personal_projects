@@ -11,6 +11,32 @@ target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
 target_resource_group: rg-cu-CorpApps-MigrationTest-Dev
 os_disk_scsi_id: scsi0:0
 
+# Azure Update Manager / Patch scheduling defaults
+update_manager:
+  policy_assignment_name: PeriodicAssessMissingUpdates-Windows
+  remediation_name: Remediate-PeriodicAssess
+  # ISO8601 start time for scheduled patch window (e.g. "2025-10-16T00:00:00Z")
+  patch_start_time: null
+  # When true, skip running the real assessment during dry-run
+  skip_assessment_in_dry_run: true
+
+  # Maintenance (InGuestPatch) configuration defaults
+  maintenance:
+    resource_group: null
+    config_name: PatchConfig-InGuestPatch
+    assignment_name: Assign-PatchConfig
+    location: null
+    window_duration: "03:00"
+    window_recur_every: "7days"
+    window_start_date_time: null
+    window_time_zone: UTC
+    windows:
+      kb_exclude: ""
+      kb_include: ""
+      classifications: Critical
+    reboot_setting: IfRequired
+    ingest_patch_mode: User
+
 # Azure Backup defaults
 recovery_vault_name: cloud-platform-prod-cu-backup-vault
 backup_policy_name: DefaultPolicy
@@ -30,12 +56,25 @@ vmss_config:
 
 # Network configuration
 target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
-target_subnet_name: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet/subnets/main
+target_subnet_name: main
 
 # VM configuration
 target_vm_size: Standard_D4s_v5
 target_license_type: NoLicenseType
 target_disk_type: Standard_LRS
+
+# Global tag defaults for Azure Migrate replication
+# These tags will be applied to VM, Disk, and NIC resources
+global_tags:
+  Application: "Movit"
+  BillTo: "200000060548"
+  BusinessCriticality: "Teir 4"
+  ContactEmail: "cloudplatform@dteenergy.com"
+  DataClassification: "Internal"
+  ItAppOwnerEmail: "cloudplatform@dteenergy.com"
+  Environment: "Dev"
+  Portfolio: "CorpApps"
+  Project: "VVMWare"
 
 # List of VMs to replicate
 vms:
@@ -53,3 +92,10 @@ vms:
       recovery_vault_name: cloud-platform-prod-cu-backup-vault
       backup_policy_name: DefaultPolicy
       replication_threshold: 80
+
+    # VM-specific tag overrides (optional)
+    # These will override global_tags for this specific VM
+    tags:
+      Environment: "Dev"
+      Portfolio: "CorpApps"
+      # Any tags not specified here will use global_tags values

@@ -1,0 +1,212 @@
+---
+# Start test migration cleanup using PowerShell cmdlets
+
+- name: Verify prerequisites for start_test_migration_cleanup
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: azure_verify_prerequisites
+
+- name: Assert additional required variables for start_test_migration_cleanup
+  ansible.builtin.assert:
+    that:
+      - (azure_migrate_project_name | default('')) | length > 0
+      - (azure_migrate_project_resource_group | default('')) | length > 0
+      - (azure_migrate_subscription_id | default('')) | length > 0
+      - (vm_name | default('')) | length > 0
+    fail_msg: |
+      Required variables missing. Please provide:
+      - azure_migrate_project_name: {{ azure_migrate_project_name | default('NOT SET') }}
+      - azure_migrate_project_resource_group: {{ azure_migrate_project_resource_group | default('NOT SET') }}
+      - azure_migrate_subscription_id: {{ azure_migrate_subscription_id | default('NOT SET') }}
+      - vm_name: {{ vm_name | default('NOT SET') }}
+
+- name: Check if replication exists for VM before starting test migration cleanup
+  block:
+    - name: Check replication status for single VM
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/get_replication_status.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -VMNamesJson '["{{ vm_name }}"]'
+        -ReplicationThreshold 0
+        -SubscriptionId {{ azure_migrate_subscription_id | default('') }}
+      register: existing_replication_check
+      changed_when: false
+
+    - name: Debug PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Raw PowerShell output:
+          {{ existing_replication_check.stdout }}
+
+    - name: Read JSON results from file
+      ansible.builtin.slurp:
+        src: get_replication_status_result.json
+      register: json_file_content
+
+    - name: Parse JSON content and set replication data
+      ansible.builtin.set_fact:
+        replication_json: "{{ json_file_content.content | b64decode | from_json }}"
+
+    - name: Debug JSON parsing results
+      ansible.builtin.debug:
+        msg: |
+          JSON Parsing Debug:
+          - VM Name: {{ replication_json.VMName | default('N/A') }}
+          - Replication Status: {{ replication_json.ReplicationStatus | default('N/A') }}
+          - Error Message: {{ replication_json.Error | default('N/A') }}
+
+    - name: Set replication status flags and extract ID
+      ansible.builtin.set_fact:
+        existing_replication_results: "{{ replication_json }}"
+        vm_has_replication: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error'] }}"
+        replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
+        replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
+        replication_object_id: "{{ replication_json.ReplicationId | default('') }}"
+
+    - name: Fail if replication does not exist
+      ansible.builtin.fail:
+        msg: |
+          ❌ Cannot start test migration cleanup for VM '{{ vm_name }}'
+
+          VM does not have active replication. Test migration cleanup can only be started for VMs that are actively replicating.
+
+          Current replication status: {{ replication_json.ReplicationStatus | default('Unknown') }}
+
+          Troubleshooting:
+          - Verify the VM has been replicated successfully
+          - Check replication status before attempting test migration cleanup
+          - Ensure replication percentage meets requirements
+      when: not vm_has_replication
+
+  rescue:
+    - name: Fail when replication status check fails
+      ansible.builtin.fail:
+        msg: |
+          Failed to check replication status for VM '{{ vm_name }}'.
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          Cannot start test migration cleanup without verifying replication status.
+
+- name: Start test migration cleanup using PowerShell file
+  block:
+    - name: Debug replication object ID
+      ansible.builtin.debug:
+        msg: "Replication Object ID to use: {{ replication_object_id }}"
+      when: replication_object_id is defined
+
+    - name: Fail if replication object ID is not found
+      ansible.builtin.fail:
+        msg: |
+          ❌ Could not retrieve replication object ID for VM '{{ vm_name }}'
+
+          This is required to start test migration cleanup.
+
+          Troubleshooting:
+          - Verify the VM has active replication
+          - Check replication status
+          - Ensure Azure Migrate is properly configured
+      when: not (replication_object_id | default('') | length > 0)
+
+    - name: Run start_test_migration_cleanup.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/start_test_migration_cleanup.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+        -MachineName {{ vm_name }}
+        -TargetObjectId {{ replication_object_id }}
+      register: test_migration_cleanup_output
+      changed_when: test_migration_cleanup_output.rc == 0
+
+    - name: Read JSON results from start_test_migration_cleanup.ps1
+      ansible.builtin.slurp:
+        src: start_test_migration_cleanup_result.json
+      register: test_migration_cleanup_json_file
+
+    - name: Parse test migration cleanup JSON content
+      ansible.builtin.set_fact:
+        test_migration_cleanup_json: "{{ test_migration_cleanup_json_file.content | b64decode | from_json }}"
+
+    - name: Debug test migration cleanup JSON parsing results
+      ansible.builtin.debug:
+        msg: |
+          Test Migration Cleanup JSON Parsing Debug:
+          - VM Name: {{ test_migration_cleanup_json.VMName | default('N/A') }}
+          - Success: {{ test_migration_cleanup_json.Success | default('N/A') }}
+          - Error Message: {{ test_migration_cleanup_json.Error | default('N/A') }}
+          - Job ID: {{ test_migration_cleanup_json.JobId | default('N/A') }}
+
+  rescue:
+    - name: Test migration cleanup failed
+      ansible.builtin.fail:
+        msg: |
+          ❌ Test migration cleanup failed for VM '{{ vm_name }}'
+          Error: {{ test_migration_cleanup_json.Error | default('Unknown error occurred') }}
+
+          This could be due to:
+          - Azure Migrate project not accessible or doesn't exist
+          - Insufficient permissions for test migration cleanup operations
+          - Network connectivity issues
+          - Invalid target configuration parameters
+          - Replication object not found
+          - No active test migration to clean up
+
+          Troubleshooting:
+          - Verify Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check permissions on resource group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+          - Validate replication configuration
+          - Review full output below for specific errors
+
+          Stderr: {{ test_migration_cleanup_output.stderr | default('') }}
+  always:
+    - name: Log test migration cleanup operation (always)
+      ansible.builtin.debug:
+        msg: "Triggering log write for {{ vm_name }}"
+      vars:
+        log_prefix: "AzMigrate_StartTestMigrationCleanup_"
+        log_title: "Start Test Migration Cleanup"
+        operation_output: "{{ test_migration_cleanup_output | default({'stdout': 'Operation failed before completion', 'rc': 1}) }}"
+        test_migration_cleanup_result: "{{ test_migration_cleanup_json | default({'VMName': vm_name, 'Success': false, 'Error': 'Operation failed before completion'}) }}"
+      notify: write_operation_log
+    - name: Flush handlers to write log now
+      ansible.builtin.meta: flush_handlers
+
+- name: Display test migration cleanup result
+  ansible.builtin.debug:
+    msg:
+      - "VM {{ vm_name }}: {{ 'Test migration cleanup started' if (test_migration_cleanup_json.Success | default(false)) else 'Test migration cleanup failed' }}"
+      - "Changed: {{ test_migration_cleanup_output.changed | default(false) }}"
+      - "Success: {{ test_migration_cleanup_json.Success | default(false) }}"
+      - "Job ID: {{ test_migration_cleanup_json.JobId | default('N/A') }}"
+
+- name: Show detailed test migration cleanup CLI output
+  ansible.builtin.debug:
+    var: test_migration_cleanup_output
+  when: ansible_verbosity >= 1
+
+- name: Show detailed test migration cleanup JSON result
+  ansible.builtin.debug:
+    var: test_migration_cleanup_json
+  when: ansible_verbosity >= 1
+
+- name: Set test migration cleanup output for main playbook
+  ansible.builtin.set_fact:
+    test_migration_cleanup_output: "{{ test_migration_cleanup_output }}"
+    test_migration_cleanup_json: "{{ test_migration_cleanup_json }}"
+
+- name: Add test migration cleanup output to collection
+  ansible.builtin.set_fact:
+    all_test_migration_cleanup_outputs: >-
+      {{
+        all_test_migration_cleanup_outputs | default({}) | combine({
+          vm_name: {
+            'changed': test_migration_cleanup_output.changed | default(false),
+            'msg': test_migration_cleanup_output.msg | default(''),
+            'stdout': test_migration_cleanup_output.stdout | default(''),
+            'stderr': test_migration_cleanup_output.stderr | default(''),
+            'test_migration_cleanup_json': test_migration_cleanup_json | default({})
+          }
+        })
+      }}

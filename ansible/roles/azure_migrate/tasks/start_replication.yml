@@ -34,6 +34,18 @@
   ansible.builtin.set_fact:
     final_target_vm_name: "{{ vm_name | compute_target_vm_name(vm_spec, target_vm_name | default('')) }}"
 
+- name: Merge global tags with VM-specific tags
+  ansible.builtin.set_fact:
+    final_tags: "{{ global_tags | default({}) | combine(vm_tags | default({}), recursive=True) }}"
+
+- name: Debug tag merging
+  ansible.builtin.debug:
+    msg: |
+      Tag Merging for VM '{{ vm_name }}':
+      - Global Tags: {{ global_tags | default({}) }}
+      - VM Tags: {{ vm_tags | default({}) }}
+      - Final Tags: {{ final_tags }}
+
 - name: Check if replication already exists for VM
   block:
     - name: Check replication status for single VM
@@ -47,13 +59,6 @@
         -SubscriptionId {{ azure_migrate_subscription_id | default('') }}
       register: existing_replication_check
       changed_when: false
-      when: not (dry_run | default(false))
-
-    - name: Mock replication status check for dry run
-      ansible.builtin.set_fact:
-        existing_replication_check:
-          stdout: 'Some PowerShell output here\n[{"VMName":"{{ vm_name }}","ReplicationStatus":"Not Found","ReplicationPercentage":0,"MeetsThreshold":false}]'
-      when: dry_run | default(false)
 
     - name: Debug PowerShell output
       ansible.builtin.debug:
@@ -65,21 +70,10 @@
       ansible.builtin.slurp:
         src: get_replication_status_result.json
       register: json_file_content
-      when: not (dry_run | default(false))
 
     - name: Parse JSON content and set replication data
       ansible.builtin.set_fact:
-        replication_json: >-
-          {{
-            (json_file_content.content | b64decode | from_json)
-            if not (dry_run | default(false))
-            else {
-              'VMName': vm_name,
-              'ReplicationStatus': 'Not Found',
-              'ReplicationPercentage': 0,
-              'MeetsThreshold': false
-            }
-          }}
+        replication_json: "{{ json_file_content.content | b64decode | from_json }}"
 
     - name: Debug JSON parsing results
       ansible.builtin.debug:
@@ -129,6 +123,14 @@
           Error: {{ ansible_failed_result.msg | default('Unknown error') }}
           To prevent duplicate replication, the operation has been stopped.
 
+- name: Replication process is starting
+  ansible.builtin.debug:
+    msg: |
+      ⏳ Starting replication for VM '{{ vm_name }}'...
+
+      Please wait...
+  when: not vm_already_replicating
+
 - name: Start replication using PowerShell file
   block:
     - name: Run start_replication.ps1
@@ -151,6 +153,7 @@
         {{ '-SkipOSVersionCheck' if (skip_os_version_check | default(false)) else '' }}
         {{ ('-MinWindowsBuild ' ~ min_os_versions.windows_server_build) if not (skip_os_version_check | default(false)) else '' }}
         {{ ('-MinRHELVersion ' ~ min_os_versions.rhel_major) if not (skip_os_version_check | default(false)) else '' }}
+        {{ ('-Tags ' ~ (final_tags | to_json | quote)) if (final_tags | default({}) | length) > 0 else '' }}
       register: replication_output
       changed_when: replication_output.rc == 0
       when: not (dry_run | default(false))
@@ -171,12 +174,11 @@
               'VMName': vm_name,
               'TargetVMName': final_target_vm_name,
               'Success': true,
-              'Error': null,
+              'Error': None,
               'ReplicationId': 'mock-replication-id',
               'StartTime': '2024-01-01 00:00:00'
             }
           }}
-      when: not (dry_run | default(false))
 
     - name: Debug start replication JSON parsing results
       ansible.builtin.debug:
@@ -194,15 +196,24 @@
       ansible.builtin.set_fact:
         replication_output:
           stdout: |
-            INFO: [DRY RUN] Would start replication for VM {{ vm_name }}
-            Target VM Name: {{ final_target_vm_name }}
-            Target Resource Group: {{ target_resource_group }}
-            Target Network: {{ target_network_id }}
-            Target Subnet: {{ target_subnet_name }}
-            SCSI ID: {{ os_disk_scsi_id }}
-            {{ ('Target VM Size: ' ~ target_vm_size) if (target_vm_size | default('') | length) > 0 else '' }}
-            {{ ('License Type: ' ~ target_license_type) if (target_license_type | default('') | length) > 0 else '' }}
-            {{ ('Target Disk Type: ' ~ target_disk_type) if (target_disk_type | default('') | length) > 0 else '' }}
+            INFO: [DRY RUN] Would execute start_replication.ps1 with parameters:
+            -ProjectName {{ azure_migrate_project_name }}
+            -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+            -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+            -MachineName {{ vm_name }}
+            -TargetResourceGroup {{ target_resource_group }}
+            -TargetSubscriptionId {{ target_subscription_id | default('') }}
+            -TargetVMName {{ final_target_vm_name }}
+            -OSDiskScsiId {{ os_disk_scsi_id }}
+            -TargetNetworkId {{ target_network_id }}
+            -TargetSubnetName {{ target_subnet_name }}
+            {{ ('-TargetVMSize ' ~ target_vm_size) if (target_vm_size | default('') | length) > 0 else '' }}
+            {{ ('-LicenseType ' ~ target_license_type) if (target_license_type | default('') | length) > 0 else '' }}
+            {{ ('-TargetDiskType ' ~ target_disk_type) if (target_disk_type | default('') | length) > 0 else '' }}
+            {{ '-SkipOSVersionCheck' if (skip_os_version_check | default(false)) else '' }}
+            {{ ('-MinWindowsBuild ' ~ min_os_versions.windows_server_build) if not (skip_os_version_check | default(false)) else '' }}
+            {{ ('-MinRHELVersion ' ~ min_os_versions.rhel_major) if not (skip_os_version_check | default(false)) else '' }}
+            {{ ('-Tags ' ~ (final_tags | to_json)) if (final_tags | default({}) | length) > 0 else '' }}
           stderr: ""
           rc: 0
           changed: true
@@ -210,7 +221,7 @@
           VMName: "{{ vm_name }}"
           TargetVMName: "{{ final_target_vm_name }}"
           Success: true
-          Error: null
+          Error: None
           ReplicationId: "mock-replication-id"
           StartTime: "2024-01-01 00:00:00"
       when: dry_run | default(false)
@@ -260,7 +271,7 @@
       VMName: "{{ vm_name }}"
       TargetVMName: "{{ final_target_vm_name }}"
       Success: true
-      Error: null
+      Error: None
       ReplicationId: "{{ existing_replication_results.ReplicationId | default('existing-replication') }}"
       StartTime: "{{ existing_replication_results.StartTime | default('N/A') }}"
   when: vm_already_replicating
@@ -296,6 +307,7 @@
         all_replication_outputs | default({}) | combine({
           vm_name: {
             'changed': replication_output.changed | default(false),
+            'rc': replication_output.rc | default(1),
             'msg': replication_output.msg | default(''),
             'stdout': replication_output.stdout | default(''),
             'stderr': replication_output.stderr | default(''),

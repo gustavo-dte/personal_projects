@@ -6,5 +6,5 @@ backup_actions:
 
 
 # Paths
-# Default logs directory resolves to the repository's ansible/logs folder
-logs_dir: "{{ (role_path | dirname | dirname) }}/logs"
+# Default logs directory - always relative to repo root
+logs_dir: ansible/logs

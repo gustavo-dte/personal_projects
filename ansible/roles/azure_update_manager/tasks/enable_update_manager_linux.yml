@@ -1,0 +1,43 @@
+---
+- name: Check VM existence/info (Linux)
+  azure.azcollection.azure_rm_virtualmachine_info:
+    resource_group: "{{ manifest_data.target_resource_group }}"
+    name: "{{ vm_spec.name }}"
+    subscription_id: "{{ manifest_data.target_subscription_id }}"
+  register: vm_info
+  when: not dry_run | bool
+
+- name: Mock VM info for dry run (Linux)
+  ansible.builtin.set_fact:
+    vm_info:
+      status: "Online"
+  when: dry_run | bool
+
+- name: Assert VM is present/online (Linux)
+  ansible.builtin.assert:
+    that:
+      - vm_info.status == "Online"
+    fail_msg: "VM {{ vm_spec.name }} is not online/healthy."
+  when: not dry_run | bool
+
+# Assess patches on Linux VM
+- name: Assess patches on Linux VM (az cli)
+  ansible.builtin.command: >
+    az vm assess-patches
+    -g {{ manifest_data.target_resource_group }}
+    -n {{ vm_spec.name }}
+    --classifications-to-include-linux Critical
+  register: patch_assessment_result
+  changed_when: false
+  when: not (dry_run | bool) or not (manifest_data.update_manager.skip_assessment_in_dry_run | default(skip_assessment_in_dry_run))
+
+- name: Mock patch assessment for dry run (if skipped) (Linux)
+  ansible.builtin.set_fact:
+    patch_assessment_result:
+      changed: false
+      stdout: "[DRY RUN] Assessment skipped for {{ vm_spec.name }} (set skip_assessment_in_dry_run=false to run real assessment)"
+  when: dry_run | bool and (manifest_data.update_manager.skip_assessment_in_dry_run | default(skip_assessment_in_dry_run))
+
+- name: Show Linux patch assessment result
+  ansible.builtin.debug:
+    msg: "{{ patch_assessment_result.stdout | default(patch_assessment_result.msg | default('No assessment output')) }}"

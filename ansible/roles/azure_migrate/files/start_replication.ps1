@@ -22,7 +22,8 @@ Param(
   [Parameter(Mandatory=$false)][int]$MinWindowsBuild = 17763,
   [Parameter(Mandatory=$false)][int]$MinRHELVersion = 8,
   [Parameter(Mandatory=$false)][string]$TargetRegion = "CentralUS",
-  [Parameter(Mandatory=$false)][string]$ScenarioChoice = "agentlessVMware"
+  [Parameter(Mandatory=$false)][string]$ScenarioChoice = "agentlessVMware",
+  [Parameter(Mandatory=$false)][string]$Tags
 )
 
 # Import common utilities
@@ -33,6 +34,38 @@ if (Test-Path $UtilsPath) {
   Write-Output "ERROR: Common utilities script not found at: $UtilsPath"
   exit 1
 }
+
+# Convert JSON string tag parameters to hashtables
+function Convert-TagsFromJson {
+  param([string]$TagJson)
+
+  if ([string]::IsNullOrWhiteSpace($TagJson)) {
+    return $null
+  }
+
+  try {
+    $tags = $TagJson | ConvertFrom-Json -AsHashtable
+    if ($tags -is [hashtable]) {
+      return $tags
+    } elseif ($tags -is [PSCustomObject]) {
+      # Convert PSCustomObject to hashtable if needed
+      $hashtable = @{}
+      $tags.PSObject.Properties | ForEach-Object {
+        $hashtable[$_.Name] = $_.Value
+      }
+      return $hashtable
+    } else {
+      Write-Output "WARNING: Tags parameter is not a valid JSON object. Ignoring tags."
+      return $null
+    }
+  } catch {
+    Write-Output "WARNING: Failed to parse tags JSON: $($_.Exception.Message). Ignoring tags."
+    return $null
+  }
+}
+
+# Convert tag JSON string to hashtable (applied to VM, Disk, and NIC)
+$TagsHashtable = Convert-TagsFromJson -TagJson $Tags
 
 # Initialize environment and import required modules
 Initialize-PowerShellEnvironment
@@ -204,6 +237,14 @@ $params = @{
 
 # Add optional parameters only if they have values
 if ($TargetVMSize) { $params['TargetVMSize'] = $TargetVMSize }
+
+# Add tag parameters if provided (apply same tags to VM, Disk, and NIC)
+if ($TagsHashtable -and $TagsHashtable.Count -gt 0) {
+  $params['VMTag'] = $TagsHashtable
+  $params['DiskTag'] = $TagsHashtable
+  $params['NicTag'] = $TagsHashtable
+  Write-Output "INFO: Tags (applied to VM, Disk, and NIC): $($TagsHashtable | ConvertTo-Json -Compress)"
+}
 
 # Results tracking
 $Results = @{

@@ -1,0 +1,57 @@
+# tasks/assign_maintenance.yml
+- name: Assign maintenance config to VM
+  block:
+    - name: Set maintenance vars
+      ansible.builtin.set_fact:
+        maintenance_rg: "{{ manifest_data.update_manager.maintenance.resource_group | default(manifest_data.target_resource_group) }}"
+        maintenance_start: "{{ manifest_data.update_manager.maintenance.window_start_date_time | default(manifest_data.update_manager.patch_start_time | default('')) }}"
+      run_once: true
+
+    - name: Skip maintenance assignment if no time provided
+      ansible.builtin.debug:
+        msg: "No start time for maintenance provided; skipping."
+      when: maintenance_start == ''
+
+    - name: Create maintenance configuration
+      ansible.builtin.command: >
+        az maintenance configuration create
+        --resource-group "{{ maintenance_rg }}"
+        --resource-name "{{ manifest_data.update_manager.maintenance.config_name | default(maintenance_config_name) }}"
+        --maintenance-scope InGuestPatch
+        --location "{{ manifest_data.update_manager.maintenance.location | default(maintenance_location | default(vm_info.location | default('eastus'))) }}"
+        --maintenance-window-duration "{{ manifest_data.update_manager.maintenance.window_duration | default(maintenance_window_duration) }}"
+        --maintenance-window-recur-every "{{ manifest_data.update_manager.maintenance.window_recur_every | default(maintenance_window_recur_every) }}"
+        --maintenance-window-start-date-time "{{ maintenance_start }}"
+        --maintenance-window-time-zone "{{ manifest_data.update_manager.maintenance.window_time_zone | default(maintenance_window_time_zone) }}"
+        --install-patches-windows-parameters kb-numbers-to-exclude="{{ manifest_data.update_manager.maintenance.windows.kb_exclude | default(windows_kb_exclude) }}" kb-numbers-to-include="{{ manifest_data.update_manager.maintenance.windows.kb_include | default(windows_kb_include) }}" classifications-to-include="{{ manifest_data.update_manager.maintenance.windows.classifications | default(windows_classifications) }}"
+        --reboot-setting "{{ manifest_data.update_manager.maintenance.reboot_setting | default(reboot_setting) }}"
+        --extension-properties InGuestPatchMode="{{ manifest_data.update_manager.maintenance.ingest_patch_mode | default(ingest_patch_mode) }}"
+      register: maintenance_config_result
+      when:
+        - maintenance_start != ''
+        - not dry_run | bool
+
+    - name: Assign maintenance config to VM
+      ansible.builtin.command: >
+        az maintenance assignment create
+        --resource-group "{{ maintenance_rg }}"
+        --location "{{ manifest_data.update_manager.maintenance.location | default(maintenance_location | default(vm_info.location | default('eastus'))) }}"
+        --resource-name "{{ vm_spec.name }}"
+        --resource-type virtualMachines
+        --provider-name Microsoft.Compute
+        --configuration-assignment-name "{{ manifest_data.update_manager.maintenance.assignment_name | default(maintenance_assignment_name) }}-{{ vm_spec.name }}"
+        --maintenance-configuration-id "/subscriptions/{{ manifest_data.target_subscription_id }}/resourceGroups/{{ maintenance_rg }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ manifest_data.update_manager.maintenance.config_name | default(maintenance_config_name) }}"
+      register: maintenance_assignment_result
+      when:
+        - maintenance_start != ''
+        - not dry_run | bool
+
+    - name: Mock both maintenance steps (dry-run)
+      ansible.builtin.set_fact:
+        maintenance_config_result:
+          changed: false
+          msg: "[DRY RUN] Would create maintenance configuration {{ manifest_data.update_manager.maintenance.config_name | default(maintenance_config_name) }} in RG {{ maintenance_rg }}"
+        maintenance_assignment_result:
+          changed: false
+          msg: "[DRY RUN] Would assign maintenance configuration to VM {{ vm_spec.name }} with assignment name {{ manifest_data.update_manager.maintenance.assignment_name | default(maintenance_assignment_name) }}-{{ vm_spec.name }}"
+      when: maintenance_start != '' and dry_run | bool

@@ -38,7 +38,12 @@
     - name: Mock replication status check for dry run
       ansible.builtin.set_fact:
         existing_replication_check:
-          stdout: 'Some PowerShell output here\n[{"VMName":"{{ vm_name }}","ReplicationStatus":"In Progress","ReplicationPercentage":85,"MeetsThreshold":true}]'
+          stdout: |
+            INFO: [DRY RUN] Checking replication status for VM {{ vm_name }}
+            Project: {{ azure_migrate_project_name }}
+            Resource Group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+
+            [{"VMName":"{{ vm_name }}","ReplicationStatus":"In Progress","ReplicationPercentage":85,"MeetsThreshold":true}]
       when: dry_run | default(false)
 
     - name: Debug PowerShell output
@@ -80,7 +85,7 @@
     - name: Set replication status flags
       ansible.builtin.set_fact:
         existing_replication_results: "{{ replication_json }}"
-        vm_has_active_replication: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus in ['In Progress', 'Initial Replication', 'Replicating'] }}"
+        vm_has_active_replication: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error'] }}"
         replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
         replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
 
@@ -136,8 +141,7 @@
 
     - name: Parse stop replication JSON content
       ansible.builtin.set_fact:
-        stop_replication_json: "{{ stop_replication_json_file.content | b64decode | from_json if not (dry_run | default(false)) else {'VMName': vm_name, 'Success': true, 'Error': null, 'ReplicationId': 'mock-replication-id', 'StopTime': '2024-01-01 00:00:00'} }}"
-      when: not (dry_run | default(false))
+        stop_replication_json: "{{ stop_replication_json_file.content | b64decode | from_json if not (dry_run | default(false)) else {'VMName': vm_name, 'Success': true, 'Error': None, 'ReplicationId': 'mock-replication-id', 'StopTime': '2024-01-01 00:00:00'} }}"
 
     - name: Debug stop replication JSON parsing results
       ansible.builtin.debug:
@@ -163,7 +167,7 @@
         stop_replication_json:
           VMName: "{{ vm_name }}"
           Success: true
-          Error: null
+          Error: None
           ReplicationId: "mock-replication-id"
           StopTime: "2024-01-01 00:00:00"
       when: dry_run | default(false)
@@ -212,7 +216,7 @@
     stop_replication_json:
       VMName: "{{ vm_name }}"
       Success: true
-      Error: null
+      Error: None
       ReplicationId: "{{ existing_replication_results.ReplicationId | default('no-replication') }}"
       StopTime: "{{ existing_replication_results.StopTime | default('N/A') }}"
   when: not vm_has_active_replication
@@ -247,6 +251,7 @@
         all_stop_replication_outputs | default({}) | combine({
           vm_name: {
             'changed': stop_replication_output.changed | default(false),
+            'rc': stop_replication_output.rc | default(1),
             'msg': stop_replication_output.msg | default(''),
             'stdout': stop_replication_output.stdout | default(''),
             'stderr': stop_replication_output.stderr | default(''),

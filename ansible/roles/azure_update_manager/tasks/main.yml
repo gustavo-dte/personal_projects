@@ -1,0 +1,54 @@
+---
+# Main entry for Azure Update Manager role
+
+- name: Load manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+
+- name: Assert required variables
+  ansible.builtin.assert:
+    that:
+      - (manifest_data.target_resource_group | default('')) | length > 0
+      - (manifest_data.vms | default([])) | length > 0
+      - (manifest_data.target_subscription_id | default('')) | length > 0
+    fail_msg: "❌ Required manifest variables missing."
+
+- name: Iterate VMs for update manager
+  # ...per-VM tasks will be executed after global policy assignments below
+
+# tasks/main.yml
+- name: "Get Azure Policy Definition"
+  import_tasks: get_policy_definition.yml
+
+- name: "Assign Azure Policy and Remediation"
+  import_tasks: assign_policy.yml
+
+# Iterate VMs and run per-VM actions (assessment, scheduling, maintenance assignment)
+- name: Iterate VMs for update manager
+  block:
+    - name: Determine vm_os from vm_os_map (created earlier)
+      ansible.builtin.set_fact:
+        vm_os: "{{ (vm_os_map[vm_spec.name] | default('windows')) | lower }}"
+
+    - name: Debug vm_os for this VM
+      ansible.builtin.debug:
+        msg: "VM {{ vm_spec.name }} detected OS (from vm_os_map): {{ vm_os }}"
+
+    - name: Run Windows per-VM tasks when detected
+      ansible.builtin.include_tasks: enable_update_manager.yml
+      when: vm_os == 'windows'
+
+    - name: Run Linux per-VM tasks when detected
+      ansible.builtin.include_tasks: enable_update_manager_linux.yml
+      when: vm_os == 'linux'
+
+    - name: Assign Maintenance Configuration to VM
+      ansible.builtin.include_tasks: assign_maintenance.yml
+  loop: "{{ manifest_data.vms }}"
+  loop_control:
+    loop_var: vm_spec
+  vars:
+    dry_run: "{{ dry_run | default(false) }}"

@@ -57,7 +57,7 @@ try {
   Write-Output "INFO: Stopping replication for VM '$MachineName' (ID: $($TargetReplication.Id))..."
 
   # Stop the replication
-  $stopResult = Remove-AzMigrateServerReplication -InputObject $TargetReplication -Force
+  $stopResult = Remove-AzMigrateServerReplication -InputObject $TargetReplication
 
   $Results.Success = $true
   $Results.ReplicationId = $TargetReplication.Id

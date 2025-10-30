@@ -17,28 +17,38 @@ module "imported_windows_vm" {
   vm_os_type          = "windows"
 
   # Required Network Configuration
-  nic_name  = "nic-windows-example"
-  subnet_id = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/subnet-example"
+  network = {
+    nic_name  = "nic-windows-example"
+    subnet_id = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/subnet-example"
+  }
 
-  # Required OS Disk Configuration
-  os_disk_name                 = "vm-windows-example_OsDisk_1"
-  os_disk_size_gb              = 127
-  os_disk_storage_account_type = "Premium_LRS"
-  os_disk_caching              = "ReadWrite"
-  os_disk_create_option        = "FromImage"
-  os_disk_os_type              = "Windows"
-
-  # Optional: Data Disks
-  data_disk_resource_ids = {
-    "data-disk-1" = {
-      lun                       = 0
-      caching                   = "ReadWrite"
-      write_accelerator_enabled = false
+  # Required Disk Configuration
+  disk = {
+    os = {
+      name                 = "vm-windows-example_OsDisk_1"
+      size_gb              = 127
+      storage_account_type = "Premium_LRS"
+      caching              = "ReadWrite"
+      create_option        = "FromImage"
+      os_type              = "Windows"
     }
-    "data-disk-2" = {
-      lun                       = 1
-      caching                   = "ReadOnly"
-      write_accelerator_enabled = false
+    data = {
+      "data-disk-1" = {
+        lun                       = 0
+        caching                   = "ReadWrite"
+        write_accelerator_enabled = false
+        resource_id               = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Compute/disks/data-disk-1"
+        disk_size_gb              = 100
+        storage_account_type      = "Premium_LRS"
+      }
+      "data-disk-2" = {
+        lun                       = 1
+        caching                   = "ReadOnly"
+        write_accelerator_enabled = false
+        resource_id               = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Compute/disks/data-disk-2"
+        disk_size_gb              = 200
+        storage_account_type      = "Standard_LRS"
+      }
     }
   }
 
@@ -91,16 +101,23 @@ module "imported_linux_vm" {
   vm_os_type          = "linux"
 
   # Required Network Configuration
-  nic_name  = "nic-linux-example"
-  subnet_id = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/subnet-example"
+  network = {
+    nic_name  = "nic-linux-example"
+    subnet_id = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/subnet-example"
+  }
 
-  # Required OS Disk Configuration
-  os_disk_name                 = "vm-linux-example_OsDisk_1"
-  os_disk_size_gb              = 64
-  os_disk_storage_account_type = "Premium_LRS"
-  os_disk_caching              = "ReadWrite"
-  os_disk_create_option        = "FromImage"
-  os_disk_os_type              = "Linux"
+  # Required Disk Configuration
+  disk = {
+    os = {
+      name                 = "vm-linux-example_OsDisk_1"
+      size_gb              = 64
+      storage_account_type = "Premium_LRS"
+      caching              = "ReadWrite"
+      create_option        = "FromImage"
+      os_type              = "Linux"
+    }
+    data = {}
+  }
 
   # Linux-specific Configuration
   linux_admin_username                  = "azureuser"
@@ -137,16 +154,23 @@ module "imported_windows_vm_with_vmss" {
   vm_os_type          = "windows"
 
   # Required Network Configuration
-  nic_name  = "nic-windows-vmss-example"
-  subnet_id = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/subnet-example"
+  network = {
+    nic_name  = "nic-windows-vmss-example"
+    subnet_id = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/subnet-example"
+  }
 
-  # Required OS Disk Configuration
-  os_disk_name                 = "vm-windows-vmss-example_OsDisk_1"
-  os_disk_size_gb              = 127
-  os_disk_storage_account_type = "Premium_LRS"
-  os_disk_caching              = "ReadWrite"
-  os_disk_create_option        = "FromImage"
-  os_disk_os_type              = "Windows"
+  # Required Disk Configuration
+  disk = {
+    os = {
+      name                 = "vm-windows-vmss-example_OsDisk_1"
+      size_gb              = 127
+      storage_account_type = "Premium_LRS"
+      caching              = "ReadWrite"
+      create_option        = "FromImage"
+      os_type              = "Windows"
+    }
+    data = {}
+  }
 
   # VMSS Configuration (Flexible orchestration)
   enable_vmss                       = true

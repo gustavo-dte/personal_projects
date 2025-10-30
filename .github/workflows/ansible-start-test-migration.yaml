@@ -1,7 +1,6 @@
-name: Ansible-Stop-Migration-Replication
+name: Ansible-Start-Test-Migration
 
-# This workflow stops Azure Migrate replication for VMs defined in a manifest
-# It mirrors the patterns used by Ansible-Start-Migration-Replication
+# This workflow starts test migration for VMs
 
 on:
   workflow_dispatch:
@@ -10,16 +9,6 @@ on:
         description: "Manifest name (directory in ansible/vars/)"
         required: true
         type: string
-      vm_names:
-        description: "Comma-delimited VM names to stop replication; use STOP_ALL to stop all from manifest"
-        required: false
-        type: string
-        default: ""
-      dry_run:
-        description: "Dry run"
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  stop-migration-replication:
+  start-test-migration:
     environment: dev
     runs-on:
       - self-hosted
@@ -62,44 +51,46 @@ jobs:
         run: |
           echo "✅ Configuration validated!"
           echo "📄 Using manifest: ${{ inputs.manifest }}"
-          echo "🗂️  VM names filter: ${{ inputs.vm_names }}"
-          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
-          else
-            echo "🛑 Stopping migration replication..."
-          fi
-
-      - name: 🚫 Fail early if no VM names provided and not STOP_ALL
-        shell: bash
-        run: |
-          VM_NAMES_INPUT="${{ inputs.vm_names }}"
-          if [ -z "$VM_NAMES_INPUT" ]; then
-            echo "❌ No VM names provided. Specify 'vm_names' (comma-delimited) or use STOP_ALL to stop all from manifest."
-            exit 1
-          fi
+          echo "🧪 Starting test migration..."
+          echo ""
+          echo "Note: Ensure test_network_id is configured in the manifest"
+          echo "Test migration will create test VMs in the specified test network"
 
       - name: 🧱 Prepare extra vars file to maintain variable types
         run: |
           cat > ansible_extra_vars.json <<'JSON'
           {
             "manifest": "${{ inputs.manifest }}",
-            "dry_run": ${{ inputs.dry_run }},
-            "vm_names": "${{ inputs.vm_names }}",
-            "migration_action": "stop_replication"
+            "migration_action": "test_migration"
           }
           JSON
 
-      - name: 🎬 Run playbook - stop migration replication
+      - name: 🎬 Run playbook - start test migration
         run: |
-          ansible-playbook ansible/playbooks/stop-migration-replication.yml \
+          ansible-playbook ansible/playbooks/start-test-migration.yml \
             -e @ansible_extra_vars.json
 
       - name: 📤 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migration-stop-replication-logs
-          path: ansible/logs/AzMigrate_StopReplication_*.log
+          name: migration-test-migration-logs
+          path: ansible/logs/AzMigrate_StartTestMigration_*.log
           if-no-files-found: warn
           retention-days: 90
+
+      - name: 📋 Post-test migration guidance
+        if: success()
+        run: |
+          echo "Test migration workflow completed"
+          echo ""
+          echo "Next steps:"
+          echo "1. Monitor test migration jobs in Azure portal"
+          echo "2. Connect to test VMs via RDP/SSH"
+          echo "3. Verify application functionality"
+          echo "4. Check network connectivity"
+          echo "5. Run validation tests"
+          echo "6. Perform cleanup when done (delete test VMs)"
+          echo ""
+          echo "Note: Test VMs will remain until manually cleaned up"
+          echo "Check uploaded logs for detailed results"

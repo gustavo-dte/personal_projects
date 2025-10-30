@@ -5,6 +5,8 @@ migration_actions:
   - start_replication
   - stop_replication
   - cutover
+  - test_migration
+  - test_migration_cleanup
   - list_projects
   - get_replication_status
 
@@ -12,6 +14,8 @@ manifest_dependent_actions:
   - start_replication
   - stop_replication
   - cutover
+  - test_migration
+  - test_migration_cleanup
   - get_replication_status
 
 # Optional inputs (extend as needed for replication parameters)
@@ -31,5 +35,5 @@ min_os_versions:
   rhel_major: 8               # RHEL major version
 
 # Paths
-# Default logs directory resolves to the repository's ansible/logs folder
-logs_dir: "{{ (role_path | dirname | dirname) }}/logs"
+# Default logs directory - always relative to repo root
+logs_dir: ansible/logs

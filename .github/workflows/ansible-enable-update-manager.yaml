@@ -1,7 +1,4 @@
-name: Ansible-Start-Migration-Replication
-
-# This workflow starts a migration replication using an existing Azure Migrate project
-# It uses the Azure Migrate project name to start the replication
+name: Ansible-Enable-Update-Manager
 
 on:
   workflow_dispatch:
@@ -25,7 +22,7 @@ permissions:
   contents: read
 
 jobs:
-  start-migration-replication:
+  enable-update-manager:
     environment: dev
     runs-on:
       - self-hosted
@@ -39,12 +36,8 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: ✅ Validate manifest
-        uses: ./.github/actions/validate-manifest
-        with:
-          manifest: ${{ inputs.manifest }}
-
       - name: 🔐 Azure Login with user-assigned managed identity
+        if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
           auth-type: IDENTITY
@@ -53,15 +46,14 @@ jobs:
           allow-no-subscriptions: true
           enable-AzPSSession: true
 
-      - name: 📊 Display configuration
+      - name: 📊 Display workflow configuration
         run: |
-          echo "✅ Configuration validated!"
+          echo "✅ Workflow configuration:"
           echo "📄 Using manifest: ${{ inputs.manifest }}"
           echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          echo "🗂️  Output directory: ansible/output"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
-          else
-            echo "🚀 Starting migration replication..."
+            echo "🧪 Running in DRY RUN mode - Azure lookups will be skipped"
           fi
 
       - name: 🧱 Prepare extra vars file to maintain variable types
@@ -73,16 +65,16 @@ jobs:
           }
           JSON
 
-      - name: 🎬 Run playbook - start migration replication
+      - name: Run playbook - enable update manager
         run: |
-          ansible-playbook ansible/playbooks/start-migration-replication.yml \
-            -e @ansible_extra_vars.json
+          ansible-playbook ansible/playbooks/enable-update-manager.yml \
+          -e @ansible_extra_vars.json
 
-      - name: 📤 Upload Logs
+      - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migration-replication-logs
-          path: ansible/logs/AzMigrate_StartReplication_*.log
+          name: update-manager-logs
+          path: ansible/logs/AzUpdateManager_*.log
           if-no-files-found: warn
           retention-days: 90

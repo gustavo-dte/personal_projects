@@ -1,7 +1,6 @@
-name: Ansible-Stop-Migration-Replication
+name: Ansible-Start-Test-Migration-Cleanup
 
-# This workflow stops Azure Migrate replication for VMs defined in a manifest
-# It mirrors the patterns used by Ansible-Start-Migration-Replication
+# This workflow starts test migration cleanup for VMs
 
 on:
   workflow_dispatch:
@@ -10,16 +9,6 @@ on:
         description: "Manifest name (directory in ansible/vars/)"
         required: true
         type: string
-      vm_names:
-        description: "Comma-delimited VM names to stop replication; use STOP_ALL to stop all from manifest"
-        required: false
-        type: string
-        default: ""
-      dry_run:
-        description: "Dry run"
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  stop-migration-replication:
+  start-test-migration-cleanup:
     environment: dev
     runs-on:
       - self-hosted
@@ -62,44 +51,44 @@ jobs:
         run: |
           echo "✅ Configuration validated!"
           echo "📄 Using manifest: ${{ inputs.manifest }}"
-          echo "🗂️  VM names filter: ${{ inputs.vm_names }}"
-          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
-          else
-            echo "🛑 Stopping migration replication..."
-          fi
-
-      - name: 🚫 Fail early if no VM names provided and not STOP_ALL
-        shell: bash
-        run: |
-          VM_NAMES_INPUT="${{ inputs.vm_names }}"
-          if [ -z "$VM_NAMES_INPUT" ]; then
-            echo "❌ No VM names provided. Specify 'vm_names' (comma-delimited) or use STOP_ALL to stop all from manifest."
-            exit 1
-          fi
+          echo "🧹 Starting test migration cleanup..."
+          echo ""
+          echo "Note: This will clean up test VMs created during test migration"
+          echo "Test migration cleanup removes test VMs and associated resources"
 
       - name: 🧱 Prepare extra vars file to maintain variable types
         run: |
           cat > ansible_extra_vars.json <<'JSON'
           {
             "manifest": "${{ inputs.manifest }}",
-            "dry_run": ${{ inputs.dry_run }},
-            "vm_names": "${{ inputs.vm_names }}",
-            "migration_action": "stop_replication"
+            "migration_action": "test_migration_cleanup"
           }
           JSON
 
-      - name: 🎬 Run playbook - stop migration replication
+      - name: 🎬 Run playbook - start test migration cleanup
         run: |
-          ansible-playbook ansible/playbooks/stop-migration-replication.yml \
+          ansible-playbook ansible/playbooks/start-test-migration-cleanup.yml \
             -e @ansible_extra_vars.json
 
       - name: 📤 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migration-stop-replication-logs
-          path: ansible/logs/AzMigrate_StopReplication_*.log
+          name: migration-test-migration-cleanup-logs
+          path: ansible/logs/AzMigrate_StartTestMigrationCleanup_*.log
           if-no-files-found: warn
           retention-days: 90
+
+      - name: 📋 Post-test migration cleanup guidance
+        if: success()
+        run: |
+          echo "Test migration cleanup workflow completed"
+          echo ""
+          echo "Next steps:"
+          echo "1. Monitor cleanup jobs in Azure portal"
+          echo "2. Verify test VMs have been removed"
+          echo "3. Check that test resources are cleaned up"
+          echo "4. Proceed with cutover if validation was successful"
+          echo ""
+          echo "Note: Cleanup removes test VMs and associated resources"
+          echo "Check uploaded logs for detailed results"
