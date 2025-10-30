@@ -22,11 +22,7 @@ on:
         default: false
 
 concurrency:
-<<<<<<< HEAD
-  group: ${{ github.workflow }}-${{ github.ref }}
-=======
   group: ${{ github.workflow }}
->>>>>>> main
   cancel-in-progress: false
 
 permissions:
