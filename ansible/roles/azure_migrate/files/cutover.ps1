@@ -53,21 +53,12 @@ Test-RequiredCmdlets -RequiredCmdlets @('Get-AzMigrateServerReplication', 'Start
 $SubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
 
 # Log cutover parameters
-<<<<<<< HEAD
-Write-Information "Starting cutover operation"
-Write-Information "  - Project: $ProjectName"
-Write-Information "  - Resource Group: $ProjectResourceGroup"
-Write-Information "  - Machine: $MachineName"
-if ($TargetVMName) {
-    Write-Information "  - Target VM: $TargetVMName"
-=======
 Write-Output "Starting cutover operation"
 Write-Output "  - Project: $ProjectName"
 Write-Output "  - Resource Group: $ProjectResourceGroup"
 Write-Output "  - Machine: $MachineName"
 if ($TargetVMName) {
     Write-Output "  - Target VM: $TargetVMName"
->>>>>>> main
 }
 Write-Output "  - Shutdown Source: $ShutdownSourceVM"
 Write-Output "  - Subscription: $SubscriptionId"
@@ -91,19 +82,11 @@ try {
 
   if (-not $ReplicatingServer) {
     Write-Error "Replicating server '$MachineName' not found" -ErrorAction Stop
-<<<<<<< HEAD
-    Write-Information "Available servers:"
-    $ReplicatingServers |
-      Select-Object Name, SourceServerName, MigrationState, ReplicationHealth |
-      ForEach-Object {
-        Write-Information ("  - {0} (Source: {1}, State: {2}, Health: {3})" -f
-=======
     Write-Output "Available servers:"
     $ReplicatingServers |
       Select-Object Name, SourceServerName, MigrationState, ReplicationHealth |
       ForEach-Object {
         Write-Output ("  - {0} (Source: {1}, State: {2}, Health: {3})" -f
->>>>>>> main
           $_.Name,
           $_.SourceServerName,
           $_.MigrationState,
@@ -123,27 +106,17 @@ try {
 
 # Validate replication status
 if ($ReplicatingServer.MigrationState -eq "None") {
-<<<<<<< HEAD
-  Write-Error "VM '$MachineName' is not ready for cutover" -ErrorAction Stop
-  Write-Information "Current state: $($ReplicatingServer.MigrationState)"
-  Write-Information "Replication must be active before cutover"
-=======
-  Write-Output "ERROR: VM '$MachineName' is not ready for cutover" -ErrorAction Stop
+  Write-Output "ERROR: VM '$MachineName' is not ready for cutover"
   Write-Output "Current state: $($ReplicatingServer.MigrationState)"
   Write-Output "Replication must be active before cutover"
->>>>>>> main
+  Write-Error "VM '$MachineName' is not ready for cutover" -ErrorAction Stop
   exit 1
 }
 
 if ($ReplicatingServer.ReplicationHealth -eq "Critical") {
   Write-Warning "VM has critical replication health"
-<<<<<<< HEAD
-  Write-Information "Current health: $($ReplicatingServer.ReplicationHealth)"
-  Write-Information "Review replication status before proceeding"
-=======
   Write-Output "Current health: $($ReplicatingServer.ReplicationHealth)"
   Write-Output "Review replication status before proceeding"
->>>>>>> main
 }
 
 # Check if already migrated
@@ -188,11 +161,7 @@ try {
     "VM '$MachineName' in project '$ProjectName'",
     "Perform Azure Migrate cutover migration"
   )) {
-<<<<<<< HEAD
-    Write-Information "Initiating migration..."
-=======
     Write-Output "Initiating migration..."
->>>>>>> main
     $MigrationResult = Start-AzMigrateServerMigration @migrationParams
   }
 

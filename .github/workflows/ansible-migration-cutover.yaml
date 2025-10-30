@@ -15,6 +15,11 @@ on:
         description: "Type 'CONFIRM' to proceed with cutover (irreversible operation)"
         required: true
         type: string
+      shutdown_source_vm:
+        description: "Shutdown source VM after cutover"
+        required: false
+        type: boolean
+        default: false
       dry_run:
         description: "Dry run"
         required: false
@@ -83,16 +88,23 @@ jobs:
           echo "Configuration validated"
           echo "Using manifest: ${{ inputs.manifest }}"
           echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          echo "🔌 Shutdown source VM: ${{ inputs.shutdown_source_vm }}"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "🧪 Running in DRY RUN mode - no actual changes will be made"
           else
             echo "🚀 Starting migration cutover..."
+            if [ "${{ inputs.shutdown_source_vm }}" = "true" ]; then
+              echo "⚠️  Source VMs will be shut down after cutover"
+            else
+              echo "ℹ️  Source VMs will remain running (manual shutdown required)"
+            fi
           fi
 
       - name: Run playbook - migration cutover
         run: |
           ansible-playbook ansible/playbooks/migration-cutover.yml \
             -e "manifest=${{ inputs.manifest }}" \
+            -e "shutdown_source_vm=${{ inputs.shutdown_source_vm }}" \
             -e "dry_run=${{ inputs.dry_run }}"
 
       - name: Upload Logs
