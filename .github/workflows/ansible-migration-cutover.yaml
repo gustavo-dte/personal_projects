@@ -41,30 +41,29 @@ jobs:
       - self-hosted
       - linux
       - non-prod
-      - container
       - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: ✅ Validate confirmation
+      - name: Validate confirmation
         run: |
           if [ "${{ inputs.confirmation }}" != "CONFIRM" ]; then
-            echo "❌ Invalid confirmation. You must type 'CONFIRM' to proceed."
+            echo "Invalid confirmation. You must type 'CONFIRM' to proceed."
             echo "This is a safety measure for irreversible operations."
             exit 1
           fi
-          echo "✅ Confirmation validated. Proceeding with cutover."
+          echo "Confirmation validated. Proceeding with cutover."
 
-      - name: ✅ Validate manifest
+      - name: Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: 🔐 Azure Login with user-assigned managed identity
+      - name: Azure Login with user-assigned managed identity
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
@@ -74,28 +73,28 @@ jobs:
           allow-no-subscriptions: true
           enable-AzPSSession: true
 
-      - name: 📊 Display cutover warning and configuration
+      - name: Display cutover warning and configuration
         run: |
-          echo "⚠️  WARNING: MIGRATION CUTOVER OPERATION"
+          echo "WARNING: MIGRATION CUTOVER OPERATION"
           echo "This will create target VMs in Azure and complete migration"
           echo "This operation is IRREVERSIBLE once started"
           echo ""
-          echo "✅ Configuration validated!"
-          echo "📄 Using manifest: ${{ inputs.manifest }}"
-          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
-          echo "🔌 Shutdown source VM: ${{ inputs.shutdown_source_vm }}"
+          echo "Configuration validated!"
+          echo "Using manifest: ${{ inputs.manifest }}"
+          echo "Dry run mode: ${{ inputs.dry_run }}"
+          echo "Shutdown source VM: ${{ inputs.shutdown_source_vm }}"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+            echo "Running in DRY RUN mode - no actual changes will be made"
           else
-            echo "🚀 Starting migration cutover..."
+            echo "Starting migration cutover..."
             if [ "${{ inputs.shutdown_source_vm }}" = "true" ]; then
-              echo "⚠️  Source VMs will be shut down after cutover"
+              echo "Source VMs will be shut down after cutover"
             else
-              echo "ℹ️  Source VMs will remain running (manual shutdown required)"
+              echo "Source VMs will remain running (manual shutdown required)"
             fi
           fi
 
-      - name: 🧱 Prepare extra vars file to maintain variable types
+      - name: Prepare extra vars file to maintain variable types
         run: |
           cat > ansible_extra_vars.json <<'JSON'
           {
@@ -105,12 +104,12 @@ jobs:
           }
           JSON
 
-      - name: 🎬 Run playbook - migration cutover
+      - name: Run playbook - migration cutover
         run: |
           ansible-playbook ansible/playbooks/migration-cutover.yml \
             -e @ansible_extra_vars.json
 
-      - name: 📤 Upload Logs
+      - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -119,7 +118,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: 📋 Post-cutover guidance
+      - name: Post-cutover guidance
         if: success()
         run: |
           echo "Migration cutover workflow completed"

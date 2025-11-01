@@ -48,15 +48,74 @@
       register: replication_status_check
       changed_when: false
 
+    - name: Debug PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Raw PowerShell output:
+          {{ replication_status_check.stdout }}
+
+    - name: Read JSON results from file
+      ansible.builtin.slurp:
+        src: get_replication_status_result.json
+      register: json_file_content
+      failed_when: false  # Don't fail if file doesn't exist
+
+    - name: Parse JSON content and set replication data
+      ansible.builtin.set_fact:
+        replication_json: "{{ json_file_content.content | b64decode | from_json }}"
+      when: json_file_content.failed is not defined or not json_file_content.failed
+
+    - name: Set default replication data if file read failed
+      ansible.builtin.set_fact:
+        replication_json:
+          VMName: "{{ vm_name }}"
+          ReplicationStatus: "Error"
+          ReplicationPercentage: 0
+          Error: "Failed to read replication status result file"
+      when: json_file_content.failed is defined and json_file_content.failed
+
+    - name: Debug JSON parsing results
+      ansible.builtin.debug:
+        msg: |
+          JSON Parsing Debug:
+          - Source: JSON file
+          - replication_json type: {{ replication_json | type_debug }}
+          - VM Name: {{ replication_json.VMName | default('N/A') }}
+          - Replication Status: {{ replication_json.ReplicationStatus | default('N/A') }}
+          - Error Message: {{ replication_json.Error | default('N/A') }}
+
     - name: Parse and validate replication status
       ansible.builtin.set_fact:
         replication_status_results: "{{ replication_json }}"
         vm_ready_for_cutover: "{{ vm_is_ready }}"
         current_replication_status: "{{ current_status }}"
+        replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
+        replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
       vars:
-        replication_json: "{{ (replication_status_check.stdout | regex_search('\\[.*\\]$', multiline=True) | default('[]')) | from_json }}"
-        vm_is_ready: "{{ replication_json | length > 0 and replication_json[0].ReplicationStatus not in ['Not Found', 'Error', 'Not Replicating'] }}"
-        current_status: "{{ replication_json[0].ReplicationStatus if replication_json | length > 0 else 'Unknown' }}"
+        vm_is_ready: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error', 'Not Replicating'] }}"
+        current_status: "{{ replication_json.ReplicationStatus | default('Unknown') }}"
+
+    - name: Handle "Solution not found" error
+      ansible.builtin.fail:
+        msg: |
+          ❌ Azure Migrate solution not found for VM '{{ vm_name }}'
+
+          This error typically means:
+          1. The Azure Migrate project '{{ azure_migrate_project_name }}' doesn't exist
+          2. The VM '{{ vm_name }}' hasn't been discovered/assessed yet
+          3. The project name or resource group is incorrect
+          4. Insufficient permissions to access the Azure Migrate project
+
+          Troubleshooting steps:
+          - Verify the Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check the project resource group: {{ azure_migrate_project_resource_group }}
+          - Verify the target subscription ID: {{ target_subscription_id }}
+          - Ensure the VM has been discovered and assessed in Azure Migrate
+          - Verify you have proper permissions on both Azure Migrate and target subscriptions
+          - Check if the VM name matches exactly (case-sensitive)
+
+          Error details: {{ replication_error_message }}
+      when: replication_error and "Solution not found" in replication_error_message
 
   rescue:
     - name: Fail when replication status check fails
