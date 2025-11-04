@@ -5,11 +5,6 @@
 # PowerShell script to perform migration cutover using Azure Migrate
 # Based on existing replication patterns in this repository
 
-# Set strict mode and error handling preferences
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-$InformationPreference = 'Continue'
-
 [CmdletBinding(SupportsShouldProcess=$true)]
 Param(
     # Required parameters
@@ -35,6 +30,11 @@ Param(
   [Parameter(Mandatory=$false)][string]$TargetVMName
 )
 
+# Set strict mode and error handling preferences
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$InformationPreference = 'Continue'
+
 # Import common utilities
 $UtilsPath = Join-Path $PSScriptRoot "..\..\common\files\azure_powershell_utils.ps1"
 if (Test-Path $UtilsPath) {
@@ -50,8 +50,8 @@ Import-AzureModules -RequiredModules @('Az.Accounts', 'Az.Migrate', 'Az.Resource
 Test-RequiredCmdlets -RequiredCmdlets @('Get-AzMigrateServerReplication', 'Start-AzMigrateServerMigration')
 
 # Set Azure context
-$SubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
-
+$AzureSubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
+Set-AzureContext -SubscriptionId $AzureSubscriptionId | Out-Null
 # Log cutover parameters
 Write-Output "Starting cutover operation"
 Write-Output "  - Project: $ProjectName"
@@ -68,22 +68,35 @@ try {
   Write-Output "INFO: Looking for replicating machine '$MachineName'"
   $ReplicatingServers = Get-AzMigrateServerReplication -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup
 
-  if (-not $ReplicatingServers -or $ReplicatingServers.Count -eq 0) {
+  # Convert to array to ensure consistent handling of single or multiple results
+  $ReplicatingServersArray = @($ReplicatingServers)
+  
+  if (-not $ReplicatingServers -or $ReplicatingServersArray.Count -eq 0) {
     Write-Output "ERROR: No replicating servers found in project '$ProjectName'"
+    
+    # Output error result in JSON format for Ansible parsing
+    $errorResult = @{
+      Status = "Failed"
+      Error = "No replicating servers found in project '$ProjectName'"
+      MigrationState = "Unknown"
+      Message = "No machines are currently replicating in this project"
+    }
+    
+    $errorResult | ConvertTo-Json -Depth 3
     exit 1
   }
 
   # Find the replicating server by machine name
-  $ReplicatingServer = $ReplicatingServers | Where-Object {
+  $ReplicatingServer = $ReplicatingServersArray | Where-Object {
     $_.SourceServerName -eq $MachineName -or
     $_.MachineName -eq $MachineName -or
     $_.Name -eq $MachineName
   } | Select-Object -First 1
 
   if (-not $ReplicatingServer) {
-    Write-Error "Replicating server '$MachineName' not found" -ErrorAction Stop
+    Write-Output "ERROR: Replicating server '$MachineName' not found"
     Write-Output "Available servers:"
-    $ReplicatingServers |
+    $ReplicatingServersArray |
       Select-Object Name, SourceServerName, MigrationState, ReplicationHealth |
       ForEach-Object {
         Write-Output ("  - {0} (Source: {1}, State: {2}, Health: {3})" -f
@@ -92,6 +105,17 @@ try {
           $_.MigrationState,
           $_.ReplicationHealth)
       }
+    
+    # Output error result in JSON format for Ansible parsing
+    $errorResult = @{
+      Status = "Failed"
+      Error = "Replicating server '$MachineName' not found in project '$ProjectName'"
+      MigrationState = "Unknown"
+      Message = "Machine not found in replication list"
+      AvailableServers = $ReplicatingServersArray | ForEach-Object { $_.Name }
+    }
+    
+    $errorResult | ConvertTo-Json -Depth 3
     exit 1
   }
 
@@ -101,6 +125,16 @@ try {
 
 } catch {
   Write-Output "ERROR: Failed to get replicating servers: $($_.Exception.Message)"
+  
+  # Output error result in JSON format for Ansible parsing
+  $errorResult = @{
+    Status = "Failed"
+    Error = "Failed to get replicating servers: $($_.Exception.Message)"
+    MigrationState = "Unknown"
+    Message = "Error retrieving server replication status"
+  }
+  
+  $errorResult | ConvertTo-Json -Depth 3
   exit 1
 }
 
@@ -109,7 +143,16 @@ if ($ReplicatingServer.MigrationState -eq "None") {
   Write-Output "ERROR: VM '$MachineName' is not ready for cutover"
   Write-Output "Current state: $($ReplicatingServer.MigrationState)"
   Write-Output "Replication must be active before cutover"
-  Write-Error "VM '$MachineName' is not ready for cutover" -ErrorAction Stop
+  
+  # Output error result in JSON format for Ansible parsing
+  $errorResult = @{
+    Status = "Failed"
+    Error = "VM '$MachineName' is not ready for cutover"
+    MigrationState = $ReplicatingServer.MigrationState
+    Message = "Replication must be active before cutover"
+  }
+  
+  $errorResult | ConvertTo-Json -Depth 3
   exit 1
 }
 
@@ -188,6 +231,16 @@ try {
     $result | ConvertTo-Json -Depth 3
   } else {
     Write-Output "ERROR: Cutover failed - no result returned"
+    
+    # Output error result in JSON format for Ansible parsing
+    $errorResult = @{
+      Status = "Failed"
+      Error = "Cutover failed - no result returned from Start-AzMigrateServerMigration"
+      MigrationState = $ReplicatingServer.MigrationState
+      Message = "Azure Migrate API did not return a result"
+    }
+    
+    $errorResult | ConvertTo-Json -Depth 3
     exit 1
   }
 

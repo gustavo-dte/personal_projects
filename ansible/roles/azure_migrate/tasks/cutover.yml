@@ -147,10 +147,10 @@
       ansible.builtin.debug:
         msg: |
           ⚠️  WARNING: Force cutover enabled - bypassing replication status validation
-          
+
           Current Status: {{ current_replication_status }}
           VM Ready for Cutover: {{ vm_ready_for_cutover }}
-          
+
           Proceeding with cutover anyway due to force_cutover=true...
       when: force_cutover_enabled and not vm_ready_for_cutover
 
@@ -158,38 +158,38 @@
       ansible.builtin.fail:
         msg: |
           ❌ VM '{{ vm_name }}' is not ready for cutover.
-          
+
           Current Status: {{ current_replication_status }}
           VM Ready for Cutover: {{ vm_ready_for_cutover }}
-          
+
           ⚠️  IMPORTANT: Discrepancy detected!
-          
+
           The start replication process showed this VM as 'already_configured' with status 'Delta sync',
           but the cutover replication check shows status '{{ current_replication_status }}'.
-          
+
           This could indicate:
           1. Different PowerShell scripts using different lookup methods
           2. Timing issue between replication status checks
           3. Different subscription or project context being used
           4. Permission differences between operations
-          
+
           🔍 Debugging Steps:
           1. Check the raw PowerShell output above for detailed error messages
           2. Verify the Azure Migrate project parameters are consistent:
              - Project: {{ azure_migrate_project_name }}
              - Resource Group: {{ azure_migrate_project_resource_group }}
              - Subscription: {{ target_subscription_id | default('Current') }}
-          
+
           3. Try running the replication status check manually:
              pwsh {{ role_path }}/files/get_replication_status.ps1 -ProjectName "{{ azure_migrate_project_name }}" -ProjectResourceGroup "{{ azure_migrate_project_resource_group }}" -VMNamesJson '["{{ vm_name }}"]' -ReplicationThreshold 0
-          
+
           4. Compare with the start replication parameters to identify differences
-          
+
           💡 Possible Solutions:
           - If VM is actually replicating, use: --extra-vars "force_cutover=true"
           - Check Azure portal for actual replication status
           - Verify consistent Azure subscription context
-          
+
           📋 Full replication data: {{ replication_json }}
       when: not vm_ready_for_cutover and not force_cutover_enabled
 
@@ -197,7 +197,7 @@
   ansible.builtin.debug:
     msg: |
       ✅ VM '{{ vm_name }}' is ready for cutover
-      
+
       Current Status: {{ current_replication_status }}
       Proceeding with cutover operation...
   when: vm_ready_for_cutover or force_cutover_enabled
@@ -211,7 +211,7 @@
         -ProjectName {{ azure_migrate_project_name }}
         -ProjectResourceGroup {{ azure_migrate_project_resource_group }}
         -MachineName {{ vm_name }}
-        -SubscriptionId {{ target_subscription_id | default('') }}
+        -SubscriptionId {{ azure_migrate_subscription_id | default('target_subscription_id') | default('') }}
         {{ '-ShutdownSourceVM' if (shutdown_source_vm | default(false)) else '' }}
         {{ ('-TargetVMName ' ~ target_vm_name) if (target_vm_name | default('') | length) > 0 else '' }}
       register: cutover_output
@@ -221,15 +221,28 @@
       ansible.builtin.set_fact:
         cutover_result: "{{ cutover_json }}"
       vars:
-        cutover_json: "{{ (cutover_output.stdout | regex_search('\\{.*\\}$', multiline=True) | default('{}')) | from_json }}"
+        json_content: "{{ cutover_output.stdout | regex_search('\\{[\\s\\S]*', multiline=True) | default('{}') }}"
+        cutover_json: "{{ json_content | from_json }}"
+      when: cutover_output.stdout | regex_search('\\{', multiline=True) is not none
+
+    - name: Handle cutover result when JSON not found
+      ansible.builtin.set_fact:
+        cutover_result:
+          Status: "Failed"
+          Error: "No JSON result found in PowerShell output"
+          Message: "PowerShell script may have failed before producing result"
+          ExitCode: "{{ cutover_output.rc }}"
+      when: cutover_output.stdout | regex_search('\\{', multiline=True) is none
 
   rescue:
     - name: Cutover operation failed
       ansible.builtin.fail:
         msg:
           - "Cutover failed for VM '{{ vm_name }}'"
-          - "Error: {{ (cutover_output.stdout | default('')) | regex_search('ERROR:.*') | default('Unknown error') }}"
-          - "Output: {{ cutover_output.stdout | default('') }}"
+          - "Exit Code: {{ cutover_output.rc | default('Unknown') }}"
+          - "Error: {{ cutover_output.stderr | default('Unknown') }}"
+          - "Full Output: {{ cutover_output.stdout | default('') }}"
+          - "command: pwsh cutover.ps1 with parameters"
 
 - name: Log cutover operation
   ansible.builtin.debug:
