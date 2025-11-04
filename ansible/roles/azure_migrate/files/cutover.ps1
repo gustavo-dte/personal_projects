@@ -142,8 +142,8 @@ try {
 
   # Display found server info using defensive property access
   $serverName = if ($ReplicatingServer.PSObject.Properties['Name']) { $ReplicatingServer.Name } else { 'N/A' }
-  $migrationState = if ($ReplicatingServer.PSObject.Properties['MigrationState']) { $ReplicatingServer.MigrationState } else { 'Unknown' }
-  $replicationHealth = if ($ReplicatingServer.PSObject.Properties['ReplicationHealth']) { $ReplicatingServer.ReplicationHealth } else { 'Unknown' }
+  $migrationState = if ($ReplicatingServer.PSObject.Properties['MigrationState']) { [string]$ReplicatingServer.MigrationState } else { 'Unknown' }
+  $replicationHealth = if ($ReplicatingServer.PSObject.Properties['ReplicationHealth']) { [string]$ReplicatingServer.ReplicationHealth } else { 'Unknown' }
   
   Write-Output "INFO: Found server: $serverName"
   Write-Output "INFO: Migration state: $migrationState"
@@ -237,9 +237,16 @@ try {
 
   if ($MigrationResult) {
     Write-Output "INFO: Cutover initiated successfully"
-    Write-Output "INFO: Job ID: $($MigrationResult.JobId)"
+    
+    # Check what properties are available on the migration result
+    Write-Output "INFO: Available properties on migration result: $($MigrationResult.PSObject.Properties.Name -join ', ')"
+    
+    # Safely access JobId property
+    $jobId = if ($MigrationResult.PSObject.Properties['JobId']) { $MigrationResult.JobId } elseif ($MigrationResult.PSObject.Properties['Id']) { $MigrationResult.Id } else { 'Unknown' }
+    Write-Output "INFO: Job ID: $jobId"
 
-    $targetName = $MigrationResult.TargetVMName
+    # Safely access TargetVMName property
+    $targetName = if ($MigrationResult.PSObject.Properties['TargetVMName']) { $MigrationResult.TargetVMName } else { $null }
     if (-not $targetName) {
       $targetName = if ($ReplicatingServer.PSObject.Properties['TargetVMName']) { $ReplicatingServer.TargetVMName } else { 'Unknown' }
     }
@@ -248,7 +255,7 @@ try {
     # Return result
     $result = @{
       Status = "Initiated"
-      JobId = $MigrationResult.JobId
+      JobId = $jobId
       TargetVMName = $targetName
       MigrationState = "MigrationInProgress"
       Message = "Cutover initiated successfully"
