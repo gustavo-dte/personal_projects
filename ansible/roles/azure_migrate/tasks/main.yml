@@ -165,6 +165,7 @@
     vm_name: "{{ vm_spec.name }}"
     azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
     azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
     target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
     target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
     target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"

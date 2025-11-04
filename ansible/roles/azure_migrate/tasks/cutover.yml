@@ -44,7 +44,7 @@
         -ProjectResourceGroup {{ azure_migrate_project_resource_group }}
         -VMNamesJson '["{{ vm_name }}"]'
         -ReplicationThreshold 0
-        -SubscriptionId {{ target_subscription_id | default('') }}
+        -SubscriptionId {{ azure_migrate_subscription_id | default(target_subscription_id | default('')) }}
       register: replication_status_check
       changed_when: false
 
@@ -83,6 +83,18 @@
           - VM Name: {{ replication_json.VMName | default('N/A') }}
           - Replication Status: {{ replication_json.ReplicationStatus | default('N/A') }}
           - Error Message: {{ replication_json.Error | default('N/A') }}
+          - Full JSON content: {{ replication_json }}
+
+    - name: Compare with start replication results
+      ansible.builtin.debug:
+        msg: |
+          Comparison with Start Replication:
+          - Start replication showed VM as 'already_configured'
+          - Start replication status was 'Delta sync'
+          - Current cutover status is '{{ replication_json.ReplicationStatus | default('N/A') }}'
+          - Fixed: Now using azure_migrate_subscription_id for consistency
+          - Azure Migrate Subscription: {{ azure_migrate_subscription_id | default('Not set') }}
+          - Target Subscription: {{ target_subscription_id | default('Not set') }}
 
     - name: Parse and validate replication status
       ansible.builtin.set_fact:
@@ -92,7 +104,7 @@
         replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
         replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
       vars:
-        vm_is_ready: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error', 'Not Replicating'] }}"
+        vm_is_ready: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error', 'Not Replicating', 'Failed', 'Unknown'] }}"
         current_status: "{{ replication_json.ReplicationStatus | default('Unknown') }}"
 
     - name: Handle "Solution not found" error
@@ -126,12 +138,69 @@
           Cannot proceed with cutover without valid replication status.
 
 - name: Validate VM is ready for cutover
-  ansible.builtin.fail:
+  block:
+    - name: Check for force cutover option
+      ansible.builtin.set_fact:
+        force_cutover_enabled: "{{ force_cutover | default(false) | bool }}"
+
+    - name: Display warning if forcing cutover
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  WARNING: Force cutover enabled - bypassing replication status validation
+          
+          Current Status: {{ current_replication_status }}
+          VM Ready for Cutover: {{ vm_ready_for_cutover }}
+          
+          Proceeding with cutover anyway due to force_cutover=true...
+      when: force_cutover_enabled and not vm_ready_for_cutover
+
+    - name: Fail if VM is not ready and force is not enabled
+      ansible.builtin.fail:
+        msg: |
+          ❌ VM '{{ vm_name }}' is not ready for cutover.
+          
+          Current Status: {{ current_replication_status }}
+          VM Ready for Cutover: {{ vm_ready_for_cutover }}
+          
+          ⚠️  IMPORTANT: Discrepancy detected!
+          
+          The start replication process showed this VM as 'already_configured' with status 'Delta sync',
+          but the cutover replication check shows status '{{ current_replication_status }}'.
+          
+          This could indicate:
+          1. Different PowerShell scripts using different lookup methods
+          2. Timing issue between replication status checks
+          3. Different subscription or project context being used
+          4. Permission differences between operations
+          
+          🔍 Debugging Steps:
+          1. Check the raw PowerShell output above for detailed error messages
+          2. Verify the Azure Migrate project parameters are consistent:
+             - Project: {{ azure_migrate_project_name }}
+             - Resource Group: {{ azure_migrate_project_resource_group }}
+             - Subscription: {{ target_subscription_id | default('Current') }}
+          
+          3. Try running the replication status check manually:
+             pwsh {{ role_path }}/files/get_replication_status.ps1 -ProjectName "{{ azure_migrate_project_name }}" -ProjectResourceGroup "{{ azure_migrate_project_resource_group }}" -VMNamesJson '["{{ vm_name }}"]' -ReplicationThreshold 0
+          
+          4. Compare with the start replication parameters to identify differences
+          
+          💡 Possible Solutions:
+          - If VM is actually replicating, use: --extra-vars "force_cutover=true"
+          - Check Azure portal for actual replication status
+          - Verify consistent Azure subscription context
+          
+          📋 Full replication data: {{ replication_json }}
+      when: not vm_ready_for_cutover and not force_cutover_enabled
+
+- name: Display success message when VM is ready
+  ansible.builtin.debug:
     msg: |
-      VM '{{ vm_name }}' is not ready for cutover.
-      Status: {{ current_replication_status }}
-      VM must be replicating before cutover can be performed.
-  when: not vm_ready_for_cutover
+      ✅ VM '{{ vm_name }}' is ready for cutover
+      
+      Current Status: {{ current_replication_status }}
+      Proceeding with cutover operation...
+  when: vm_ready_for_cutover or force_cutover_enabled
 
 - name: Perform cutover operation
   block:
