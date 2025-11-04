@@ -217,11 +217,21 @@
       register: cutover_output
       changed_when: cutover_output.rc == 0
 
+    - name: Debug JSON extraction
+      ansible.builtin.debug:
+        msg:
+          - "Raw output contains JSON: {{ cutover_output.stdout | regex_search('\\{', multiline=True) is not none }}"
+          - "Raw JSON part: '{{ cutover_output.stdout.split('{')[-1] }}'"
+          - "JSON content to parse: '{{ '{' + cutover_output.stdout.split('{')[-1] }}'"
+      when: ansible_verbosity >= 1
+
     - name: Parse cutover result
       ansible.builtin.set_fact:
         cutover_result: "{{ cutover_json }}"
       vars:
-        json_content: "{{ cutover_output.stdout | regex_search('\\{[\\s\\S]*', multiline=True) | default('{}') }}"
+        # Extract JSON content from the output - look for the last { until end
+        raw_json: "{{ cutover_output.stdout.split('{')[-1] }}"
+        json_content: "{{ '{' + raw_json }}"
         cutover_json: "{{ json_content | string | from_json }}"
       when: cutover_output.stdout | regex_search('\\{', multiline=True) is not none
 
