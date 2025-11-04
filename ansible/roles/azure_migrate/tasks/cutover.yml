@@ -221,19 +221,12 @@
       ansible.builtin.debug:
         msg:
           - "Raw output contains JSON: {{ cutover_output.stdout | regex_search('\\{', multiline=True) is not none }}"
-          - "Raw JSON part: '{{ cutover_output.stdout.split('{')[-1] }}'"
-          - "JSON content to parse: '{{ '{' + cutover_output.stdout.split('{')[-1] }}'"
       when: ansible_verbosity >= 1
 
-    - name: Parse cutover result
+    - name: Parse cutover result  
       ansible.builtin.set_fact:
-        cutover_result: "{{ cutover_json }}"
-      vars:
-        # Extract JSON content from the output - look for the last { until end
-        raw_json: "{{ cutover_output.stdout.split('{')[-1] }}"
-        json_content: "{{ '{' + raw_json }}"
-        cutover_json: "{{ json_content | string | from_json }}"
-      when: cutover_output.stdout | regex_search('\\{', multiline=True) is not none
+        cutover_result: "{{ cutover_output.stdout | from_json }}"
+      when: cutover_output.stdout is defined and cutover_output.stdout | length > 0
 
     - name: Handle cutover result when JSON not found
       ansible.builtin.set_fact:
@@ -245,6 +238,16 @@
       when: cutover_output.stdout | regex_search('\\{', multiline=True) is none
 
   rescue:
+    - name: Handle JSON parsing errors
+      ansible.builtin.set_fact:
+        cutover_result:
+          Status: "ParseError"
+          Error: "Failed to parse JSON from PowerShell output"
+          Message: "JSON parsing failed - check output format"
+          RawOutput: "{{ cutover_output.stdout | default('') }}"
+          ExitCode: "{{ cutover_output.rc | default(-1) }}"
+      when: "'JSONDecodeError' in ansible_failed_result.msg"
+
     - name: Cutover operation failed
       ansible.builtin.fail:
         msg:

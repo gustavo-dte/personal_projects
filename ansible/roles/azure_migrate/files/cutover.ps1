@@ -53,26 +53,26 @@ Test-RequiredCmdlets -RequiredCmdlets @('Get-AzMigrateServerReplication', 'Start
 $AzureSubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
 Set-AzureContext -SubscriptionId $AzureSubscriptionId | Out-Null
 # Log cutover parameters
-Write-Output "Starting cutover operation"
-Write-Output "  - Project: $ProjectName"
-Write-Output "  - Resource Group: $ProjectResourceGroup"
-Write-Output "  - Machine: $MachineName"
+Write-Host "Starting cutover operation"
+Write-Host "  - Project: $ProjectName"
+Write-Host "  - Resource Group: $ProjectResourceGroup"
+Write-Host "  - Machine: $MachineName"
 if ($TargetVMName) {
-    Write-Output "  - Target VM: $TargetVMName"
+    Write-Host "  - Target VM: $TargetVMName"
 }
-Write-Output "  - Shutdown Source: $ShutdownSourceVM"
-Write-Output "  - Subscription: $SubscriptionId"
+Write-Host "  - Shutdown Source: $ShutdownSourceVM"
+Write-Host "  - Subscription: $SubscriptionId"
 
 # Get the replicating machine to verify replication status
 try {
-  Write-Output "INFO: Looking for replicating machine '$MachineName'"
+  Write-Host "INFO: Looking for replicating machine '$MachineName'"
   $ReplicatingServers = Get-AzMigrateServerReplication -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup
 
   # Convert to array to ensure consistent handling of single or multiple results
   $ReplicatingServersArray = @($ReplicatingServers)
   
   if (-not $ReplicatingServers -or $ReplicatingServersArray.Count -eq 0) {
-    Write-Output "ERROR: No replicating servers found in project '$ProjectName'"
+    Write-Host "ERROR: No replicating servers found in project '$ProjectName'"
     
     # Output error result in JSON format for Ansible parsing
     $errorResult = @{
@@ -87,11 +87,11 @@ try {
   }
 
   # Debug: Show what properties are actually available
-  Write-Output "INFO: Retrieved $($ReplicatingServersArray.Count) replicating server(s)"
+  Write-Host "INFO: Retrieved $($ReplicatingServersArray.Count) replicating server(s)"
   if ($ReplicatingServersArray.Count -gt 0) {
     $firstServer = $ReplicatingServersArray[0]
     $availableProperties = $firstServer | Get-Member -MemberType Properties | Select-Object -ExpandProperty Name
-    Write-Output "INFO: Available properties on server objects: $($availableProperties -join ', ')"
+    Write-Host "INFO: Available properties on server objects: $($availableProperties -join ', ')"
   }
 
   # Find the replicating server by machine name using flexible property matching
@@ -112,8 +112,8 @@ try {
   } | Select-Object -First 1
 
   if (-not $ReplicatingServer) {
-    Write-Output "ERROR: Replicating server '$MachineName' not found"
-    Write-Output "Available servers:"
+    Write-Host "ERROR: Replicating server '$MachineName' not found"
+    Write-Host "Available servers:"
     $ReplicatingServersArray | ForEach-Object {
       # Use defensive property access for display
       $name = if ($_.PSObject.Properties['Name']) { $_.Name } else { 'N/A' }
@@ -124,7 +124,7 @@ try {
       $state = if ($_.PSObject.Properties['MigrationState']) { $_.MigrationState } else { 'N/A' }
       $health = if ($_.PSObject.Properties['ReplicationHealth']) { $_.ReplicationHealth } else { 'N/A' }
       
-      Write-Output ("  - {0} (Source: {1}, State: {2}, Health: {3})" -f $name, $sourceName, $state, $health)
+      Write-Host ("  - {0} (Source: {1}, State: {2}, Health: {3})" -f $name, $sourceName, $state, $health)
     }
     
     # Output error result in JSON format for Ansible parsing
@@ -145,12 +145,12 @@ try {
   $migrationState = if ($ReplicatingServer.PSObject.Properties['MigrationState']) { [string]$ReplicatingServer.MigrationState } else { 'Unknown' }
   $replicationHealth = if ($ReplicatingServer.PSObject.Properties['ReplicationHealth']) { [string]$ReplicatingServer.ReplicationHealth } else { 'Unknown' }
   
-  Write-Output "INFO: Found server: $serverName"
-  Write-Output "INFO: Migration state: $migrationState"
-  Write-Output "INFO: Replication health: $replicationHealth"
+  Write-Host "INFO: Found server: $serverName"
+  Write-Host "INFO: Migration state: $migrationState"
+  Write-Host "INFO: Replication health: $replicationHealth"
 
 } catch {
-  Write-Output "ERROR: Failed to get replicating servers: $($_.Exception.Message)"
+  Write-Host "ERROR: Failed to get replicating servers: $($_.Exception.Message)"
   
   # Output error result in JSON format for Ansible parsing
   $errorResult = @{
@@ -166,9 +166,9 @@ try {
 
 # Validate replication status
 if ($migrationState -eq "None") {
-  Write-Output "ERROR: VM '$MachineName' is not ready for cutover"
-  Write-Output "Current state: $migrationState"
-  Write-Output "Replication must be active before cutover"
+  Write-Host "ERROR: VM '$MachineName' is not ready for cutover"
+  Write-Host "Current state: $migrationState"
+  Write-Host "Replication must be active before cutover"
   
   # Output error result in JSON format for Ansible parsing
   $errorResult = @{
@@ -184,17 +184,17 @@ if ($migrationState -eq "None") {
 
 if ($replicationHealth -eq "Critical") {
   Write-Warning "VM has critical replication health"
-  Write-Output "Current health: $replicationHealth"
-  Write-Output "Review replication status before proceeding"
+  Write-Host "Current health: $replicationHealth"
+  Write-Host "Review replication status before proceeding"
 }
 
 # Check if already migrated or in progress
 if ($migrationState -in @("MigrationSucceeded", "MigrationFailed")) {
-  Write-Output "INFO: Migration already attempted for '$MachineName'"
-  Write-Output "INFO: State: $migrationState"
+  Write-Host "INFO: Migration already attempted for '$MachineName'"
+  Write-Host "INFO: State: $migrationState"
 
   if ($migrationState -eq "MigrationSucceeded") {
-    Write-Output "INFO: Migration completed successfully"
+    Write-Host "INFO: Migration completed successfully"
     # Return success for idempotency
     $targetVMName = if ($ReplicatingServer.PSObject.Properties['TargetVMName']) { $ReplicatingServer.TargetVMName } else { 'Unknown' }
     $result = @{
@@ -206,7 +206,7 @@ if ($migrationState -in @("MigrationSucceeded", "MigrationFailed")) {
     $result | ConvertTo-Json -Depth 3
     exit 0
   } else {
-    Write-Output "ERROR: Previous migration failed"
+    Write-Host "ERROR: Previous migration failed"
     $errorResult = @{
       Status = "Failed"
       Error = "Previous migration attempt failed"
@@ -220,15 +220,15 @@ if ($migrationState -in @("MigrationSucceeded", "MigrationFailed")) {
 
 # Check if migration is already in progress
 if ($migrationState -eq "MigrationInProgress") {
-  Write-Output "INFO: Migration already in progress for '$MachineName'"
-  Write-Output "INFO: Current migration state: $migrationState"
+  Write-Host "INFO: Migration already in progress for '$MachineName'"
+  Write-Host "INFO: Current migration state: $migrationState"
   
   # Check if there's a current job
   $currentJobId = if ($ReplicatingServer.PSObject.Properties['CurrentJobId']) { $ReplicatingServer.CurrentJobId } else { 'Unknown' }
   $currentJobName = if ($ReplicatingServer.PSObject.Properties['CurrentJobName']) { $ReplicatingServer.CurrentJobName } else { 'Unknown' }
   
-  Write-Output "INFO: Current Job ID: $currentJobId"
-  Write-Output "INFO: Current Job Name: $currentJobName"
+  Write-Host "INFO: Current Job ID: $currentJobId"
+  Write-Host "INFO: Current Job Name: $currentJobName"
   
   $result = @{
     Status = "AlreadyInProgress"
@@ -243,7 +243,7 @@ if ($migrationState -eq "MigrationInProgress") {
 
 # Perform the cutover
 try {
-  Write-Output "INFO: Starting cutover for '$MachineName'"
+  Write-Host "INFO: Starting cutover for '$MachineName'"
 
   # Prepare migration parameters
   $migrationParams = @{
@@ -252,9 +252,9 @@ try {
 
   if ($ShutdownSourceVM) {
     $migrationParams['TurnOffSourceServer'] = $true
-    Write-Output "INFO: Source VM will be shut down"
+    Write-Host "INFO: Source VM will be shut down"
   } else {
-    Write-Output "INFO: Source VM will remain running"
+    Write-Host "INFO: Source VM will remain running"
   }
 
   # Start the migration
@@ -262,26 +262,26 @@ try {
     "VM '$MachineName' in project '$ProjectName'",
     "Perform Azure Migrate cutover migration"
   )) {
-    Write-Output "Initiating migration..."
+    Write-Host "Initiating migration..."
     $MigrationResult = Start-AzMigrateServerMigration @migrationParams
   }
 
   if ($MigrationResult) {
-    Write-Output "INFO: Cutover initiated successfully"
+    Write-Host "INFO: Cutover initiated successfully"
     
     # Check what properties are available on the migration result
-    Write-Output "INFO: Available properties on migration result: $($MigrationResult.PSObject.Properties.Name -join ', ')"
+    Write-Host "INFO: Available properties on migration result: $($MigrationResult.PSObject.Properties.Name -join ', ')"
     
     # Safely access JobId property
     $jobId = if ($MigrationResult.PSObject.Properties['JobId']) { $MigrationResult.JobId } elseif ($MigrationResult.PSObject.Properties['Id']) { $MigrationResult.Id } else { 'Unknown' }
-    Write-Output "INFO: Job ID: $jobId"
+    Write-Host "INFO: Job ID: $jobId"
 
     # Safely access TargetVMName property
     $targetName = if ($MigrationResult.PSObject.Properties['TargetVMName']) { $MigrationResult.TargetVMName } else { $null }
     if (-not $targetName) {
       $targetName = if ($ReplicatingServer.PSObject.Properties['TargetVMName']) { $ReplicatingServer.TargetVMName } else { 'Unknown' }
     }
-    Write-Output "INFO: Target VM: $targetName"
+    Write-Host "INFO: Target VM: $targetName"
 
     # Return result
     $result = @{
@@ -295,7 +295,7 @@ try {
 
     $result | ConvertTo-Json -Depth 3
   } else {
-    Write-Output "ERROR: Cutover failed - no result returned"
+    Write-Host "ERROR: Cutover failed - no result returned"
     
     # Output error result in JSON format for Ansible parsing
     $errorResult = @{
@@ -309,9 +309,10 @@ try {
     exit 1
   }
 
+# Error block for cutover failures
 } catch {
-  Write-Output "ERROR: Cutover failed for '$MachineName'"
-  Write-Output "ERROR: $($_.Exception.Message)"
+  Write-Host "ERROR: Cutover failed for '$MachineName'"
+  Write-Host "ERROR: $($_.Exception.Message)"
 
   $errorResult = @{
     Status = "Failed"
