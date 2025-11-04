@@ -221,12 +221,20 @@
       ansible.builtin.debug:
         msg:
           - "Raw output length: {{ cutover_output.stdout | length }}"
-          - "Extracted JSON: {{ cutover_json_string | default('Not found') }}"
+          - "Extracted JSON string: {{ cutover_json_string | default('Not found') }}"
+          - "JSON string type: {{ cutover_json_string | type_debug | default('undefined') }}"
       when: ansible_verbosity >= 1
 
-    - name: Extract JSON from PowerShell output
+    - name: Extract JSON from PowerShell output (simple method)
       ansible.builtin.set_fact:
-        cutover_json_string: "{{ cutover_output.stdout | regex_search('\\{[\\s\\S]*\\}$', multiline=True) }}"
+        cutover_json_string: >-
+          {{
+            cutover_output.stdout.split('\n') | 
+            select('regex', '^\\s*[{}"\d]') | 
+            join('\n') | 
+            regex_replace('\\n\\s*\\n', '\n') | 
+            trim
+          }}
       when: cutover_output.stdout is defined and cutover_output.stdout | length > 0
 
     - name: Parse cutover result  
