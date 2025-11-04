@@ -188,7 +188,7 @@ if ($replicationHealth -eq "Critical") {
   Write-Output "Review replication status before proceeding"
 }
 
-# Check if already migrated
+# Check if already migrated or in progress
 if ($migrationState -in @("MigrationSucceeded", "MigrationFailed")) {
   Write-Output "INFO: Migration already attempted for '$MachineName'"
   Write-Output "INFO: State: $migrationState"
@@ -198,6 +198,48 @@ if ($migrationState -in @("MigrationSucceeded", "MigrationFailed")) {
     # Return success for idempotency
     $targetVMName = if ($ReplicatingServer.PSObject.Properties['TargetVMName']) { $ReplicatingServer.TargetVMName } else { 'Unknown' }
     $result = @{
+      Status = "AlreadyCompleted"
+      MigrationState = $migrationState
+      Message = "Migration already completed"
+      TargetVMName = $targetVMName
+    }
+    $result | ConvertTo-Json -Depth 3
+    exit 0
+  } else {
+    Write-Output "ERROR: Previous migration failed"
+    $errorResult = @{
+      Status = "Failed"
+      Error = "Previous migration attempt failed"
+      MigrationState = $migrationState
+      Message = "Migration is in failed state and requires manual intervention"
+    }
+    $errorResult | ConvertTo-Json -Depth 3
+    exit 1
+  }
+}
+
+# Check if migration is already in progress
+if ($migrationState -eq "MigrationInProgress") {
+  Write-Output "INFO: Migration already in progress for '$MachineName'"
+  Write-Output "INFO: Current migration state: $migrationState"
+  
+  # Check if there's a current job
+  $currentJobId = if ($ReplicatingServer.PSObject.Properties['CurrentJobId']) { $ReplicatingServer.CurrentJobId } else { 'Unknown' }
+  $currentJobName = if ($ReplicatingServer.PSObject.Properties['CurrentJobName']) { $ReplicatingServer.CurrentJobName } else { 'Unknown' }
+  
+  Write-Output "INFO: Current Job ID: $currentJobId"
+  Write-Output "INFO: Current Job Name: $currentJobName"
+  
+  $result = @{
+    Status = "AlreadyInProgress"
+    MigrationState = $migrationState
+    Message = "Migration is already in progress"
+    CurrentJobId = $currentJobId
+    CurrentJobName = $currentJobName
+  }
+  $result | ConvertTo-Json -Depth 3
+  exit 0
+}
       Status = "AlreadyCompleted"
       MigrationState = $migrationState
       Message = "Migration already completed"

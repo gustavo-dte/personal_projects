@@ -279,3 +279,4 @@
       - "{{ 'Monitor job: ' ~ cutover_result.JobId if cutover_result.JobId is defined and cutover_result.Status == 'Initiated' else '' }}"
       - "{{ 'Manual shutdown may be required' if not (shutdown_source_vm | default(false)) and cutover_result.Status == 'Initiated' else '' }}"
       - "{{ 'Migration already completed' if cutover_result.Status == 'AlreadyCompleted' else '' }}"
+      - "{{ 'Migration already in progress - Job: ' ~ cutover_result.CurrentJobName if cutover_result.Status == 'AlreadyInProgress' else '' }}"
