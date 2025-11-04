@@ -222,7 +222,7 @@
         cutover_result: "{{ cutover_json }}"
       vars:
         json_content: "{{ cutover_output.stdout | regex_search('\\{[\\s\\S]*', multiline=True) | default('{}') }}"
-        cutover_json: "{{ json_content | from_json }}"
+        cutover_json: "{{ json_content | string | from_json }}"
       when: cutover_output.stdout | regex_search('\\{', multiline=True) is not none
 
     - name: Handle cutover result when JSON not found

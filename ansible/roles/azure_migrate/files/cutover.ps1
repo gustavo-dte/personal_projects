@@ -86,25 +86,46 @@ try {
     exit 1
   }
 
-  # Find the replicating server by machine name
+  # Debug: Show what properties are actually available
+  Write-Output "INFO: Retrieved $($ReplicatingServersArray.Count) replicating server(s)"
+  if ($ReplicatingServersArray.Count -gt 0) {
+    $firstServer = $ReplicatingServersArray[0]
+    $availableProperties = $firstServer | Get-Member -MemberType Properties | Select-Object -ExpandProperty Name
+    Write-Output "INFO: Available properties on server objects: $($availableProperties -join ', ')"
+  }
+
+  # Find the replicating server by machine name using flexible property matching
   $ReplicatingServer = $ReplicatingServersArray | Where-Object {
-    $_.SourceServerName -eq $MachineName -or
-    $_.MachineName -eq $MachineName -or
-    $_.Name -eq $MachineName
+    # Try different possible property names for source server identification
+    $serverIdentifiers = @()
+    
+    # Collect all possible identifier properties
+    if ($_.PSObject.Properties['SourceServerName']) { $serverIdentifiers += $_.SourceServerName }
+    if ($_.PSObject.Properties['MachineName']) { $serverIdentifiers += $_.MachineName }
+    if ($_.PSObject.Properties['Name']) { $serverIdentifiers += $_.Name }
+    if ($_.PSObject.Properties['DisplayName']) { $serverIdentifiers += $_.DisplayName }
+    if ($_.PSObject.Properties['FriendlyName']) { $serverIdentifiers += $_.FriendlyName }
+    if ($_.PSObject.Properties['ServerName']) { $serverIdentifiers += $_.ServerName }
+    
+    # Check if any identifier matches our target machine name
+    $serverIdentifiers -contains $MachineName
   } | Select-Object -First 1
 
   if (-not $ReplicatingServer) {
     Write-Output "ERROR: Replicating server '$MachineName' not found"
     Write-Output "Available servers:"
-    $ReplicatingServersArray |
-      Select-Object Name, SourceServerName, MigrationState, ReplicationHealth |
-      ForEach-Object {
-        Write-Output ("  - {0} (Source: {1}, State: {2}, Health: {3})" -f
-          $_.Name,
-          $_.SourceServerName,
-          $_.MigrationState,
-          $_.ReplicationHealth)
-      }
+    $ReplicatingServersArray | ForEach-Object {
+      # Use defensive property access for display
+      $name = if ($_.PSObject.Properties['Name']) { $_.Name } else { 'N/A' }
+      $sourceName = if ($_.PSObject.Properties['SourceServerName']) { $_.SourceServerName } 
+                    elseif ($_.PSObject.Properties['MachineName']) { $_.MachineName }
+                    elseif ($_.PSObject.Properties['DisplayName']) { $_.DisplayName }
+                    else { 'N/A' }
+      $state = if ($_.PSObject.Properties['MigrationState']) { $_.MigrationState } else { 'N/A' }
+      $health = if ($_.PSObject.Properties['ReplicationHealth']) { $_.ReplicationHealth } else { 'N/A' }
+      
+      Write-Output ("  - {0} (Source: {1}, State: {2}, Health: {3})" -f $name, $sourceName, $state, $health)
+    }
     
     # Output error result in JSON format for Ansible parsing
     $errorResult = @{
@@ -119,9 +140,14 @@ try {
     exit 1
   }
 
-  Write-Output "INFO: Found server: $($ReplicatingServer.Name)"
-  Write-Output "INFO: Migration state: $($ReplicatingServer.MigrationState)"
-  Write-Output "INFO: Replication health: $($ReplicatingServer.ReplicationHealth)"
+  # Display found server info using defensive property access
+  $serverName = if ($ReplicatingServer.PSObject.Properties['Name']) { $ReplicatingServer.Name } else { 'N/A' }
+  $migrationState = if ($ReplicatingServer.PSObject.Properties['MigrationState']) { $ReplicatingServer.MigrationState } else { 'Unknown' }
+  $replicationHealth = if ($ReplicatingServer.PSObject.Properties['ReplicationHealth']) { $ReplicatingServer.ReplicationHealth } else { 'Unknown' }
+  
+  Write-Output "INFO: Found server: $serverName"
+  Write-Output "INFO: Migration state: $migrationState"
+  Write-Output "INFO: Replication health: $replicationHealth"
 
 } catch {
   Write-Output "ERROR: Failed to get replicating servers: $($_.Exception.Message)"
@@ -139,16 +165,16 @@ try {
 }
 
 # Validate replication status
-if ($ReplicatingServer.MigrationState -eq "None") {
+if ($migrationState -eq "None") {
   Write-Output "ERROR: VM '$MachineName' is not ready for cutover"
-  Write-Output "Current state: $($ReplicatingServer.MigrationState)"
+  Write-Output "Current state: $migrationState"
   Write-Output "Replication must be active before cutover"
   
   # Output error result in JSON format for Ansible parsing
   $errorResult = @{
     Status = "Failed"
     Error = "VM '$MachineName' is not ready for cutover"
-    MigrationState = $ReplicatingServer.MigrationState
+    MigrationState = $migrationState
     Message = "Replication must be active before cutover"
   }
   
@@ -156,25 +182,26 @@ if ($ReplicatingServer.MigrationState -eq "None") {
   exit 1
 }
 
-if ($ReplicatingServer.ReplicationHealth -eq "Critical") {
+if ($replicationHealth -eq "Critical") {
   Write-Warning "VM has critical replication health"
-  Write-Output "Current health: $($ReplicatingServer.ReplicationHealth)"
+  Write-Output "Current health: $replicationHealth"
   Write-Output "Review replication status before proceeding"
 }
 
 # Check if already migrated
-if ($ReplicatingServer.MigrationState -in @("MigrationSucceeded", "MigrationFailed")) {
+if ($migrationState -in @("MigrationSucceeded", "MigrationFailed")) {
   Write-Output "INFO: Migration already attempted for '$MachineName'"
-  Write-Output "INFO: State: $($ReplicatingServer.MigrationState)"
+  Write-Output "INFO: State: $migrationState"
 
-  if ($ReplicatingServer.MigrationState -eq "MigrationSucceeded") {
+  if ($migrationState -eq "MigrationSucceeded") {
     Write-Output "INFO: Migration completed successfully"
     # Return success for idempotency
+    $targetVMName = if ($ReplicatingServer.PSObject.Properties['TargetVMName']) { $ReplicatingServer.TargetVMName } else { 'Unknown' }
     $result = @{
       Status = "AlreadyCompleted"
-      MigrationState = $ReplicatingServer.MigrationState
+      MigrationState = $migrationState
       Message = "Migration already completed"
-      TargetVMName = $ReplicatingServer.TargetVMName
+      TargetVMName = $targetVMName
     }
     $result | ConvertTo-Json -Depth 3
     exit 0
@@ -214,7 +241,7 @@ try {
 
     $targetName = $MigrationResult.TargetVMName
     if (-not $targetName) {
-      $targetName = $ReplicatingServer.TargetVMName
+      $targetName = if ($ReplicatingServer.PSObject.Properties['TargetVMName']) { $ReplicatingServer.TargetVMName } else { 'Unknown' }
     }
     Write-Output "INFO: Target VM: $targetName"
 
@@ -236,7 +263,7 @@ try {
     $errorResult = @{
       Status = "Failed"
       Error = "Cutover failed - no result returned from Start-AzMigrateServerMigration"
-      MigrationState = $ReplicatingServer.MigrationState
+      MigrationState = $migrationState
       Message = "Azure Migrate API did not return a result"
     }
     
@@ -251,7 +278,7 @@ try {
   $errorResult = @{
     Status = "Failed"
     Error = $_.Exception.Message
-    MigrationState = $ReplicatingServer.MigrationState
+    MigrationState = $migrationState
     Message = "Cutover operation failed"
   }
 
