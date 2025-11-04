@@ -216,7 +216,7 @@
         {{ ('-TargetVMName ' ~ target_vm_name) if (target_vm_name | default('') | length) > 0 else '' }}
       register: cutover_output
       changed_when: cutover_output.rc == 0
-
+#
     - name: Debug JSON extraction
       ansible.builtin.debug:
         msg:
@@ -293,3 +293,5 @@
       - "{{ 'Manual shutdown may be required' if not (shutdown_source_vm | default(false)) and cutover_result.Status == 'Initiated' else '' }}"
       - "{{ 'Migration already completed' if cutover_result.Status == 'AlreadyCompleted' else '' }}"
       - "{{ 'Migration already in progress - Job: ' ~ cutover_result.CurrentJobName if cutover_result.Status == 'AlreadyInProgress' else '' }}"
+
+
