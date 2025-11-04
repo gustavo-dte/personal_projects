@@ -240,17 +240,6 @@ if ($migrationState -eq "MigrationInProgress") {
   $result | ConvertTo-Json -Depth 3
   exit 0
 }
-      Status = "AlreadyCompleted"
-      MigrationState = $migrationState
-      Message = "Migration already completed"
-      TargetVMName = $targetVMName
-    }
-    $result | ConvertTo-Json -Depth 3
-    exit 0
-  } else {
-    Write-Output "WARNING: Previous migration failed, will retry"
-  }
-}
 
 # Perform the cutover
 try {
