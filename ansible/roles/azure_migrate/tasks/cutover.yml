@@ -220,13 +220,19 @@
     - name: Debug JSON extraction
       ansible.builtin.debug:
         msg:
-          - "Raw output contains JSON: {{ cutover_output.stdout | regex_search('\\{', multiline=True) is not none }}"
+          - "Raw output length: {{ cutover_output.stdout | length }}"
+          - "Extracted JSON: {{ cutover_json_string | default('Not found') }}"
       when: ansible_verbosity >= 1
+
+    - name: Extract JSON from PowerShell output
+      ansible.builtin.set_fact:
+        cutover_json_string: "{{ cutover_output.stdout | regex_search('\\{[\\s\\S]*\\}$', multiline=True) }}"
+      when: cutover_output.stdout is defined and cutover_output.stdout | length > 0
 
     - name: Parse cutover result  
       ansible.builtin.set_fact:
-        cutover_result: "{{ cutover_output.stdout | from_json }}"
-      when: cutover_output.stdout is defined and cutover_output.stdout | length > 0
+        cutover_result: "{{ cutover_json_string | from_json }}"
+      when: cutover_json_string is defined and cutover_json_string | length > 0
 
     - name: Handle cutover result when JSON not found
       ansible.builtin.set_fact:
@@ -235,7 +241,7 @@
           Error: "No JSON result found in PowerShell output"
           Message: "PowerShell script may have failed before producing result"
           ExitCode: "{{ cutover_output.rc }}"
-      when: cutover_output.stdout | regex_search('\\{', multiline=True) is none
+      when: cutover_json_string is not defined or cutover_json_string | length == 0
 
   rescue:
     - name: Handle JSON parsing errors

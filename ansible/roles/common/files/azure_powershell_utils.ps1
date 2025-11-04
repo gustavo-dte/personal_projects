@@ -54,14 +54,14 @@ function Import-AzureModules {
         foreach ($Module in $RequiredModules) {
             Import-Module $Module -Force
         }
-        Write-Output "INFO: Successfully imported Azure PowerShell modules: $($RequiredModules -join ', ')"
+        Write-Host "INFO: Successfully imported Azure PowerShell modules: $($RequiredModules -join ', ')"
     }
     catch {
-        Write-Output "ERROR: Required Azure PowerShell modules not available. Please install them with:"
-        Write-Output "  Install-Module -Name Az -Scope CurrentUser -Force"
-        Write-Output "Or install specific modules:"
-        Write-Output "  Install-Module -Name $($RequiredModules -join ', ') -Scope CurrentUser -Force"
-        Write-Output "See: https://learn.microsoft.com/azure/migrate/tutorial-migrate-vmware-powershell?view=migrate-classic"
+        Write-Host "ERROR: Required Azure PowerShell modules not available. Please install them with:"
+        Write-Host "  Install-Module -Name Az -Scope CurrentUser -Force"
+        Write-Host "Or install specific modules:"
+        Write-Host "  Install-Module -Name $($RequiredModules -join ', ') -Scope CurrentUser -Force"
+        Write-Host "See: https://learn.microsoft.com/azure/migrate/tutorial-migrate-vmware-powershell?view=migrate-classic"
         exit 1
     }
 }
@@ -74,12 +74,12 @@ function Test-RequiredCmdlets {
 
     foreach ($Cmdlet in $RequiredCmdlets) {
         if (-not (Get-Command -Name $Cmdlet -ErrorAction SilentlyContinue)) {
-            Write-Output "ERROR: Required cmdlet '$Cmdlet' not found. Ensure required Azure PowerShell modules are installed/updated."
-            Write-Output "See: https://learn.microsoft.com/azure/migrate/tutorial-migrate-vmware-powershell?view=migrate-classic"
+            Write-Host "ERROR: Required cmdlet '$Cmdlet' not found. Ensure required Azure PowerShell modules are installed/updated."
+            Write-Host "See: https://learn.microsoft.com/azure/migrate/tutorial-migrate-vmware-powershell?view=migrate-classic"
             exit 1
         }
     }
-    Write-Output "INFO: All required cmdlets verified: $($RequiredCmdlets -join ', ')"
+    Write-Host "INFO: All required cmdlets verified: $($RequiredCmdlets -join ', ')"
 }
 
 # Verify and set Azure PowerShell context
@@ -91,7 +91,7 @@ function Set-AzureContext {
     # Verify Azure PowerShell context exists
     $ctx = Get-AzContext -ErrorAction SilentlyContinue
     if (-not $ctx) {
-        Write-Output "ERROR: No Azure PowerShell context found. Please authenticate first using 'az login'"
+        Write-Host "ERROR: No Azure PowerShell context found. Please authenticate first using 'az login'"
         exit 1
     }
 
@@ -99,15 +99,15 @@ function Set-AzureContext {
     if ($SubscriptionId -and $ctx.Subscription.Id -ne $SubscriptionId) {
         try {
             Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
-            Write-Output "INFO: Set Azure context to subscription: $SubscriptionId"
+            Write-Host "INFO: Set Azure context to subscription: $SubscriptionId"
         }
         catch {
-            Write-Output "ERROR: Failed to set Azure context to subscription '$SubscriptionId': $($_.Exception.Message)"
+            Write-Host "ERROR: Failed to set Azure context to subscription '$SubscriptionId': $($_.Exception.Message)"
             exit 1
         }
     } elseif (-not $SubscriptionId -or [string]::IsNullOrWhiteSpace($SubscriptionId)) {
         $SubscriptionId = $ctx.Subscription.Id
-        Write-Output "INFO: Using current Azure context subscription: $SubscriptionId"
+        Write-Host "INFO: Using current Azure context subscription: $SubscriptionId"
     }
 
     return $SubscriptionId
@@ -130,19 +130,19 @@ function Get-AzureResource {
         }
 
         if (-not $resource -and $Required) {
-            Write-Output "ERROR: $ResourceType '$ResourceName' not found$(if($ResourceGroupName) { " in resource group '$ResourceGroupName'" })."
+            Write-Host "ERROR: $ResourceType '$ResourceName' not found$(if($ResourceGroupName) { " in resource group '$ResourceGroupName'" })."
             exit 1
         }
 
         if ($resource) {
-            Write-Output "INFO: Found $ResourceType '$ResourceName'$(if($ResourceGroupName) { " in resource group '$ResourceGroupName'" })"
+            Write-Host "INFO: Found $ResourceType '$ResourceName'$(if($ResourceGroupName) { " in resource group '$ResourceGroupName'" })"
         }
 
         return $resource
     }
     catch {
         if ($Required) {
-            Write-Output "ERROR: Failed to get $ResourceType '$ResourceName': $($_.Exception.Message)"
+            Write-Host "ERROR: Failed to get $ResourceType '$ResourceName': $($_.Exception.Message)"
             exit 1
         }
         return $null
@@ -159,29 +159,29 @@ function Initialize-AzureMigrateReplicationInfrastructure {
     )
 
     try {
-        Write-Output "INFO: Attempting to initialize Azure Migrate replication infrastructure...`n"
-        Write-Output "INFO: Project Name: $ProjectName`n"
+        Write-Host "INFO: Attempting to initialize Azure Migrate replication infrastructure...`n"
+        Write-Host "INFO: Project Name: $ProjectName`n"
 
         # Check if Initialize-AzMigrateReplicationInfrastructure cmdlet exists
         if (Get-Command -Name Initialize-AzMigrateReplicationInfrastructure -ErrorAction SilentlyContinue) {
-            Write-Output "INFO: Initialize-AzMigrateReplicationInfrastructure cmdlet found, attempting initialization...`n"
+            Write-Host "INFO: Initialize-AzMigrateReplicationInfrastructure cmdlet found, attempting initialization...`n"
 
-            Write-Output "INFO: Initializing replication infrastructure...`n"
+            Write-Host "INFO: Initializing replication infrastructure...`n"
             $initResult = Initialize-AzMigrateReplicationInfrastructure `
                 -ResourceGroupName $ProjectResourceGroup `
                 -ProjectName $ProjectName `
                 -Scenario $ScenarioChoice `
                 -TargetRegion $TargetRegion
 
-            Write-Output "SUCCESS: Replication infrastructure initialized successfully`n"
-            Write-Output "INFO: Initialization result: $initResult`n"
+            Write-Host "SUCCESS: Replication infrastructure initialized successfully`n"
+            Write-Host "INFO: Initialization result: $initResult`n"
         } else {
-            Write-Output "WARNING: Initialize-AzMigrateReplicationInfrastructure cmdlet not available`n"
+            Write-Host "WARNING: Initialize-AzMigrateReplicationInfrastructure cmdlet not available`n"
         }
     }
     catch {
-        Write-Output "ERROR: Failed to initialize replication infrastructure: $($_.Exception.Message)`n"
-        Write-Output "INFO: Exception details: $($_.Exception)`n"
-        Write-Output "INFO: Please initialize replication infrastructure manually in Azure Portal`n"
+        Write-Host "ERROR: Failed to initialize replication infrastructure: $($_.Exception.Message)`n"
+        Write-Host "INFO: Exception details: $($_.Exception)`n"
+        Write-Host "INFO: Please initialize replication infrastructure manually in Azure Portal`n"
     }
 }
