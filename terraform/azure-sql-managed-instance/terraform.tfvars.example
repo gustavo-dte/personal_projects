@@ -14,7 +14,7 @@ subnet_address_prefix  = "10.0.1.0/24"  # Minimum /28, recommended /24
 # Managed Instance Configuration
 managed_instance_name = "sqlmi-example-001"  # Must be unique
 administrator_login   = "sqladmin"
-# administrator_login_password = "YourSecureP@ssw0rd123!"  # Leave commented to auto-generate
+# administrator_login_password = "YourSecureP@ssw0rd123!"  # pragma: allowlist secret - Leave commented to auto-generate
 
 # Performance Configuration
 sku_name             = "GP_Gen5"       # General Purpose, Generation 5

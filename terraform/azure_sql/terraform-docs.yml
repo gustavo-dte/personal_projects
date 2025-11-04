@@ -53,7 +53,7 @@ content: |-
 
     # Authentication
     administrator_login    = "sqladmin"
-    admin_login_secret     = var.sql_admin_credentials
+    admin_login_secret     = var.sql_admin_credentials # pragma: allowlist secret
 
     # Databases
     sql_databases = [
@@ -93,7 +93,7 @@ content: |-
 
     # Authentication
     administrator_login    = "sqladmin"
-    admin_login_secret     = var.sql_admin_credentials
+    admin_login_secret     = var.sql_admin_credentials  # pragma: allowlist secret
 
     # Azure AD Authentication
     azure_ad_admin = {
