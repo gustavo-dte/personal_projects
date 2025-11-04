@@ -1,0 +1,183 @@
+# ============================================================================
+# PRODUCTION ENVIRONMENT - AZURE SQL DATABASE
+# ============================================================================
+# This configuration is optimized for production workloads with:
+# - High-performance SKUs
+# - Full security features enabled
+# - Extended backup retention
+# - Zone redundancy for high availability
+# ============================================================================
+
+# Resource Configuration
+resource_group_name = "rg-prod-sql-database"
+location            = "eastus"
+sql_server_name     = "sql-prod-vmigration"
+
+# Authentication
+administrator_login = "sqladmin"
+# administrator_login_password = null  # Auto-generate secure password or use Key Vault
+
+# Azure AD Authentication (RECOMMENDED for production)
+# azure_ad_admin = {
+#   login_username              = "dba@company.com"
+#   object_id                   = "12345678-1234-1234-1234-123456789012"
+#   tenant_id                   = "87654321-4321-4321-4321-210987654321"
+#   azuread_authentication_only = false
+# }
+
+# SQL Server Configuration
+sql_server_version             = "12.0"
+minimum_tls_version            = "1.2"
+public_network_access_enabled  = false  # Use Private Endpoint for production
+
+# Firewall Rules - Production (restrictive)
+firewall_rules = [
+  {
+    name             = "AllowApplicationSubnet"
+    start_ip_address = "10.1.0.0"
+    end_ip_address   = "10.1.0.255"
+  },
+  {
+    name             = "AllowJumpBox"
+    start_ip_address = "203.0.113.100"
+    end_ip_address   = "203.0.113.100"
+  }
+]
+allow_azure_services = true
+
+# Databases - Production sizing with high availability
+databases = [
+  {
+    name           = "app-database-prod"
+    sku_name       = "S4"           # 200 DTUs - ~$465/month
+    max_size_gb    = 500
+    collation      = "SQL_Latin1_General_CP1_CI_AS"
+    license_type   = "LicenseIncluded"
+    zone_redundant = true           # High availability
+    read_scale     = false
+    backup_retention_days = 35
+    long_term_retention = {
+      weekly_retention  = "P4W"     # 4 weeks
+      monthly_retention = "P12M"    # 12 months
+      yearly_retention  = "P10Y"    # 10 years
+      week_of_year      = 1
+    }
+    tags = {
+      Workload = "Application"
+      Tier     = "Production"
+    }
+  },
+  {
+    name           = "reporting-database-prod"
+    sku_name       = "S3"           # 100 DTUs - ~$150/month
+    max_size_gb    = 250
+    collation      = "SQL_Latin1_General_CP1_CI_AS"
+    license_type   = "LicenseIncluded"
+    zone_redundant = true
+    read_scale     = true           # Enable read scale-out
+    backup_retention_days = 35
+    long_term_retention = {
+      weekly_retention  = "P4W"
+      monthly_retention = "P12M"
+      yearly_retention  = "P10Y"
+      week_of_year      = 1
+    }
+    tags = {
+      Workload = "Reporting"
+      Tier     = "Production"
+    }
+  },
+  {
+    name           = "audit-database-prod"
+    sku_name       = "S2"           # 50 DTUs - ~$75/month
+    max_size_gb    = 100
+    collation      = "SQL_Latin1_General_CP1_CI_AS"
+    license_type   = "LicenseIncluded"
+    zone_redundant = true
+    backup_retention_days = 35
+    long_term_retention = {
+      weekly_retention  = "P4W"
+      monthly_retention = "P12M"
+      yearly_retention  = "P10Y"
+      week_of_year      = 1
+    }
+    tags = {
+      Workload = "Audit"
+      Tier     = "Production"
+    }
+  }
+]
+
+# Security Configuration - Full security for production
+enable_auditing                   = true
+audit_retention_days              = 365  # 1 year
+enable_threat_detection           = true
+threat_detection_retention_days   = 90
+threat_detection_email_admins     = true
+threat_detection_email_addresses  = [
+  "dba@company.com",
+  "security@company.com",
+  "soc@company.com"
+]
+enable_vulnerability_assessment   = true
+# vulnerability_assessment_storage_path = "https://prodstorageaccount.blob.core.windows.net/vulnerability-assessment"
+vulnerability_assessment_recurring_scans = {
+  enabled                   = true
+  email_subscription_admins = true
+  emails                    = ["dba@company.com", "security@company.com"]
+}
+
+# Storage for Auditing and Threat Detection
+# storage_endpoint           = "https://prodstorageaccount.blob.core.windows.net/"
+# storage_account_access_key = "<storage_account_key>"  # Use Key Vault
+
+# Monitoring - Full monitoring for production
+enable_diagnostics         = true
+# log_analytics_workspace_id = "/subscriptions/xxxxx/resourceGroups/xxxxx/providers/Microsoft.OperationalInsights/workspaces/xxxxx"
+
+diagnostic_log_categories = [
+  "SQLInsights",
+  "AutomaticTuning",
+  "QueryStoreRuntimeStatistics",
+  "QueryStoreWaitStatistics",
+  "Errors",
+  "DatabaseWaitStatistics",
+  "Timeouts",
+  "Blocks",
+  "Deadlocks"
+]
+
+diagnostic_metric_categories = [
+  "Basic",
+  "InstanceAndAppAdvanced",
+  "WorkloadManagement"
+]
+
+# Private Endpoint - Enabled for production
+enable_private_endpoint    = true
+# private_endpoint_subnet_id = "/subscriptions/xxxxx/resourceGroups/xxxxx/providers/Microsoft.Network/virtualNetworks/xxxxx/subnets/xxxxx"
+# private_dns_zone_ids = [
+#   "/subscriptions/xxxxx/resourceGroups/xxxxx/providers/Microsoft.Network/privateDnsZones/privatelink.database.windows.net"
+# ]
+
+# Tags
+tags = {
+  Environment         = "Production"
+  Project             = "VM-Migration"
+  ManagedBy           = "Terraform"
+  CostCenter          = "IT-Infrastructure"
+  BusinessUnit        = "IT"
+  DataClassification  = "Confidential"
+  BackupPolicy        = "Daily"
+  Compliance          = "SOX-Required"
+  BusinessCriticality = "Tier1"
+  SLA                 = "99.99%"
+  DisasterRecovery    = "Required"
+}
+
+# Estimated Monthly Cost: ~$690-1,000
+# - S4 database (500 GB) = $465
+# - S3 database (250 GB) = $150
+# - S2 database (100 GB) = $75
+# - Storage, monitoring, backups = ~$50-300
+# Total: ~$740-990/month

@@ -21,7 +21,7 @@ content: |-
   ## Architecture
 
   The module creates the following resources:
-  - Azure SQL Server with authentication and security configurations
+  - Azure SQL Server with auth and security configurations
   - Azure SQL Databases with configurable performance tiers
   - Firewall rules and network access controls
   - Advanced Threat Protection and auditing
@@ -52,8 +52,8 @@ content: |-
     sql_server_name     = "sql-server-example"
 
     # Authentication
-    administrator_login          = "sqladmin"
-    administrator_login_password = var.sql_admin_password
+    administrator_login    = "sqladmin"
+    admin_login_secret     = var.sql_admin_credentials
 
     # Databases
     sql_databases = [
@@ -92,8 +92,8 @@ content: |-
     sql_server_name     = "sql-server-advanced"
 
     # Authentication
-    administrator_login          = "sqladmin"
-    administrator_login_password = var.sql_admin_password
+    administrator_login    = "sqladmin"
+    admin_login_secret     = var.sql_admin_credentials
 
     # Azure AD Authentication
     azure_ad_admin = {
@@ -196,7 +196,7 @@ content: |-
 
   ## Security Considerations
 
-  - **Passwords**: Use Azure Key Vault or secure environment variables for passwords
+  - **Authentication**: Use Azure Key Vault or secure environment variables for authentication
   - **Network Access**: Configure firewall rules to restrict access to trusted networks
   - **Azure AD**: Enable Azure AD authentication for enhanced security
   - **Encryption**: Transparent Data Encryption (TDE) is enabled by default

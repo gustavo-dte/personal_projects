@@ -1,0 +1,58 @@
+# ============================================================================
+# EXAMPLE: Development Environment
+# Copy this file to terraform.tfvars and customize
+# ============================================================================
+
+# General Configuration
+resource_group_name = "rg-dev-sqldb"
+location            = "eastus"
+
+# SQL Server Configuration
+sql_server_name     = "sql-dev-myapp-001"  # Must be globally unique
+administrator_login = "sqladmin"
+# administrator_login_password = "YourSecureP@ssw0rd!"  # Leave commented to auto-generate
+
+# Firewall Rules
+firewall_rules = [
+  {
+    name             = "AllowOfficeNetwork"
+    start_ip_address = "203.0.113.0"
+    end_ip_address   = "203.0.113.255"
+  },
+  {
+    name             = "AllowDeveloperIP"
+    start_ip_address = "198.51.100.100"
+    end_ip_address   = "198.51.100.100"
+  }
+]
+
+allow_azure_services = true
+
+# Databases Configuration
+databases = {
+  "app-db" = {
+    name           = "application-dev"
+    sku_name       = "S0"        # 10 DTUs - ~$15/month
+    max_size_gb    = 32
+    zone_redundant = false
+  }
+}
+
+# Backup Configuration (minimal for dev)
+backup_retention_days             = 7
+long_term_retention_weekly        = "P1W"
+long_term_retention_monthly       = null
+long_term_retention_yearly        = null
+
+# Security Configuration (basic for dev)
+enable_threat_detection           = false
+enable_auditing                   = false
+enable_monitoring                 = false
+
+# Tags
+tags = {
+  Environment = "Development"
+  Project     = "VM-Migration"
+  ManagedBy   = "Terraform"
+  CostCenter  = "Engineering"
+}

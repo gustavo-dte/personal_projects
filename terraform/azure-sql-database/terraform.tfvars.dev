@@ -1,0 +1,96 @@
+# ============================================================================
+# DEVELOPMENT ENVIRONMENT - AZURE SQL DATABASE
+# ============================================================================
+# This configuration is optimized for development workloads with:
+# - Lower-tier SKUs for cost savings
+# - Relaxed security for development access
+# - Shorter backup retention
+# ============================================================================
+
+# Resource Configuration
+resource_group_name = "rg-dev-sql-database"
+location            = "eastus"
+sql_server_name     = "sql-dev-vmigration"
+
+# Authentication
+administrator_login = "devadmin"
+# administrator_login_password = null  # Auto-generate secure password
+
+# SQL Server Configuration
+sql_server_version             = "12.0"
+minimum_tls_version            = "1.2"
+public_network_access_enabled  = true
+
+# Firewall Rules - Development (more permissive)
+firewall_rules = [
+  {
+    name             = "AllowDeveloperNetwork"
+    start_ip_address = "10.0.0.0"
+    end_ip_address   = "10.0.255.255"
+  },
+  {
+    name             = "AllowOfficeIP"
+    start_ip_address = "203.0.113.0"
+    end_ip_address   = "203.0.113.255"
+  }
+]
+allow_azure_services = true
+
+# Databases - Development sizing
+databases = [
+  {
+    name           = "app-database-dev"
+    sku_name       = "S0"           # 10 DTUs - ~$15/month
+    max_size_gb    = 32
+    collation      = "SQL_Latin1_General_CP1_CI_AS"
+    license_type   = "LicenseIncluded"
+    zone_redundant = false
+    backup_retention_days = 7
+    tags = {
+      Workload = "Application"
+    }
+  },
+  {
+    name           = "test-database-dev"
+    sku_name       = "S0"           # 10 DTUs - ~$15/month
+    max_size_gb    = 32
+    collation      = "SQL_Latin1_General_CP1_CI_AS"
+    license_type   = "LicenseIncluded"
+    zone_redundant = false
+    backup_retention_days = 7
+    tags = {
+      Workload = "Testing"
+    }
+  }
+]
+
+# Security Configuration - Basic for dev
+enable_auditing                   = true
+audit_retention_days              = 30
+enable_threat_detection           = true
+threat_detection_retention_days   = 30
+threat_detection_email_admins     = true
+threat_detection_email_addresses  = ["devteam@company.com"]
+enable_vulnerability_assessment   = false
+
+# Monitoring - Basic for dev
+enable_diagnostics = true
+# log_analytics_workspace_id = "/subscriptions/xxxxx/resourceGroups/xxxxx/providers/Microsoft.OperationalInsights/workspaces/xxxxx"
+
+# Private Endpoint - Disabled for dev
+enable_private_endpoint = false
+
+# Tags
+tags = {
+  Environment         = "Development"
+  Project             = "VM-Migration"
+  ManagedBy           = "Terraform"
+  CostCenter          = "Engineering"
+  BusinessUnit        = "IT"
+  DataClassification  = "Non-Production"
+  BackupPolicy        = "Weekly"
+}
+
+# Estimated Monthly Cost: ~$30-60
+# - 2 x S0 databases = $30
+# - Storage, monitoring = ~$10-30
