@@ -202,6 +202,43 @@
       Proceeding with cutover operation...
   when: vm_ready_for_cutover or force_cutover_enabled
 
+- name: Skip cutover if migration already completed
+  block:
+    - name: Check if VM shows migration completed status
+      ansible.builtin.set_fact:
+        skip_cutover: >-
+          {{
+            (replication_json.MigrationState is defined and 
+             replication_json.MigrationState == 'MigrationSucceeded') or
+            (replication_json.ReplicationStatus is defined and 
+             replication_json.ReplicationStatus in ['MigrationSucceeded', 'Migrated'])
+          }}
+
+    - name: Display migration already completed message and skip cutover
+      block:
+        - name: Display skip message
+          ansible.builtin.debug:
+            msg: |
+              ✅ Migration already completed for VM '{{ vm_name }}'
+              
+              Replication Status: {{ replication_json.ReplicationStatus | default('Unknown') }}
+              Migration State: {{ replication_json.MigrationState | default('Unknown') }}
+              
+              Skipping cutover operation as migration was already successful.
+
+        - name: Set cutover result for already completed migration
+          ansible.builtin.set_fact:
+            cutover_result:
+              VMName: "{{ vm_name }}"
+              Success: true
+              Status: "AlreadyCompleted"
+              MigrationState: "MigrationSucceeded"
+              TargetVMName: "{{ replication_json.TargetVMName | default('Unknown') }}"
+              Message: "Migration was already completed successfully - skipped cutover"
+              JobId: null
+              StartTime: "{{ ansible_date_time.iso8601 }}"
+      when: skip_cutover | bool
+
 - name: Perform cutover operation
   block:
     - name: Run cutover.ps1
@@ -277,6 +314,7 @@
           RawOutput: "{{ cutover_output.stdout | default('') }}"
           RawError: "{{ cutover_output.stderr | default('') }}"
           AnsibleError: "{{ ansible_failed_result.msg | default('') }}"
+  when: not (skip_cutover | default(false) | bool)
 
 - name: Log cutover operation
   ansible.builtin.debug:
