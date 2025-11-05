@@ -329,8 +329,9 @@ Write-Host "INFO: Starting cutover for '$MachineName'"
   # Output results as JSON for Ansible processing
   $JsonOutput = $Results | ConvertTo-Json -Depth 3
 
-  # Write JSON to a file for Ansible to read
-  $OutputFile = "cutover_result.json"
+  # Write JSON to a file for Ansible to read - use current working directory
+  $OutputFile = Join-Path (Get-Location) "cutover_result.json"
+  Write-Host "INFO: Writing JSON output to: $OutputFile"
   $JsonOutput | Out-File -FilePath $OutputFile -Encoding UTF8
 
   # Also output to console for debugging

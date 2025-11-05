@@ -217,36 +217,66 @@
       register: cutover_output
       changed_when: cutover_output.rc == 0
 
+    - name: Debug PowerShell execution
+      ansible.builtin.debug:
+        msg:
+          - "PowerShell execution details:"
+          - "Exit code: {{ cutover_output.rc }}"
+          - "STDOUT length: {{ cutover_output.stdout | length }}"
+          - "STDERR length: {{ cutover_output.stderr | length }}"
+          - "STDOUT: {{ cutover_output.stdout }}"
+          - "STDERR: {{ cutover_output.stderr }}"
+      when: ansible_verbosity >= 1
+
+    - name: Check if JSON file exists
+      ansible.builtin.stat:
+        path: cutover_result.json
+      register: json_file_stat
+
+    - name: Debug JSON file status
+      ansible.builtin.debug:
+        msg:
+          - "JSON file exists: {{ json_file_stat.stat.exists }}"
+          - "JSON file size: {{ json_file_stat.stat.size | default('N/A') }}"
+          - "JSON file path: cutover_result.json"
+
     - name: Read JSON results from file
       ansible.builtin.slurp:
         src: cutover_result.json
       register: cutover_json_file_content
+      when: json_file_stat.stat.exists
 
     - name: Parse JSON content and set cutover result
       ansible.builtin.set_fact:
         cutover_result: "{{ cutover_json_file_content.content | b64decode | from_json }}"
+      when: json_file_stat.stat.exists
 
-  rescue:
-    - name: Handle errors when reading JSON file
+    - name: Handle case when JSON file doesn't exist
       ansible.builtin.set_fact:
         cutover_result:
           Status: "Failed"
-          Error: "Failed to read or parse JSON result file"
-          Message: "PowerShell script may have failed or JSON file not created"
+          Error: "JSON result file not created"
+          Message: "PowerShell script did not create cutover_result.json file"
           ExitCode: "{{ cutover_output.rc | default(-1) }}"
           Success: false
           VMName: "{{ vm_name }}"
           RawOutput: "{{ cutover_output.stdout | default('') }}"
-      when: "'JSONDecodeError' in ansible_failed_result.msg"
+          RawError: "{{ cutover_output.stderr | default('') }}"
+      when: not json_file_stat.stat.exists
 
-    - name: Cutover operation failed
-      ansible.builtin.fail:
-        msg:
-          - "Cutover failed for VM '{{ vm_name }}'"
-          - "Exit Code: {{ cutover_output.rc | default('Unknown') }}"
-          - "Error: {{ cutover_output.stderr | default('Unknown') }}"
-          - "Full Output: {{ cutover_output.stdout | default('') }}"
-          - "command: pwsh cutover.ps1 with parameters"
+  rescue:
+    - name: Handle any errors in cutover execution
+      ansible.builtin.set_fact:
+        cutover_result:
+          Status: "Failed"
+          Error: "Cutover execution failed"
+          Message: "Error during cutover operation - check logs"
+          ExitCode: "{{ cutover_output.rc | default(-1) }}"
+          Success: false
+          VMName: "{{ vm_name }}"
+          RawOutput: "{{ cutover_output.stdout | default('') }}"
+          RawError: "{{ cutover_output.stderr | default('') }}"
+          AnsibleError: "{{ ansible_failed_result.msg | default('') }}"
 
 - name: Log cutover operation
   ansible.builtin.debug:
