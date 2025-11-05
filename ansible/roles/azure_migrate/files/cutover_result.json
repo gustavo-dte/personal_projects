@@ -1,0 +1,10 @@
+{
+  "TargetVMName": null,
+  "StartTime": "2025-11-05 14:14:37",
+  "MigrationState": null,
+  "Success": false,
+  "Error": "Required Azure PowerShell modules not available: Az.Accounts, Az.Migrate, Az.Resources",
+  "Status": "Failed",
+  "VMName": "test-vm",
+  "JobId": null
+}

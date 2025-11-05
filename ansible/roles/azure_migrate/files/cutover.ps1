@@ -1,6 +1,6 @@
 #! /usr/bin/env pwsh
 #Requires -Version 7.0
-#Requires -Modules Az.Accounts, Az.Migrate, Az.Resources
+# Note: Azure modules will be imported dynamically to avoid hard requirement failure
 
 # PowerShell script to perform migration cutover using Azure Migrate
 # Based on existing replication patterns in this repository
@@ -59,15 +59,49 @@ try {
       return
   }
 
-  # Initialize environment and import required modules
-  Initialize-PowerShellEnvironment
-  Import-AzureModules -RequiredModules @('Az.Accounts', 'Az.Migrate', 'Az.Resources')
-  Test-RequiredCmdlets -RequiredCmdlets @('Get-AzMigrateServerReplication', 'Start-AzMigrateServerMigration')
+  # Initialize environment and import required modules with custom error handling
+  try {
+    # Check if Azure modules are available before importing
+    $MissingModules = @()
+    $RequiredModules = @('Az.Accounts', 'Az.Migrate', 'Az.Resources')
+    
+    foreach ($Module in $RequiredModules) {
+      if (-not (Get-Module -ListAvailable -Name $Module)) {
+        $MissingModules += $Module
+      }
+    }
+    
+    if ($MissingModules.Count -gt 0) {
+      Write-Host "ERROR: Required Azure PowerShell modules not available: $($MissingModules -join ', ')"
+      Write-Host "Please install them with: Install-Module -Name Az -Scope CurrentUser -Force"
+      $Results.Error = "Required Azure PowerShell modules not available: $($MissingModules -join ', ')"
+      $Results.Status = "Failed"
+      return
+    }
+    
+    # If modules are available, proceed with initialization
+    Initialize-PowerShellEnvironment
+    Import-AzureModules -RequiredModules $RequiredModules
+    Test-RequiredCmdlets -RequiredCmdlets @('Get-AzMigrateServerReplication', 'Start-AzMigrateServerMigration')
+    
+  } catch {
+    Write-Host "ERROR: Failed to initialize PowerShell environment or import modules: $($_.Exception.Message)"
+    $Results.Error = "Failed to initialize PowerShell environment: $($_.Exception.Message)"
+    $Results.Status = "Failed"
+    return
+  }
 
   # Set Azure context
-  Write-Host "INFO: Setting Azure context to subscription: $SubscriptionId"
-  $AzureSubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
-  Set-AzureContext -SubscriptionId $AzureSubscriptionId | Out-Null
+  try {
+    Write-Host "INFO: Setting Azure context to subscription: $SubscriptionId"
+    $AzureSubscriptionId = Set-AzureContext -SubscriptionId $SubscriptionId
+    Set-AzureContext -SubscriptionId $AzureSubscriptionId | Out-Null
+  } catch {
+    Write-Host "ERROR: Failed to set Azure context: $($_.Exception.Message)"
+    $Results.Error = "Failed to set Azure context: $($_.Exception.Message)"
+    $Results.Status = "Failed"
+    return
+  }
 
   Write-Host "INFO: Starting cutover for VM '$MachineName'..."
 

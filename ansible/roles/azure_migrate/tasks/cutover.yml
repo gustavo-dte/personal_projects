@@ -216,50 +216,27 @@
         {{ ('-TargetVMName ' ~ target_vm_name) if (target_vm_name | default('') | length) > 0 else '' }}
       register: cutover_output
       changed_when: cutover_output.rc == 0
-#
-    - name: Debug JSON extraction
-      ansible.builtin.debug:
-        msg:
-          - "Raw output length: {{ cutover_output.stdout | length }}"
-          - "Extracted JSON string: {{ cutover_json_string | default('Not found') }}"
-          - "JSON string type: {{ cutover_json_string | type_debug | default('undefined') }}"
-      when: ansible_verbosity >= 1
 
-    - name: Extract JSON from PowerShell output (simple method)
+    - name: Read JSON results from file
+      ansible.builtin.slurp:
+        src: cutover_result.json
+      register: cutover_json_file_content
+
+    - name: Parse JSON content and set cutover result
       ansible.builtin.set_fact:
-        cutover_json_string: >-
-          {{
-            cutover_output.stdout.split('\n') |
-            select('regex', '^\\s*[{}"\d]') |
-            join('\n') |
-            regex_replace('\\n\\s*\\n', '\n') |
-            trim
-          }}
-      when: cutover_output.stdout is defined and cutover_output.stdout | length > 0
+        cutover_result: "{{ cutover_json_file_content.content | b64decode | from_json }}"
 
-    - name: Parse cutover result
-      ansible.builtin.set_fact:
-        cutover_result: "{{ cutover_json_string | from_json }}"
-      when: cutover_json_string is defined and cutover_json_string | length > 0
-
-    - name: Handle cutover result when JSON not found
+  rescue:
+    - name: Handle errors when reading JSON file
       ansible.builtin.set_fact:
         cutover_result:
           Status: "Failed"
-          Error: "No JSON result found in PowerShell output"
-          Message: "PowerShell script may have failed before producing result"
-          ExitCode: "{{ cutover_output.rc }}"
-      when: cutover_json_string is not defined or cutover_json_string | length == 0
-
-  rescue:
-    - name: Handle JSON parsing errors
-      ansible.builtin.set_fact:
-        cutover_result:
-          Status: "ParseError"
-          Error: "Failed to parse JSON from PowerShell output"
-          Message: "JSON parsing failed - check output format"
-          RawOutput: "{{ cutover_output.stdout | default('') }}"
+          Error: "Failed to read or parse JSON result file"
+          Message: "PowerShell script may have failed or JSON file not created"
           ExitCode: "{{ cutover_output.rc | default(-1) }}"
+          Success: false
+          VMName: "{{ vm_name }}"
+          RawOutput: "{{ cutover_output.stdout | default('') }}"
       when: "'JSONDecodeError' in ansible_failed_result.msg"
 
     - name: Cutover operation failed
