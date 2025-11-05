@@ -217,30 +217,36 @@
       register: cutover_output
       changed_when: cutover_output.rc == 0
 #
+    - name: Debug raw PowerShell output
+      ansible.builtin.debug:
+        msg:
+          - "=== RAW STDOUT START ==="
+          - "{{ cutover_output.stdout }}"
+          - "=== RAW STDOUT END ==="
+      when: ansible_verbosity >= 2
+
     - name: Debug JSON extraction
       ansible.builtin.debug:
         msg:
           - "Raw output length: {{ cutover_output.stdout | length }}"
+          - "Last 10 lines:"
+          - "{{ cutover_output.stdout.split('\n')[-10:] | join('\n') }}"
           - "Extracted JSON string: {{ cutover_json_string | default('Not found') }}"
           - "JSON string type: {{ cutover_json_string | type_debug | default('undefined') }}"
       when: ansible_verbosity >= 1
 
-    - name: Extract JSON from PowerShell output (simple method)
+    - name: Extract JSON from PowerShell output (last JSON object)
       ansible.builtin.set_fact:
-        cutover_json_string: >-
-          {{
-            cutover_output.stdout.split('\n') | 
-            select('regex', '^\\s*[{}"\d]') | 
-            join('\n') | 
-            regex_replace('\\n\\s*\\n', '\n') | 
-            trim
-          }}
+        cutover_json_string: "{{ cutover_output.stdout | regex_search('\\{[\\s\\S]*\\}(?![\\s\\S]*\\{)') }}"
       when: cutover_output.stdout is defined and cutover_output.stdout | length > 0
 
     - name: Parse cutover result  
       ansible.builtin.set_fact:
         cutover_result: "{{ cutover_json_string | from_json }}"
-      when: cutover_json_string is defined and cutover_json_string | length > 0
+      when: 
+        - cutover_json_string is defined 
+        - cutover_json_string is not none
+        - cutover_json_string | string | length > 0
 
     - name: Handle cutover result when JSON not found
       ansible.builtin.set_fact:
@@ -249,7 +255,7 @@
           Error: "No JSON result found in PowerShell output"
           Message: "PowerShell script may have failed before producing result"
           ExitCode: "{{ cutover_output.rc }}"
-      when: cutover_json_string is not defined or cutover_json_string | length == 0
+      when: cutover_json_string is not defined or cutover_json_string is none or cutover_json_string | string | length == 0
 
   rescue:
     - name: Handle JSON parsing errors
