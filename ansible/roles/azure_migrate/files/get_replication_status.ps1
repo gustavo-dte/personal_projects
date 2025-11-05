@@ -81,11 +81,49 @@ try {
       $ReplicationId = $Response.Id
     }
 
+    # Extract AllowedOperation as strings for reliable JSON parsing
+    $AllowedOperationStrings = @()
+    if ($Response.AllowedOperation) {
+      $AllowedOperationStrings = @($Response.AllowedOperation | ForEach-Object { [string]$_ })
+    }
+
+    # Extract LastTestMigrationStatus
+    $LastTestMigrationStatus = $null
+    if ($Response.LastTestMigrationStatus) {
+      $LastTestMigrationStatus = $Response.LastTestMigrationStatus
+    }
+
+    # Extract LastTestMigrationTime
+    $LastTestMigrationTime = $null
+    if ($Response.LastTestMigrationTime) {
+      $LastTestMigrationTime = $Response.LastTestMigrationTime
+    }
+
+    # Extract TestMigrateState and Description as strings
+    $TestMigrateStateString = ""
+    if ($Response.TestMigrateState) {
+      $TestMigrateStateString = [string]$Response.TestMigrateState
+    } else {
+      $TestMigrateStateString = "None"
+    }
+
+    $TestMigrateStateDescriptionString = ""
+    if ($Response.TestMigrateStateDescription) {
+      $TestMigrateStateDescriptionString = [string]$Response.TestMigrateStateDescription
+    } else {
+      $TestMigrateStateDescriptionString = "None"
+    }
+
     $Result = @{
       VMName = $VMName
       ReplicationStatus = $ReplicationStatus
       ReplicationPercentage = $ReplicationPercentage
       ReplicationId = $ReplicationId
+      AllowedOperationStrings = $AllowedOperationStrings
+      LastTestMigrationStatus = $LastTestMigrationStatus
+      LastTestMigrationTime = $LastTestMigrationTime
+      TestMigrateStateString = $TestMigrateStateString
+      TestMigrateStateDescriptionString = $TestMigrateStateDescriptionString
       Error = $null
     }
   }

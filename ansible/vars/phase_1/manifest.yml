@@ -57,6 +57,7 @@ vmss_config:
 # Network configuration
 target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
 target_subnet_name: main
+test_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
 
 # VM configuration
 target_vm_size: Standard_D4s_v5

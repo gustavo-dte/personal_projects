@@ -13,6 +13,7 @@
       - (azure_migrate_project_resource_group | default('')) | length > 0
       - (azure_migrate_subscription_id | default('')) | length > 0
       - (vm_name | default('')) | length > 0
+      - (target_resource_group | default('')) | length > 0
       - (test_network_id | default('')) | length > 0
     fail_msg: |
       Required variables missing. Please provide:
@@ -20,7 +21,13 @@
       - azure_migrate_project_resource_group: {{ azure_migrate_project_resource_group | default('NOT SET') }}
       - azure_migrate_subscription_id: {{ azure_migrate_subscription_id | default('NOT SET') }}
       - vm_name: {{ vm_name | default('NOT SET') }}
+      - target_resource_group: {{ target_resource_group | default('NOT SET') }}
       - test_network_id: {{ test_network_id | default('NOT SET') }}
+
+- name: Initialize test migration skipped flag
+  ansible.builtin.set_fact:
+    test_migration_skipped: false
+    test_migration_skip_reason: ""
 
 - name: Check if replication exists for VM before starting test migration
   block:
@@ -58,6 +65,9 @@
           - VM Name: {{ replication_json.VMName | default('N/A') }}
           - Replication Status: {{ replication_json.ReplicationStatus | default('N/A') }}
           - Error Message: {{ replication_json.Error | default('N/A') }}
+          - Allowed Operations: {{ (replication_json.AllowedOperationStrings | default([])) | join(', ') }}
+          - TestMigrateState: {{ replication_json.TestMigrateStateString | default('N/A') }}
+          - TestMigrateStateDescription: {{ replication_json.TestMigrateStateDescriptionString | default('N/A') }}
 
     - name: Set replication status flags and extract ID
       ansible.builtin.set_fact:
@@ -66,21 +76,57 @@
         replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
         replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
         replication_object_id: "{{ replication_json.ReplicationId | default('') }}"
+        allowed_operations: "{{ replication_json.AllowedOperationStrings | default([]) }}"
+        allowed_operations_lower: "{{ (replication_json.AllowedOperationStrings | default([])) | map('lower') | list }}"
+        test_migrate_state: "{{ replication_json.TestMigrateStateString | default('') }}"
+        test_migrate_state_description: "{{ replication_json.TestMigrateStateDescriptionString | default('') }}"
 
-    - name: Fail if replication does not exist
-      ansible.builtin.fail:
+    - name: Compute can_test_migrate flag
+      ansible.builtin.set_fact:
+        can_test_migrate: "{{ (test_migrate_state | lower == 'none') and ('testmigrate' in allowed_operations_lower) }}"
+
+    - name: Compute unified skip conditions and reason
+      ansible.builtin.set_fact:
+        test_migration_skipped: >-
+          {{
+            (not vm_has_replication)
+            or ((test_migrate_state | lower == 'none') and not ('testmigrate' in allowed_operations_lower))
+            or (test_migrate_state == 'TestMigrationInProgress')
+            or (test_migrate_state == 'TestMigrationSucceeded')
+          }}
+        test_migration_skip_reason: >-
+          {{
+            (not vm_has_replication)
+              | ternary(
+                  'No active replication. Test migration can only be started for VMs that are actively replicating. Current replication status: ' ~ (replication_json.ReplicationStatus | default('Unknown')),
+                  ((test_migrate_state | lower == 'none') and not ('testmigrate' in allowed_operations_lower))
+                    | ternary(
+                        'No active test migration. TestMigrate not allowed by provider; skipping.',
+                        (test_migrate_state == 'TestMigrationInProgress')
+                          | ternary(
+                              'Test migration already in progress; skipping.',
+                              (test_migrate_state == 'TestMigrationSucceeded')
+                                | ternary(
+                                    'Test migration already completed (Succeeded); cleanup may be pending.',
+                                    ''
+                                  )
+                            )
+                      )
+                )
+          }}
+
+    - name: Warn when skipping test migration
+      ansible.builtin.debug:
         msg: |
-          ❌ Cannot start test migration for VM '{{ vm_name }}'
+          ⚠️  Skipping test migration for VM '{{ vm_name }}'
 
-          VM does not have active replication. Test migration can only be started for VMs that are actively replicating.
+          Reason: {{ test_migration_skip_reason }}
 
-          Current replication status: {{ replication_json.ReplicationStatus | default('Unknown') }}
-
-          Troubleshooting:
-          - Verify the VM has been replicated successfully
-          - Check replication status before attempting test migration
-          - Ensure replication percentage meets requirements
-      when: not vm_has_replication
+          Current status:
+          - TestMigrateState: {{ test_migrate_state | default('Unknown') }}
+          - TestMigrateStateDescription: {{ test_migrate_state_description | default('N/A') }}
+          - Allowed operations: {{ allowed_operations | join(', ') }}
+      when: test_migration_skipped | default(false)
 
   rescue:
     - name: Fail when replication status check fails
@@ -91,6 +137,7 @@
           Cannot start test migration without verifying replication status.
 
 - name: Start test migration using PowerShell file
+  when: not (test_migration_skipped | default(false)) and (can_test_migrate | default(false))
   block:
     - name: Debug replication object ID
       ansible.builtin.debug:
@@ -175,12 +222,29 @@
     - name: Flush handlers to write log now
       ansible.builtin.meta: flush_handlers
 
+- name: Set skipped test migration results when skipped
+  ansible.builtin.set_fact:
+    test_migration_output:
+      changed: false
+      msg: "Test migration skipped: {{ test_migration_skip_reason | default('Test migration already exists') }}"
+      stdout: ""
+      stderr: ""
+      rc: 0
+    test_migration_json:
+      VMName: "{{ vm_name }}"
+      Success: false
+      Error: "{{ test_migration_skip_reason | default('Test migration already exists or is in progress') }}"
+      JobId: none
+      Skipped: true
+  when: test_migration_skipped | default(false)
+
 - name: Display test migration result
   ansible.builtin.debug:
     msg:
-      - "VM {{ vm_name }}: {{ 'Test migration started' if (test_migration_json.Success | default(false)) else 'Test migration failed' }}"
+      - "VM {{ vm_name }}: {{ 'Test migration started' if (test_migration_json.Success | default(false)) else ('Test migration skipped' if (test_migration_json.Skipped | default(false)) else 'Test migration failed') }}"
       - "Changed: {{ test_migration_output.changed | default(false) }}"
       - "Success: {{ test_migration_json.Success | default(false) }}"
+      - "Skipped: {{ test_migration_json.Skipped | default(false) }}"
       - "Job ID: {{ test_migration_json.JobId | default('N/A') }}"
 
 - name: Show detailed test migration CLI output
@@ -195,8 +259,8 @@
 
 - name: Set test migration output for main playbook
   ansible.builtin.set_fact:
-    test_migration_output: "{{ test_migration_output }}"
-    test_migration_json: "{{ test_migration_json }}"
+    test_migration_output: "{{ test_migration_output | default({'changed': false, 'msg': '', 'stdout': '', 'stderr': '', 'rc': 1}) }}"
+    test_migration_json: "{{ test_migration_json | default({'VMName': vm_name, 'Success': false, 'Error': 'Test migration was not executed', 'JobId': none, 'Skipped': false}) }}"
 
 - name: Add test migration output to collection
   ansible.builtin.set_fact:
