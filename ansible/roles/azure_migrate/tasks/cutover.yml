@@ -196,7 +196,7 @@
                 Migration appears to be already completed - skipped cutover
                 {% endif %}
               JobId: null
-              StartTime: "{{ ansible_date_time.iso8601 }}"
+              StartTime: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%SZ') }}"
 
         - name: End play if migration already completed
           ansible.builtin.meta: end_play
