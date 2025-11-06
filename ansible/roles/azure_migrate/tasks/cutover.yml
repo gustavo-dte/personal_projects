@@ -204,14 +204,22 @@
 
 - name: Skip cutover if migration already completed
   block:
+    - name: Debug migration state check
+      ansible.builtin.debug:
+        msg: |
+          Checking migration completion status:
+          - MigrationState: {{ replication_json.MigrationState | default('Not defined') }}
+          - ReplicationStatus: {{ replication_json.ReplicationStatus | default('Not defined') }}
+          - LastTestMigrationStatus: {{ replication_json.LastTestMigrationStatus | default('Not defined') }}
+          - Should skip cutover: {{ (replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded') }}
+      when: ansible_verbosity >= 1
+
     - name: Check if VM shows migration completed status
       ansible.builtin.set_fact:
         skip_cutover: >-
           {{
             (replication_json.MigrationState is defined and 
-             replication_json.MigrationState == 'MigrationSucceeded') or
-            (replication_json.ReplicationStatus is defined and 
-             replication_json.ReplicationStatus in ['MigrationSucceeded', 'Migrated'])
+             replication_json.MigrationState == 'MigrationSucceeded')
           }}
 
     - name: Display migration already completed message and skip cutover
@@ -221,10 +229,11 @@
             msg: |
               ✅ Migration already completed for VM '{{ vm_name }}'
               
+              MigrationState: {{ replication_json.MigrationState | default('Unknown') }}
               Replication Status: {{ replication_json.ReplicationStatus | default('Unknown') }}
-              Migration State: {{ replication_json.MigrationState | default('Unknown') }}
+              Last Test Migration Status: {{ replication_json.LastTestMigrationStatus | default('Unknown') }}
               
-              Skipping cutover operation as migration was already successful.
+              Skipping cutover operation as migration was already successful (MigrationState = MigrationSucceeded).
 
         - name: Set cutover result for already completed migration
           ansible.builtin.set_fact:
@@ -234,7 +243,7 @@
               Status: "AlreadyCompleted"
               MigrationState: "MigrationSucceeded"
               TargetVMName: "{{ replication_json.TargetVMName | default('Unknown') }}"
-              Message: "Migration was already completed successfully - skipped cutover"
+              Message: "Migration was already completed successfully - skipped cutover (MigrationState = MigrationSucceeded)"
               JobId: null
               StartTime: "{{ ansible_date_time.iso8601 }}"
       when: skip_cutover | bool
