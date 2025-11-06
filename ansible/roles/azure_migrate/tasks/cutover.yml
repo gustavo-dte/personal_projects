@@ -144,9 +144,9 @@
       ansible.builtin.debug:
         msg: |
           Checking migration completion status:
-          - MigrationState: {{ replication_json.MigrationState | default('Not defined') }}
-          - ReplicationStatus: {{ replication_json.ReplicationStatus | default('Not defined') }}
-          - LastTestMigrationStatus: {{ replication_json.LastTestMigrationStatus | default('Not defined') }}
+          - MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
+          - ReplicationStatus: {{ replication_json.get('ReplicationStatus', 'Not defined') }}
+          - LastTestMigrationStatus: {{ replication_json.get('LastTestMigrationStatus', 'Not defined') }}
           - Should skip cutover: {{ ((replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found')) }}
       when: ansible_verbosity >= 1
 
@@ -167,13 +167,13 @@
             msg: |
               ✅ Migration already completed for VM '{{ vm_name }}'
               
-              MigrationState: {{ replication_json.MigrationState | default('Unknown') }}
-              Replication Status: {{ replication_json.ReplicationStatus | default('Unknown') }}
-              Last Test Migration Status: {{ replication_json.LastTestMigrationStatus | default('Unknown') }}
+              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
+              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
+              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
               
-              {% if replication_json.MigrationState == 'MigrationSucceeded' %}
+              {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
               Skipping cutover operation as migration was already successful (MigrationState = MigrationSucceeded).
-              {% elif replication_json.ReplicationStatus == 'Not Found' %}
+              {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found' %}
               Skipping cutover operation as VM is not found in replication list (migration likely already completed and cleaned up).
               {% else %}
               Skipping cutover operation as migration appears to be already completed.
@@ -185,12 +185,12 @@
               VMName: "{{ vm_name }}"
               Success: true
               Status: "AlreadyCompleted"
-              MigrationState: "{{ replication_json.MigrationState | default('MigrationSucceeded') }}"
-              TargetVMName: "{{ replication_json.TargetVMName | default('Unknown') }}"
+              MigrationState: "{{ replication_json.get('MigrationState', 'MigrationSucceeded') }}"
+              TargetVMName: "{{ replication_json.get('TargetVMName', 'Unknown') }}"
               Message: >-
-                {% if replication_json.MigrationState == 'MigrationSucceeded' %}
+                {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
                 Migration was already completed successfully - skipped cutover (MigrationState = MigrationSucceeded)
-                {% elif replication_json.ReplicationStatus == 'Not Found' %}
+                {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found' %}
                 Migration was already completed and cleaned up - skipped cutover (ReplicationStatus = Not Found)
                 {% else %}
                 Migration appears to be already completed - skipped cutover
