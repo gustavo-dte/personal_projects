@@ -165,18 +165,34 @@
         - name: Display skip message
           ansible.builtin.debug:
             msg: |
+              {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
               ✅ Migration already completed for VM '{{ vm_name }}'
               
               MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
               Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
               Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
               
-              {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
               Skipping cutover operation as migration was already successful (MigrationState = MigrationSucceeded).
               {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found' %}
-              Skipping cutover operation as VM is not found in replication list (migration likely already completed and cleaned up).
+              ⚠️ Migration skipped for VM '{{ vm_name }}'
+              
+              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
+              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
+              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
+              
+              Skipping cutover operation as VM is not found in replication list. This could mean:
+              - VM was never configured for replication
+              - Replication was already completed and cleaned up
+              - VM was removed from the Azure Migrate project
+              - Different project context or permissions issue
               {% else %}
-              Skipping cutover operation as migration appears to be already completed.
+              ⚠️ Migration skipped for VM '{{ vm_name }}'
+              
+              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
+              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
+              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
+              
+              Skipping cutover operation - migration status indicates no action needed.
               {% endif %}
 
         - name: Set cutover result for already completed migration
@@ -184,16 +200,21 @@
             cutover_result:
               VMName: "{{ vm_name }}"
               Success: true
-              Status: "AlreadyCompleted"
-              MigrationState: "{{ replication_json.get('MigrationState', 'MigrationSucceeded') }}"
+              Status: >-
+                {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
+                AlreadyCompleted
+                {% else %}
+                Skipped
+                {% endif %}
+              MigrationState: "{{ replication_json.get('MigrationState', 'NotFound') }}"
               TargetVMName: "{{ replication_json.get('TargetVMName', 'Unknown') }}"
               Message: >-
                 {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
                 Migration was already completed successfully - skipped cutover (MigrationState = MigrationSucceeded)
                 {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found' %}
-                Migration was already completed and cleaned up - skipped cutover (ReplicationStatus = Not Found)
+                Migration skipped - VM not found in replication list (ReplicationStatus = Not Found)
                 {% else %}
-                Migration appears to be already completed - skipped cutover
+                Migration skipped - no action needed based on current status
                 {% endif %}
               JobId: null
               StartTime: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%SZ') }}"
