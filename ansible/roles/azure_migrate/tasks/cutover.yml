@@ -85,16 +85,16 @@
           - Error Message: {{ replication_json.Error | default('N/A') }}
           - Full JSON content: {{ replication_json }}
 
-    - name: Compare with start replication results
+    - name: Display replication status context
       ansible.builtin.debug:
         msg: |
-          Comparison with Start Replication:
-          - Start replication showed VM as 'already_configured'
-          - Start replication status was 'Delta sync'
-          - Current cutover status is '{{ replication_json.ReplicationStatus | default('N/A') }}'
-          - Fixed: Now using azure_migrate_subscription_id for consistency
+          Replication Status Context:
+          - Current cutover status: '{{ replication_json.ReplicationStatus | default('N/A') }}'
+          - VM Name: '{{ replication_json.VMName | default('N/A') }}'
+          - Replication Percentage: {{ replication_json.ReplicationPercentage | default('N/A') }}
           - Azure Migrate Subscription: {{ azure_migrate_subscription_id | default('Not set') }}
           - Target Subscription: {{ target_subscription_id | default('Not set') }}
+          - Error (if any): {{ replication_json.Error | default('None') }}
 
     - name: Parse and validate replication status
       ansible.builtin.set_fact:
