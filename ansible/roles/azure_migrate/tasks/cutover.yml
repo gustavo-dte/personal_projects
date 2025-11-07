@@ -188,8 +188,11 @@
           ✅ PROCEEDING: VM is ready for migration cutover
           {% else %}
           ⚠️ SKIPPING: VM is not ready for cutover
-          Current Status: {{ replication_json.get('MigrationStateDescription', 'Unknown status') }}
-          Available Operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
+          
+          Migration Status:
+          - Migration State: {{ replication_json.get('MigrationState', 'Unknown') }}
+          - Description: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
+          - Available Operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
           {% endif %}
 
     - name: Debug skip_cutover immediately after setting
