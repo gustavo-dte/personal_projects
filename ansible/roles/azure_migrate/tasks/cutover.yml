@@ -298,6 +298,7 @@
 
           📋 Full replication data: {{ replication_json }}
       when: not vm_ready_for_cutover and not force_cutover_enabled
+  when: not (skip_cutover | default(false) | bool)
 
 - name: Display success message when VM is ready
   ansible.builtin.debug:
@@ -306,8 +307,18 @@
 
       Current Status: {{ current_replication_status }}
       Proceeding with cutover operation...
-  when: vm_ready_for_cutover or force_cutover_enabled
+  when: (vm_ready_for_cutover or force_cutover_enabled) and not (skip_cutover | default(false) | bool)
 
+
+- name: Debug skip_cutover variable before cutover operation
+  ansible.builtin.debug:
+    msg: |
+      🔍 DEBUG: Checking skip_cutover variable before cutover operation
+      - skip_cutover value: {{ skip_cutover | default('NOT DEFINED') }}
+      - skip_cutover type: {{ skip_cutover | default('NOT DEFINED') | type_debug }}
+      - skip_cutover as bool: {{ skip_cutover | default(false) | bool }}
+      - Condition result: {{ not (skip_cutover | default(false) | bool) }}
+      - Will run cutover: {{ not (skip_cutover | default(false) | bool) }}
 
 - name: Perform cutover operation
   block:
@@ -405,23 +416,25 @@
       - "VM: {{ vm_name }} - {{ cutover_result.Status | default('Unknown') }}"
       - >-
         {% if cutover_result.Status == 'Initiated' %}
-        Message: Cutover initiated successfully - {{ cutover_result.Message | default('Azure will create the target VM') }}
+        Message: Cutover initiated successfully - {{ cutover_result.get('Message', 'Azure will create the target VM') }}
         {% elif cutover_result.Status == 'Skipped' %}
-        Message: {{ cutover_result.Message | default('Cutover was skipped') }}
+        Message: {{ cutover_result.get('Message', 'Cutover was skipped') }}
         {% elif cutover_result.Status == 'AlreadyCompleted' %}
-        Message: {{ cutover_result.Message | default('Migration was already completed') }}
+        Message: {{ cutover_result.get('Message', 'Migration was already completed') }}
+        {% elif cutover_result.Status == 'AlreadyInProgress' %}
+        Message: {{ cutover_result.get('Message', 'Migration is already in progress') }}
         {% else %}
-        Message: {{ cutover_result.Message | default('No additional details available') }}
+        Message: {{ cutover_result.get('Message', 'No additional details available') }}
         {% endif %}
       - >-
         {% if cutover_result.Status == 'Initiated' %}
         Target VM: Will be created by Azure (name may be auto-generated)
-        {% elif cutover_result.TargetVMName is defined and cutover_result.TargetVMName != 'Unknown' %}
-        Target VM: {{ cutover_result.TargetVMName }}
+        {% elif cutover_result.get('TargetVMName') and cutover_result.get('TargetVMName') != 'Unknown' %}
+        Target VM: {{ cutover_result.get('TargetVMName') }}
         {% else %}
-        Target VM: {{ cutover_result.TargetVMName | default('Not applicable') }}
+        Target VM: {{ cutover_result.get('TargetVMName', 'Not applicable') }}
         {% endif %}
-      - "{{ 'Job ID: ' ~ cutover_result.JobId if cutover_result.JobId is defined else '' }}"
+      - "{{ 'Job ID: ' ~ cutover_result.get('JobId', '') if cutover_result.get('JobId') else '' }}"
       - "Changed: {{ cutover_output.changed | default(false) }}"
 
 - name: Show detailed cutover CLI output
@@ -447,10 +460,10 @@
         Cutover operation completed for '{{ vm_name }}'
         {% endif %}
       - "Status: {{ cutover_result.Status | default('Unknown') }}"
-      - "{{ 'Monitor job: ' ~ cutover_result.JobId if cutover_result.JobId is defined and cutover_result.Status == 'Initiated' else '' }}"
-      - "{{ 'Monitor existing job: ' ~ cutover_result.CurrentJobName if cutover_result.CurrentJobName is defined and cutover_result.Status == 'AlreadyInProgress' else '' }}"
-      - "{{ 'Manual shutdown may be required for source VM' if not (shutdown_source_vm | default(false)) and cutover_result.Status == 'Initiated' else '' }}"
-      - "{{ '✅ ' ~ cutover_result.Message if cutover_result.Status == 'AlreadyCompleted' else '' }}"
-      - "{{ '⚠️ ' ~ cutover_result.Message if cutover_result.Status == 'Skipped' else '' }}"
-      - "{{ '🔄 ' ~ cutover_result.Message if cutover_result.Status == 'AlreadyInProgress' else '' }}"
-      - "{{ '❌ ' ~ cutover_result.Message if cutover_result.Status == 'Failed' else '' }}"
+      - "{{ 'Monitor job: ' ~ cutover_result.get('JobId', '') if cutover_result.get('JobId') and cutover_result.get('Status') == 'Initiated' else '' }}"
+      - "{{ 'Monitor existing job: ' ~ cutover_result.get('CurrentJobName', '') if cutover_result.get('CurrentJobName') and cutover_result.get('Status') == 'AlreadyInProgress' else '' }}"
+      - "{{ 'Manual shutdown may be required for source VM' if not (shutdown_source_vm | default(false)) and cutover_result.get('Status') == 'Initiated' else '' }}"
+      - "{{ '✅ ' ~ cutover_result.get('Message', 'No details available') if cutover_result.get('Status') == 'AlreadyCompleted' else '' }}"
+      - "{{ '⚠️ ' ~ cutover_result.get('Message', 'No details available') if cutover_result.get('Status') == 'Skipped' else '' }}"
+      - "{{ '🔄 ' ~ cutover_result.get('Message', 'No details available') if cutover_result.get('Status') == 'AlreadyInProgress' else '' }}"
+      - "{{ '❌ ' ~ cutover_result.get('Message', 'No details available') if cutover_result.get('Status') == 'Failed' else '' }}"
