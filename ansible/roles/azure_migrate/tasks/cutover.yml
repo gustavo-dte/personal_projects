@@ -147,7 +147,8 @@
           - MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
           - ReplicationStatus: {{ replication_json.get('ReplicationStatus', 'Not defined') }}
           - LastTestMigrationStatus: {{ replication_json.get('LastTestMigrationStatus', 'Not defined') }}
-          - Should skip cutover: {{ ((replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found')) }}
+          - CurrentJobName: {{ replication_json.get('CurrentJobName', 'Not defined') }}
+          - Should skip cutover: {{ ((replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover')) }}
       when: ansible_verbosity >= 1
 
     - name: Check if VM shows migration completed status
@@ -157,7 +158,11 @@
             (replication_json.MigrationState is defined and 
              replication_json.MigrationState == 'MigrationSucceeded') or
             (replication_json.ReplicationStatus is defined and 
-             replication_json.ReplicationStatus == 'Not Found')
+             replication_json.ReplicationStatus == 'Not Found') or
+            (replication_json.ReplicationStatus is defined and 
+             replication_json.ReplicationStatus == 'Queued' and
+             replication_json.CurrentJobName is defined and 
+             replication_json.CurrentJobName == 'PlannedFailover')
           }}
 
     - name: Display migration already completed message and skip cutover
@@ -185,6 +190,16 @@
               - Replication was already completed and cleaned up
               - VM was removed from the Azure Migrate project
               - Different project context or permissions issue
+              {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover' %}
+              🔄 Migration already in progress for VM '{{ vm_name }}'
+              
+              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
+              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
+              Current Job: {{ replication_json.get('CurrentJobName', 'Unknown') }}
+              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
+              
+              Skipping cutover operation as a PlannedFailover (cutover) job is already queued and running.
+              Monitor the existing job progress in Azure Migrate portal.
               {% else %}
               ⚠️ Migration skipped for VM '{{ vm_name }}'
               
@@ -203,16 +218,21 @@
               Status: >-
                 {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
                 AlreadyCompleted
+                {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover' %}
+                AlreadyInProgress
                 {% else %}
                 Skipped
                 {% endif %}
               MigrationState: "{{ replication_json.get('MigrationState', 'NotFound') }}"
               TargetVMName: "{{ replication_json.get('TargetVMName', 'Unknown') }}"
+              CurrentJobName: "{{ replication_json.get('CurrentJobName', '') }}"
               Message: >-
                 {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
                 Migration was already completed successfully - skipped cutover (MigrationState = MigrationSucceeded)
                 {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found' %}
                 Migration skipped - VM not found in replication list (ReplicationStatus = Not Found)
+                {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover' %}
+                Migration already in progress - PlannedFailover job is queued (CurrentJobName = PlannedFailover)
                 {% else %}
                 Migration skipped - no action needed based on current status
                 {% endif %}
@@ -383,8 +403,24 @@
     msg:
       - "Cutover Result"
       - "VM: {{ vm_name }} - {{ cutover_result.Status | default('Unknown') }}"
-      - "Message: {{ cutover_result.Message | default('No message') }}"
-      - "Target VM: {{ cutover_result.TargetVMName | default('Not specified') }}"
+      - >-
+        {% if cutover_result.Status == 'Initiated' %}
+        Message: Cutover initiated successfully - {{ cutover_result.Message | default('Azure will create the target VM') }}
+        {% elif cutover_result.Status == 'Skipped' %}
+        Message: {{ cutover_result.Message | default('Cutover was skipped') }}
+        {% elif cutover_result.Status == 'AlreadyCompleted' %}
+        Message: {{ cutover_result.Message | default('Migration was already completed') }}
+        {% else %}
+        Message: {{ cutover_result.Message | default('No additional details available') }}
+        {% endif %}
+      - >-
+        {% if cutover_result.Status == 'Initiated' %}
+        Target VM: Will be created by Azure (name may be auto-generated)
+        {% elif cutover_result.TargetVMName is defined and cutover_result.TargetVMName != 'Unknown' %}
+        Target VM: {{ cutover_result.TargetVMName }}
+        {% else %}
+        Target VM: {{ cutover_result.TargetVMName | default('Not applicable') }}
+        {% endif %}
       - "{{ 'Job ID: ' ~ cutover_result.JobId if cutover_result.JobId is defined else '' }}"
       - "Changed: {{ cutover_output.changed | default(false) }}"
 
@@ -396,9 +432,25 @@
 - name: Show cutover operation summary
   ansible.builtin.debug:
     msg:
-      - "Cutover operation completed for '{{ vm_name }}'"
+      - >-
+        {% if cutover_result.Status == 'Initiated' %}
+        ✅ Cutover operation initiated for '{{ vm_name }}'
+        {% elif cutover_result.Status == 'Skipped' %}
+        ⚠️ Cutover operation skipped for '{{ vm_name }}'
+        {% elif cutover_result.Status == 'AlreadyCompleted' %}
+        ℹ️ Migration already completed for '{{ vm_name }}'
+        {% elif cutover_result.Status == 'AlreadyInProgress' %}
+        🔄 Migration already in progress for '{{ vm_name }}'
+        {% elif cutover_result.Status == 'Failed' %}
+        ❌ Cutover operation failed for '{{ vm_name }}'
+        {% else %}
+        Cutover operation completed for '{{ vm_name }}'
+        {% endif %}
       - "Status: {{ cutover_result.Status | default('Unknown') }}"
       - "{{ 'Monitor job: ' ~ cutover_result.JobId if cutover_result.JobId is defined and cutover_result.Status == 'Initiated' else '' }}"
-      - "{{ 'Manual shutdown may be required' if not (shutdown_source_vm | default(false)) and cutover_result.Status == 'Initiated' else '' }}"
-      - "{{ 'Migration already completed' if cutover_result.Status == 'AlreadyCompleted' else '' }}"
-      - "{{ 'Migration already in progress - Job: ' ~ cutover_result.CurrentJobName if cutover_result.Status == 'AlreadyInProgress' else '' }}"
+      - "{{ 'Monitor existing job: ' ~ cutover_result.CurrentJobName if cutover_result.CurrentJobName is defined and cutover_result.Status == 'AlreadyInProgress' else '' }}"
+      - "{{ 'Manual shutdown may be required for source VM' if not (shutdown_source_vm | default(false)) and cutover_result.Status == 'Initiated' else '' }}"
+      - "{{ '✅ ' ~ cutover_result.Message if cutover_result.Status == 'AlreadyCompleted' else '' }}"
+      - "{{ '⚠️ ' ~ cutover_result.Message if cutover_result.Status == 'Skipped' else '' }}"
+      - "{{ '🔄 ' ~ cutover_result.Message if cutover_result.Status == 'AlreadyInProgress' else '' }}"
+      - "{{ '❌ ' ~ cutover_result.Message if cutover_result.Status == 'Failed' else '' }}"
