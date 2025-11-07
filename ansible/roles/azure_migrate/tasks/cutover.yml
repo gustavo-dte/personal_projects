@@ -145,9 +145,10 @@
         msg: |
           Checking migration completion status:
           - MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
+          - MigrationStateDescription: {{ replication_json.get('MigrationStateDescription', 'Not defined') }}
           - ReplicationStatus: {{ replication_json.get('ReplicationStatus', 'Not defined') }}
-          - LastTestMigrationStatus: {{ replication_json.get('LastTestMigrationStatus', 'Not defined') }}
           - CurrentJobName: {{ replication_json.get('CurrentJobName', 'Not defined') }}
+          - TargetVMName: {{ replication_json.get('TargetVMName', 'Not defined') }}
           - Should skip cutover: {{ ((replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover')) }}
       when: ansible_verbosity >= 1
 
@@ -346,7 +347,7 @@
         {{ '-ShutdownSourceVM' if (shutdown_source_vm | default(false)) else '' }}
         {{ ('-TargetVMName ' ~ target_vm_name) if (target_vm_name | default('') | length) > 0 else '' }}
       register: cutover_output
-      changed_when: cutover_output.rc == 0
+      changed_when: false  # Will be set correctly after parsing results
 
     - name: Debug PowerShell execution
       ansible.builtin.debug:
@@ -381,6 +382,11 @@
       ansible.builtin.set_fact:
         cutover_result: "{{ cutover_json_file_content.content | b64decode | from_json }}"
       when: json_file_stat.stat.exists
+
+    - name: Set changed status based on actual work performed
+      ansible.builtin.set_fact:
+        cutover_output: "{{ cutover_output | combine({'changed': cutover_result.get('Status') in ['Initiated', 'InProgress'] and cutover_result.get('Success', false)}) }}"
+      when: json_file_stat.stat.exists and cutover_result is defined
 
     - name: Handle case when JSON file doesn't exist
       ansible.builtin.set_fact:
