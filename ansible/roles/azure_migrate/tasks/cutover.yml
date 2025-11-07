@@ -413,21 +413,21 @@
   ansible.builtin.debug:
     msg:
       - "Cutover Result"
-      - "VM: {{ vm_name }} - {{ cutover_result.Status | default('Unknown') }}"
+      - "VM: {{ vm_name }} - {{ cutover_result.get('Status', 'Unknown') }}"
       - >-
-        {% if cutover_result.Status == 'Initiated' %}
+        {% if cutover_result.get('Status') == 'Initiated' %}
         Message: Cutover initiated successfully - {{ cutover_result.get('Message', 'Azure will create the target VM') }}
-        {% elif cutover_result.Status == 'Skipped' %}
+        {% elif cutover_result.get('Status') == 'Skipped' %}
         Message: {{ cutover_result.get('Message', 'Cutover was skipped') }}
-        {% elif cutover_result.Status == 'AlreadyCompleted' %}
+        {% elif cutover_result.get('Status') == 'AlreadyCompleted' %}
         Message: {{ cutover_result.get('Message', 'Migration was already completed') }}
-        {% elif cutover_result.Status == 'AlreadyInProgress' %}
+        {% elif cutover_result.get('Status') == 'AlreadyInProgress' %}
         Message: {{ cutover_result.get('Message', 'Migration is already in progress') }}
         {% else %}
         Message: {{ cutover_result.get('Message', 'No additional details available') }}
         {% endif %}
       - >-
-        {% if cutover_result.Status == 'Initiated' %}
+        {% if cutover_result.get('Status') == 'Initiated' %}
         Target VM: Will be created by Azure (name may be auto-generated)
         {% elif cutover_result.get('TargetVMName') and cutover_result.get('TargetVMName') != 'Unknown' %}
         Target VM: {{ cutover_result.get('TargetVMName') }}
