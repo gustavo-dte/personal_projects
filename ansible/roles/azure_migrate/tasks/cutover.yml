@@ -140,31 +140,48 @@
 # Check for migration completion and skip cutover if already done
 - name: Check migration completion status
   block:
-    - name: Debug migration state check
+    - name: Debug migration state check - NEW LOGIC
       ansible.builtin.debug:
         msg: |
-          Checking migration completion status:
+          🔍 CUTOVER READINESS CHECK (New Logic):
+          - AllowedOperations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') }}
           - MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
           - MigrationStateDescription: {{ replication_json.get('MigrationStateDescription', 'Not defined') }}
           - ReplicationStatus: {{ replication_json.get('ReplicationStatus', 'Not defined') }}
           - CurrentJobName: {{ replication_json.get('CurrentJobName', 'Not defined') }}
-          - TargetVMName: {{ replication_json.get('TargetVMName', 'Not defined') }}
-          - Should skip cutover: {{ ((replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found') or (replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover')) }}
+          
+          DECISION LOGIC:
+          - Has "Migrate" in AllowedOperations: {{ 'Migrate' in (replication_json.get('AllowedOperationStrings', [])) }}
+          - Description is "Ready to migrate": {{ replication_json.get('MigrationStateDescription', '') == 'Ready to migrate' }}
+          - Should proceed with cutover: {{ ('Migrate' in (replication_json.get('AllowedOperationStrings', []))) and (replication_json.get('MigrationStateDescription', '') == 'Ready to migrate') }}
       when: ansible_verbosity >= 1
 
-    - name: Check if VM shows migration completed status
+    - name: Determine if VM is ready for cutover (NEW LOGIC)
       ansible.builtin.set_fact:
-        skip_cutover: >-
+        vm_ready_for_cutover: >-
           {{
-            (replication_json.MigrationState is defined and 
-             replication_json.MigrationState == 'MigrationSucceeded') or
-            (replication_json.ReplicationStatus is defined and 
-             replication_json.ReplicationStatus == 'Not Found') or
-            (replication_json.ReplicationStatus is defined and 
-             replication_json.ReplicationStatus == 'Queued' and
-             replication_json.CurrentJobName is defined and 
-             replication_json.CurrentJobName == 'PlannedFailover')
+            ('Migrate' in (replication_json.get('AllowedOperationStrings', []))) and
+            (replication_json.get('MigrationStateDescription', '') == 'Ready to migrate')
           }}
+
+    - name: Set skip_cutover based on readiness (NEW LOGIC)
+      ansible.builtin.set_fact:
+        skip_cutover: "{{ not vm_ready_for_cutover }}"
+
+    - name: Display decision result
+      ansible.builtin.debug:
+        msg: |
+          📋 CUTOVER DECISION:
+          - VM Ready for Cutover: {{ vm_ready_for_cutover }}
+          - Skip Cutover: {{ skip_cutover }}
+          
+          {% if vm_ready_for_cutover %}
+          ✅ PROCEEDING: VM is ready for migration cutover
+          {% else %}
+          ⚠️ SKIPPING: VM is not ready for cutover
+          Current Status: {{ replication_json.get('MigrationStateDescription', 'Unknown status') }}
+          Available Operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
+          {% endif %}
 
     - name: Debug skip_cutover immediately after setting
       ansible.builtin.debug:
@@ -174,83 +191,74 @@
           - "- skip_cutover type: {{ skip_cutover | default('NOT SET') | type_debug }}"
           - "- skip_cutover as bool: {{ skip_cutover | default(false) | bool }}"
 
-    - name: Display migration already completed message and skip cutover
+    - name: Display skip message and set result (NEW LOGIC)
       block:
         - name: Display skip message
           ansible.builtin.debug:
             msg: |
-              {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
-              ✅ Migration already completed for VM '{{ vm_name }}'
+              ⚠️ SKIPPING CUTOVER for VM '{{ vm_name }}'
               
-              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
-              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
-              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
+              Current VM Status:
+              - MigrationState: {{ replication_json.get('MigrationState', 'Unknown') }}
+              - Description: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
+              - ReplicationStatus: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
+              - Available Operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
               
-              Skipping cutover operation as migration was already successful (MigrationState = MigrationSucceeded).
-              {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found' %}
-              ⚠️ Migration skipped for VM '{{ vm_name }}'
-              
-              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
-              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
-              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
-              
-              Skipping cutover operation as VM is not found in replication list. This could mean:
-              - VM was never configured for replication
-              - Replication was already completed and cleaned up
-              - VM was removed from the Azure Migrate project
-              - Different project context or permissions issue
-              {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover' %}
-              🔄 Migration already in progress for VM '{{ vm_name }}'
-              
-              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
-              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
-              Current Job: {{ replication_json.get('CurrentJobName', 'Unknown') }}
-              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
-              
-              Skipping cutover operation as a PlannedFailover (cutover) job is already queued and running.
-              Monitor the existing job progress in Azure Migrate portal.
+              {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
+              Reason: Migration already completed successfully
+              {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
+              Reason: VM not found in replication list
+              {% elif 'Migrate' not in (replication_json.get('AllowedOperationStrings', [])) %}
+              Reason: VM is not ready for migration (Migrate operation not allowed)
+              {% elif replication_json.get('MigrationStateDescription', '') != 'Ready to migrate' %}
+              Reason: VM state is not "Ready to migrate"
               {% else %}
-              ⚠️ Migration skipped for VM '{{ vm_name }}'
-              
-              MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
-              Replication Status: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
-              Last Test Migration Status: {{ replication_json.get('LastTestMigrationStatus', 'Unknown') }}
-              
-              Skipping cutover operation - migration status indicates no action needed.
+              Reason: VM does not meet cutover requirements
               {% endif %}
+              
+              No cutover operation will be performed.
 
-        - name: Set cutover result for already completed migration
+        - name: Set cutover result for skipped operation (NEW LOGIC)
           ansible.builtin.set_fact:
             cutover_result:
               VMName: "{{ vm_name }}"
               Success: true
               Status: >-
-                {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
+                {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
                 AlreadyCompleted
-                {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover' %}
-                AlreadyInProgress
+                {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
+                NotFound
                 {% else %}
-                Skipped
+                NotReady
                 {% endif %}
-              MigrationState: "{{ replication_json.get('MigrationState', 'NotFound') }}"
+              MigrationState: "{{ replication_json.get('MigrationState', 'Unknown') }}"
+              MigrationStateDescription: "{{ replication_json.get('MigrationStateDescription', 'Unknown') }}"
+              ReplicationStatus: "{{ replication_json.get('ReplicationStatus', 'Unknown') }}"
               TargetVMName: "{{ replication_json.get('TargetVMName', 'Unknown') }}"
               CurrentJobName: "{{ replication_json.get('CurrentJobName', '') }}"
+              AllowedOperations: "{{ replication_json.get('AllowedOperationStrings', []) | join(', ') }}"
               Message: >-
-                {% if replication_json.MigrationState is defined and replication_json.MigrationState == 'MigrationSucceeded' %}
-                Migration was already completed successfully - skipped cutover (MigrationState = MigrationSucceeded)
-                {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Not Found' %}
-                Migration skipped - VM not found in replication list (ReplicationStatus = Not Found)
-                {% elif replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Queued' and replication_json.CurrentJobName is defined and replication_json.CurrentJobName == 'PlannedFailover' %}
-                Migration already in progress - PlannedFailover job is queued (CurrentJobName = PlannedFailover)
+                {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
+                Migration was already completed successfully - no cutover needed
+                {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
+                VM not found in Azure Migrate replication list
+                {% elif 'Migrate' not in (replication_json.get('AllowedOperationStrings', [])) %}
+                VM is not ready for migration - current operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') }}
+                {% elif replication_json.get('MigrationStateDescription', '') != 'Ready to migrate' %}
+                VM state is not ready for migration - current state: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
                 {% else %}
-                Migration skipped - no action needed based on current status
+                VM does not meet cutover requirements
                 {% endif %}
               JobId: null
               StartTime: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%SZ') }}"
 
-        - name: End play if migration already completed
+        - name: End play if cutover skipped
           ansible.builtin.meta: end_play
       when: skip_cutover | bool
+
+# ========================================
+# CUTOVER EXECUTION (Only runs if VM is ready)  
+# ========================================
 
 - name: Validate VM is ready for cutover
   block:
