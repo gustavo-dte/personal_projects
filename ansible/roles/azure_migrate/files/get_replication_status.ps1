@@ -142,12 +142,21 @@ try {
       $CurrentJobNameString = "None"
     }
 
-    # Extract TargetVMName for reference
+    # Extract TargetVMName for reference - try multiple property names
     $TargetVMNameString = ""
     if ($Response.TargetVMName) {
       $TargetVMNameString = [string]$Response.TargetVMName
+    } elseif ($Response.TargetVirtualMachineName) {
+      $TargetVMNameString = [string]$Response.TargetVirtualMachineName
+    } elseif ($Response.TargetName) {
+      $TargetVMNameString = [string]$Response.TargetName
+    } elseif ($Response.Target -and $Response.Target.VirtualMachineName) {
+      $TargetVMNameString = [string]$Response.Target.VirtualMachineName
+    } elseif ($Response.Target -and $Response.Target.Name) {
+      $TargetVMNameString = [string]$Response.Target.Name
     } else {
-      $TargetVMNameString = "Unknown"
+      # If no specific target name found, use the source VM name as default
+      $TargetVMNameString = $VMName
     }
 
     $Result = @{

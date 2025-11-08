@@ -183,17 +183,22 @@
           📋 CUTOVER DECISION:
           - VM Ready for Cutover: {{ vm_ready_for_cutover }}
           - Skip Cutover: {{ skip_cutover }}
-          
-          {% if vm_ready_for_cutover %}
-          ✅ PROCEEDING: VM is ready for migration cutover
-          {% else %}
+
+    - name: Display cutover proceed message
+      ansible.builtin.debug:
+        msg: "✅ PROCEEDING: VM is ready for migration cutover"
+      when: vm_ready_for_cutover
+
+    - name: Display cutover skip message with status
+      ansible.builtin.debug:
+        msg: |
           ⚠️ SKIPPING: VM is not ready for cutover
           
           Migration Status:
           - Migration State: {{ replication_json.get('MigrationState', 'Unknown') }}
           - Description: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
           - Available Operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
-          {% endif %}
+      when: not vm_ready_for_cutover
 
     - name: Debug skip_cutover immediately after setting
       ansible.builtin.debug:
