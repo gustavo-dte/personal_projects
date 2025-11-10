@@ -63,6 +63,9 @@ try {
       VMName = $VMName
       ReplicationStatus = "Not Found"
       ReplicationPercentage = 0
+      MigrationState = "NotFound"
+      MigrationStateDescription = "Not Found"
+      AllowedOperationStrings = @()
       Error = $null
     }
   } else {
@@ -114,6 +117,17 @@ try {
       $TestMigrateStateDescriptionString = "None"
     }
 
+    # Extract MigrationState and MigrationStateDescription - CRITICAL for cutover logic
+    $MigrationState = "Unknown"
+    if ($Response.MigrationState) {
+      $MigrationState = [string]$Response.MigrationState
+    }
+
+    $MigrationStateDescription = "Unknown"
+    if ($Response.MigrationStateDescription) {
+      $MigrationStateDescription = [string]$Response.MigrationStateDescription
+    }
+
     $Result = @{
       VMName = $VMName
       ReplicationStatus = $ReplicationStatus
@@ -124,6 +138,8 @@ try {
       LastTestMigrationTime = $LastTestMigrationTime
       TestMigrateStateString = $TestMigrateStateString
       TestMigrateStateDescriptionString = $TestMigrateStateDescriptionString
+      MigrationState = $MigrationState
+      MigrationStateDescription = $MigrationStateDescription
       Error = $null
     }
   }
@@ -138,6 +154,9 @@ try {
       VMName = $VMName
       ReplicationStatus = "Not Found"
       ReplicationPercentage = 0
+      MigrationState = "NotFound"
+      MigrationStateDescription = "Not Found"
+      AllowedOperationStrings = @()
       Error = $null
     }
   } else {
@@ -146,6 +165,9 @@ try {
       VMName = $VMName
       ReplicationStatus = "Error"
       ReplicationPercentage = 0
+      MigrationState = "Error"
+      MigrationStateDescription = "Error"
+      AllowedOperationStrings = @()
       Error = $ErrorMessage
     }
   }
