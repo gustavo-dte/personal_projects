@@ -187,7 +187,7 @@
     - name: Display cutover proceed message
       ansible.builtin.debug:
         msg: |
-          - ✅ PROCEEDING: VM is ready for migration cutover
+          ✅ PROCEEDING: VM is ready for migration cutover
       when: vm_ready_for_cutover
 
     - name: Display cutover skip message with status
@@ -495,29 +495,59 @@
       - "- skip_cutover value: {{ skip_cutover | default('NOT DEFINED') }}"
 
 - name: Show cutover operation summary
-  ansible.builtin.debug:
-    msg:
-      - >-
-        {% if cutover_result is defined and cutover_result.get('Status') == 'Initiated' %}
-        ✅ Cutover operation initiated for '{{ vm_name }}'
-        {% elif cutover_result is defined and cutover_result.get('Status') == 'Skipped' %}
-        ⚠️ Cutover operation skipped for '{{ vm_name }}'
-        {% elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted' %}
-        ℹ️ Migration already completed for '{{ vm_name }}'
-        {% elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress' %}
-        🔄 Migration already in progress for '{{ vm_name }}'
-        {% elif cutover_result is defined and cutover_result.get('Status') == 'Failed' %}
-        ❌ Cutover operation failed for '{{ vm_name }}'
-        {% elif cutover_result is defined %}
-        Cutover operation completed for '{{ vm_name }}'
-        {% else %}
-        ⚠️ Cutover result not available for '{{ vm_name }}'
-        {% endif %}
-      - "Status: {{ cutover_result.get('Status', 'Unknown') if cutover_result is defined else 'Not Available' }}"
-      - "{{ 'Monitor job: ' ~ cutover_result.get('JobId', '') if cutover_result is defined and cutover_result.get('JobId') and cutover_result.get('Status') == 'Initiated' else '' }}"
-      - "{{ 'Monitor existing job: ' ~ cutover_result.get('CurrentJobName', '') if cutover_result is defined and cutover_result.get('CurrentJobName') and cutover_result.get('Status') == 'AlreadyInProgress' else '' }}"
-      - "{{ 'Manual shutdown may be required for source VM' if not (shutdown_source_vm | default(false)) and cutover_result is defined and cutover_result.get('Status') == 'Initiated' else '' }}"
-      - "{{ '✅ ' ~ cutover_result.get('Message', 'No details available') if cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted' else '' }}"
-      - "{{ '⚠️ ' ~ cutover_result.get('Message', 'No details available') if cutover_result is defined and cutover_result.get('Status') == 'Skipped' else '' }}"
-      - "{{ '🔄 ' ~ cutover_result.get('Message', 'No details available') if cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress' else '' }}"
-      - "{{ '❌ ' ~ cutover_result.get('Message', 'No details available') if cutover_result is defined and cutover_result.get('Status') == 'Failed' else '' }}"
+  block:
+    - name: Display summary header and status
+      ansible.builtin.debug:
+        msg:
+          - >-
+            {% if cutover_result is defined and cutover_result.get('Status') == 'Initiated' %}
+            ✅ Cutover operation initiated for '{{ vm_name }}'
+            {% elif cutover_result is defined and cutover_result.get('Status') == 'Skipped' %}
+            ⚠️ Cutover operation skipped for '{{ vm_name }}'
+            {% elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted' %}
+            ℹ️ Migration already completed for '{{ vm_name }}'
+            {% elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress' %}
+            🔄 Migration already in progress for '{{ vm_name }}'
+            {% elif cutover_result is defined and cutover_result.get('Status') == 'Failed' %}
+            ❌ Cutover operation failed for '{{ vm_name }}'
+            {% elif cutover_result is defined %}
+            Cutover operation completed for '{{ vm_name }}'
+            {% else %}
+            ⚠️ Cutover result not available for '{{ vm_name }}'
+            {% endif %}
+          - "Status: {{ cutover_result.get('Status', 'Unknown') if cutover_result is defined else 'Not Available' }}"
+
+    - name: Display job monitoring info for initiated cutover
+      ansible.builtin.debug:
+        msg: "Monitor job: {{ cutover_result.get('JobId', '') }}"
+      when: cutover_result is defined and cutover_result.get('JobId') and cutover_result.get('Status') == 'Initiated'
+
+    - name: Display existing job monitoring info
+      ansible.builtin.debug:
+        msg: "Monitor existing job: {{ cutover_result.get('CurrentJobName', '') }}"
+      when: cutover_result is defined and cutover_result.get('CurrentJobName') and cutover_result.get('Status') == 'AlreadyInProgress'
+
+    - name: Display manual shutdown reminder
+      ansible.builtin.debug:
+        msg: "Manual shutdown may be required for source VM"
+      when: not (shutdown_source_vm | default(false)) and cutover_result is defined and cutover_result.get('Status') == 'Initiated'
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: "✅ {{ cutover_result.get('Message', 'Migration completed successfully') }}"
+      when: cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted'
+
+    - name: Display skip message
+      ansible.builtin.debug:
+        msg: "⚠️ {{ cutover_result.get('Message', 'Cutover operation was skipped') }}"
+      when: cutover_result is defined and cutover_result.get('Status') == 'Skipped'
+
+    - name: Display in-progress message
+      ansible.builtin.debug:
+        msg: "🔄 {{ cutover_result.get('Message', 'Migration is already in progress') }}"
+      when: cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress'
+
+    - name: Display failure message
+      ansible.builtin.debug:
+        msg: "❌ {{ cutover_result.get('Message', 'Cutover operation failed') }}"
+      when: cutover_result is defined and cutover_result.get('Status') == 'Failed'
