@@ -177,16 +177,17 @@
       ansible.builtin.set_fact:
         skip_cutover: "{{ not vm_ready_for_cutover }}"
 
-    - name: Display decision result
-      ansible.builtin.debug:
-        msg: |
-          📋 CUTOVER DECISION:
-          - VM Ready for Cutover: {{ vm_ready_for_cutover }}
-          - Skip Cutover: {{ skip_cutover }}
+    # - name: Display decision result
+    #   ansible.builtin.debug:
+    #     msg: |
+    #       📋 CUTOVER DECISION:
+    #       - VM Ready for Cutover: {{ vm_ready_for_cutover }}
+    #       - Skip Cutover: {{ skip_cutover }}
 
     - name: Display cutover proceed message
       ansible.builtin.debug:
-        msg: "✅ PROCEEDING: VM is ready for migration cutover"
+        msg: |
+          - ✅ PROCEEDING: VM is ready for migration cutover
       when: vm_ready_for_cutover
 
     - name: Display cutover skip message with status
@@ -202,11 +203,11 @@
 
     - name: Debug skip_cutover immediately after setting
       ansible.builtin.debug:
-        msg:
-          - "🔍 SKIP LOGIC DEBUG: skip_cutover variable just set:"
-          - "- skip_cutover value: {{ skip_cutover | default('NOT SET') }}"
-          - "- skip_cutover type: {{ skip_cutover | default('NOT SET') | type_debug }}"
-          - "- skip_cutover as bool: {{ skip_cutover | default(false) | bool }}"
+        msg: |
+          - 🔍 SKIP LOGIC DEBUG: skip_cutover variable just set:
+          - skip_cutover value: {{ skip_cutover | default('NOT SET') }}
+          - skip_cutover type: {{ skip_cutover | default('NOT SET') | type_debug }}
+          - skip_cutover as bool: {{ skip_cutover | default(false) | bool }}
 
     - name: Display skip message and set result (NEW LOGIC)
       block:
