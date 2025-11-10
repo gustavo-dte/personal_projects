@@ -60,7 +60,23 @@
   vars:
     vm_result:
       vm_name: "{{ vm_item.name }}"
-      status: "{{ 'success' if (all_replication_outputs[vm_item.name].changed | default(false)) else ('already_configured' if (all_replication_outputs[vm_item.name].rc | default(1)) == 0 and not (all_replication_outputs[vm_item.name].changed | default(false)) else 'failed') }}"
+      status: >-
+        {{
+          'resumed' if (
+            all_replication_outputs[vm_item.name].was_resumed | default(false)
+            and all_replication_outputs[vm_item.name].replication_json.Success | default(false)
+          )
+          else (
+            'success' if (all_replication_outputs[vm_item.name].changed | default(false))
+            else (
+              'already_configured' if (
+                (all_replication_outputs[vm_item.name].rc | default(1)) == 0
+                and not (all_replication_outputs[vm_item.name].changed | default(false))
+              )
+              else 'failed'
+            )
+          )
+        }}
       changed: "{{ all_replication_outputs[vm_item.name].changed | default(false) }}"
       error: "{{ all_replication_outputs[vm_item.name].stderr | default('') }}"
       output: "{{ all_replication_outputs[vm_item.name].stdout | default('') }}"
@@ -81,6 +97,7 @@
       - "Migration replication summary:"
       - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
       - "Successful: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Resumed: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'resumed') | list | length }}"
       - "Already configured: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'already_configured') | list | length }}"
       - "Failed: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
       - "VM Details:"
@@ -113,7 +130,17 @@
   vars:
     vm_result:
       vm_name: "{{ vm_item.name }}"
-      status: "{{ 'success' if (all_stop_replication_outputs[vm_item.name].changed | default(false)) else ('no_replication' if (all_stop_replication_outputs[vm_item.name].rc | default(1)) == 0 and not (all_stop_replication_outputs[vm_item.name].changed | default(false)) else 'failed') }}"
+      status: >-
+        {{
+          'success' if (all_stop_replication_outputs[vm_item.name].changed | default(false))
+          else (
+            'no_replication' if (
+              (all_stop_replication_outputs[vm_item.name].rc | default(1)) == 0
+              and not (all_stop_replication_outputs[vm_item.name].changed | default(false))
+            )
+            else 'failed'
+          )
+        }}
       changed: "{{ all_stop_replication_outputs[vm_item.name].changed | default(false) }}"
       error: "{{ all_stop_replication_outputs[vm_item.name].stderr | default('') }}"
       output: "{{ all_stop_replication_outputs[vm_item.name].stdout | default('') }}"
@@ -139,6 +166,96 @@
       - "VM Details:"
       - "{{ stop_replication_summary_details | default([]) | join('\n  ') }}"
   when: migration_action == 'stop_replication' and all_stop_replication_results is defined
+
+- name: Ensure VM names are provided for delete_migrated_vms
+  ansible.builtin.assert:
+    that:
+      - (vm_names | default('')) | length > 0
+    fail_msg: "❌ No VM names provided. Specify vm_names (comma-delimited) to delete migrated VMs. Each VM must be explicitly specified for safety."
+  when: migration_action == 'delete_migrated_vms'
+
+- name: Compute filtered VM list for delete_migrated_vms
+  ansible.builtin.set_fact:
+    delete_vm_specs: "{{ (manifest_data.vms | default([])) | filter_vm_specs_by_names(vm_names | default('')) }}"
+  when: migration_action == 'delete_migrated_vms'
+
+- name: Ensure at least one VM found for delete_migrated_vms
+  ansible.builtin.assert:
+    that:
+      - delete_vm_specs | length > 0
+    fail_msg: "❌ No matching VMs found in manifest for the provided vm_names. Verify the VM names match entries in the manifest."
+  when: migration_action == 'delete_migrated_vms'
+
+- name: Compute target VM names for delete_migrated_vms
+  ansible.builtin.set_fact:
+    delete_vm_specs_with_target_names: "{{ delete_vm_specs_with_target_names | default([]) + [item | combine({
+      'target_vm_name': (item.name | compute_target_vm_name(item, item.target_vm_name | default('')))
+    })] }}"
+  loop: "{{ delete_vm_specs }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item.name }}"
+  when: migration_action == 'delete_migrated_vms'
+
+- name: Include delete migrated VMs tasks
+  ansible.builtin.include_tasks: delete_migrated_vms.yml
+  when: migration_action == 'delete_migrated_vms'
+  loop: "{{ delete_vm_specs_with_target_names }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }} -> {{ vm_spec.target_vm_name }}"
+  vars:
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
+    target_vm_name: "{{ vm_spec.target_vm_name }}"
+    dry_run: "{{ dry_run | default(false) }}"
+
+- name: Collect delete VM results
+  ansible.builtin.set_fact:
+    all_delete_vm_results: "{{ all_delete_vm_results | default([]) + [vm_result] }}"
+  loop: "{{ delete_vm_specs_with_target_names }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.target_vm_name }}"
+  vars:
+    vm_result:
+      source_vm_name: "{{ vm_item.name }}"
+      target_vm_name: "{{ vm_item.target_vm_name }}"
+      status: >-
+        {{
+          'skipped' if (all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.Skipped | default(false))
+          else (
+            'success' if (
+              all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.Success | default(false)
+              and all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.VMDeleted | default(false)
+            )
+            else 'failed'
+          )
+        }}
+      changed: "{{ all_delete_vm_outputs[vm_item.target_vm_name].changed | default(false) }}"
+      error: "{{ all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.Error | default('') }}"
+  when: migration_action == 'delete_migrated_vms' and all_delete_vm_outputs is defined
+
+- name: Build delete VM summary details
+  ansible.builtin.set_fact:
+    delete_vm_summary_details: "{{ delete_vm_summary_details | default([]) + [result.target_vm_name + ': ' + result.status] }}"
+  loop: "{{ all_delete_vm_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.target_vm_name }}"
+  when: migration_action == 'delete_migrated_vms' and all_delete_vm_results is defined and all_delete_vm_results | length > 0
+
+- name: Display delete migrated VMs summary
+  ansible.builtin.debug:
+    msg:
+      - "Delete migrated VMs summary:"
+      - "Total VMs: {{ delete_vm_specs | default([]) | length }}"
+      - "Successful: {{ all_delete_vm_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Skipped: {{ all_delete_vm_results | default([]) | selectattr('status', 'equalto', 'skipped') | list | length }}"
+      - "Failed: {{ all_delete_vm_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ delete_vm_summary_details | default([]) | join('\n  ') }}"
+  when: migration_action == 'delete_migrated_vms' and all_delete_vm_results is defined
 
 - name: Include list projects tasks
   ansible.builtin.include_tasks: list_projects.yml
@@ -166,12 +283,58 @@
     azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
     azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
     azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
-    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
     target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
     target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
-    # Priority: command-line override > per-VM setting > manifest global setting > default (false)
-    shutdown_source_vm: "{{ shutdown_source_vm | default(vm_spec.shutdown_source_vm | default(manifest_data.shutdown_source_vm | default(false))) }}"
+    shutdown_source_vm: "{{ vm_spec.shutdown_source_vm | default(manifest_data.shutdown_source_vm | default(false)) }}"
     dry_run: "{{ dry_run | default(false) }}"
+
+- name: Collect cutover results
+  ansible.builtin.set_fact:
+    all_cutover_results: "{{ all_cutover_results | default([]) + [vm_result] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: >-
+        {{
+          'success' if (all_cutover_outputs[vm_item.name].cutover_result.Success | default(false) and all_cutover_outputs[vm_item.name].cutover_result.Status in ['Initiated', 'AlreadyCompleted'])
+          else (
+            'skipped' if (all_cutover_outputs[vm_item.name].cutover_result.Status in ['Skipped', 'AlreadyCompleted', 'NotReady', 'NotFound'] | default(false))
+            else 'failed'
+          )
+        }}
+      changed: "{{ all_cutover_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_cutover_outputs[vm_item.name].stderr | default(all_cutover_outputs[vm_item.name].cutover_result.Error | default('')) }}"
+      output: "{{ all_cutover_outputs[vm_item.name].stdout | default('') }}"
+      cutover_status: "{{ all_cutover_outputs[vm_item.name].cutover_result.Status | default('Unknown') }}"
+      target_vm_name: "{{ all_cutover_outputs[vm_item.name].cutover_result.TargetVMName | default('') }}"
+      job_id: "{{ all_cutover_outputs[vm_item.name].cutover_result.JobId | default('') }}"
+  when: migration_action == 'cutover' and all_cutover_outputs is defined
+
+- name: Build cutover summary details
+  ansible.builtin.set_fact:
+    cutover_summary_details: "{{ cutover_summary_details | default([]) + [result.vm_name + ': ' + result.status + ' (' + result.cutover_status + ')'] }}"
+  loop: "{{ all_cutover_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: migration_action == 'cutover' and all_cutover_results is defined and all_cutover_results | length > 0
+
+- name: Display cutover summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration cutover summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_cutover_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Skipped: {{ all_cutover_results | default([]) | selectattr('status', 'equalto', 'skipped') | list | length }}"
+      - "Failed: {{ all_cutover_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ cutover_summary_details | default([]) | join('\n  ') }}"
+  when: migration_action == 'cutover' and all_cutover_results is defined
 
 - name: Include start test migration tasks
   ansible.builtin.include_tasks: start_test_migration.yml
@@ -199,7 +362,14 @@
   vars:
     vm_result:
       vm_name: "{{ vm_item.name }}"
-      status: "{{ 'success' if (all_test_migration_outputs[vm_item.name].test_migration_json.Success | default(false)) else ('skipped' if (all_test_migration_outputs[vm_item.name].test_migration_json.Skipped | default(false)) else 'failed') }}"
+      status: >-
+        {{
+          'success' if (all_test_migration_outputs[vm_item.name].test_migration_json.Success | default(false))
+          else (
+            'skipped' if (all_test_migration_outputs[vm_item.name].test_migration_json.Skipped | default(false))
+            else 'failed'
+          )
+        }}
       changed: "{{ all_test_migration_outputs[vm_item.name].changed | default(false) }}"
       error: "{{ all_test_migration_outputs[vm_item.name].stderr | default(all_test_migration_outputs[vm_item.name].test_migration_json.Error | default('')) }}"
       output: "{{ all_test_migration_outputs[vm_item.name].stdout | default('') }}"
@@ -252,7 +422,14 @@
   vars:
     vm_result:
       vm_name: "{{ vm_item.name }}"
-      status: "{{ 'success' if (all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Success | default(false)) else ('skipped' if (all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Skipped | default(false)) else 'failed') }}"
+      status: >-
+        {{
+          'success' if (all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Success | default(false))
+          else (
+            'skipped' if (all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Skipped | default(false))
+            else 'failed'
+          )
+        }}
       changed: "{{ all_test_migration_cleanup_outputs[vm_item.name].changed | default(false) }}"
       error: "{{ all_test_migration_cleanup_outputs[vm_item.name].stderr | default(all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Error | default('')) }}"
       output: "{{ all_test_migration_cleanup_outputs[vm_item.name].stdout | default('') }}"

@@ -12,9 +12,9 @@ Param(
   [Parameter(Mandatory=$true)][string]$TargetNetworkId,
   [Parameter(Mandatory=$true)][string]$TargetSubnetName,
   [Parameter(Mandatory=$true)][string]$OSDiskScsiId,
+  [Parameter(Mandatory=$true)][string]$TargetVMName,
 
   # Optional parameters
-  [Parameter(Mandatory=$false)][string]$TargetVMName,
   [Parameter(Mandatory=$false)][string]$TargetVMSize = "Standard_DS2_v2",
   [Parameter(Mandatory=$false)][string]$LicenseType = "NoLicenseType",
   [Parameter(Mandatory=$false)][string]$TargetDiskType = "Standard_LRS",
@@ -79,12 +79,6 @@ Set-AzureContext -SubscriptionId $TargetSubscriptionId
 # Get target resource group and virtual network using common utilities
 $targetRg = Get-AzureResource -ResourceType 'ResourceGroup' -ResourceName $TargetResourceGroup -Required
 $targetRgId = $targetRg.ResourceId
-
-# Set target VM name to source VM name if not provided
-if (-not $TargetVMName) {
-  $TargetVMName = $MachineName
-  Write-Output "INFO: Target VM name not specified, using source VM name: $TargetVMName"
-}
 
 # Log target configuration
 Write-Output "INFO: Target VM Name: $TargetVMName"

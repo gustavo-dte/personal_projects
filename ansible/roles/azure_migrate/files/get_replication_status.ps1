@@ -55,12 +55,7 @@ try {
   $Response = Get-AzMigrateServerReplication -ProjectName $ProjectName -ResourceGroupName $ProjectResourceGroup -MachineName $VMName -ErrorAction Stop
 
   Write-Output "INFO: Replication status for VM '$VMName':"
-  Write-Output "  - ReplicationStatus: $($Response.ReplicationStatus)"
-  Write-Output "  - MigrationState: $($Response.MigrationState)"
-  Write-Output "  - MigrationStateDescription: $($Response.MigrationStateDescription)"
-  Write-Output "  - CurrentJobName: $($Response.CurrentJobName)"
-  Write-Output "  - TargetVMName: $($Response.TargetVMName)"
-  Write-Output "  - AllowedOperations: $($Response.AllowedOperation -join ', ')"
+  Write-Output $Response
 
   if (-not $Response) {
     Write-Output "INFO: No replication found for VM '$VMName' in project '$ProjectName' - treating as 0% replication"
@@ -119,46 +114,6 @@ try {
       $TestMigrateStateDescriptionString = "None"
     }
 
-    # Extract MigrationState and Description (CRITICAL for skip logic)
-    $MigrationStateString = ""
-    if ($Response.MigrationState) {
-      $MigrationStateString = [string]$Response.MigrationState
-    } else {
-      $MigrationStateString = "Unknown"
-    }
-
-    $MigrationStateDescriptionString = ""
-    if ($Response.MigrationStateDescription) {
-      $MigrationStateDescriptionString = [string]$Response.MigrationStateDescription
-    } else {
-      $MigrationStateDescriptionString = "Unknown"
-    }
-
-    # Extract CurrentJobName for planned failover detection
-    $CurrentJobNameString = ""
-    if ($Response.CurrentJobName) {
-      $CurrentJobNameString = [string]$Response.CurrentJobName
-    } else {
-      $CurrentJobNameString = "None"
-    }
-
-    # Extract TargetVMName for reference - try multiple property names
-    $TargetVMNameString = ""
-    if ($Response.TargetVMName) {
-      $TargetVMNameString = [string]$Response.TargetVMName
-    } elseif ($Response.TargetVirtualMachineName) {
-      $TargetVMNameString = [string]$Response.TargetVirtualMachineName
-    } elseif ($Response.TargetName) {
-      $TargetVMNameString = [string]$Response.TargetName
-    } elseif ($Response.Target -and $Response.Target.VirtualMachineName) {
-      $TargetVMNameString = [string]$Response.Target.VirtualMachineName
-    } elseif ($Response.Target -and $Response.Target.Name) {
-      $TargetVMNameString = [string]$Response.Target.Name
-    } else {
-      # If no specific target name found, use the source VM name as default
-      $TargetVMNameString = $VMName
-    }
-
     $Result = @{
       VMName = $VMName
       ReplicationStatus = $ReplicationStatus
@@ -169,10 +124,6 @@ try {
       LastTestMigrationTime = $LastTestMigrationTime
       TestMigrateStateString = $TestMigrateStateString
       TestMigrateStateDescriptionString = $TestMigrateStateDescriptionString
-      MigrationState = $MigrationStateString
-      MigrationStateDescription = $MigrationStateDescriptionString
-      CurrentJobName = $CurrentJobNameString
-      TargetVMName = $TargetVMNameString
       Error = $null
     }
   }

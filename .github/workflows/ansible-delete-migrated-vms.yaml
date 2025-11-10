@@ -1,0 +1,121 @@
+name: Ansible-Delete-Migrated-VMs
+
+# This workflow deletes migrated VMs and their associated resources (NICs and disks)
+# It requires explicit VM names to be specified for safety
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      vm_names:
+        description: "Comma-delimited VM names to delete (source VM names from manifest)"
+        required: true
+        type: string
+      confirm_delete:
+        description: "Type 'DELETE' to confirm deletion of VMs"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  delete-migrated-vms:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🗂️  VM names to delete: ${{ inputs.vm_names }}"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🗑️  Deleting migrated VMs and associated resources..."
+          fi
+
+      - name: 🚫 Fail early if no VM names provided
+        shell: bash
+        run: |
+          VM_NAMES_INPUT="${{ inputs.vm_names }}"
+          if [ -z "$VM_NAMES_INPUT" ]; then
+            echo "❌ No VM names provided. You must specify 'vm_names' (comma-delimited) to delete migrated VMs."
+            echo "Each VM must be explicitly specified for safety - there is no DELETE_ALL option."
+            exit 1
+          fi
+
+      - name: 🛡️ Verify DELETE confirmation
+        shell: bash
+        run: |
+          CONFIRM_INPUT="${{ inputs.confirm_delete }}"
+          CONFIRM_UPPER=$(echo "$CONFIRM_INPUT" | tr '[:lower:]' '[:upper:]')
+          if [ "$CONFIRM_UPPER" != "DELETE" ]; then
+            echo "❌ Deletion confirmation failed. You must type 'DELETE' in the confirm_delete field to proceed."
+            echo "Received: '$CONFIRM_INPUT'"
+            exit 1
+          fi
+          echo "✅ Deletion confirmed"
+
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }},
+            "vm_names": "${{ inputs.vm_names }}",
+            "migration_action": "delete_migrated_vms"
+          }
+          JSON
+
+      - name: 🎬 Run playbook - delete migrated VMs
+        run: |
+          ansible-playbook ansible/playbooks/delete-migrated-vms.yml \
+            -e @ansible_extra_vars.json
+
+      - name: 📤 Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-delete-vms-logs
+          path: ansible/logs/AzMigrate_DeleteMigratedVM_*.log
+          if-no-files-found: warn
+          retention-days: 90

@@ -7,6 +7,7 @@ migration_actions:
   - cutover
   - test_migration
   - test_migration_cleanup
+  - delete_migrated_vms
   - list_projects
   - get_replication_status
 
@@ -16,6 +17,7 @@ manifest_dependent_actions:
   - cutover
   - test_migration
   - test_migration_cleanup
+  - delete_migrated_vms
   - get_replication_status
 
 # Optional inputs (extend as needed for replication parameters)

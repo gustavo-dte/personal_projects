@@ -88,9 +88,10 @@
     - name: Set replication status flags
       ansible.builtin.set_fact:
         existing_replication_results: "{{ replication_json }}"
-        vm_already_replicating: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error'] }}"
+        vm_already_replicating: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error', 'Paused'] }}"
         replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
         replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
+        can_resume_replication: "{{ 'ResumeReplication' in (replication_json.AllowedOperationStrings | default([])) }}"
 
     - name: Handle "Solution not found" error
       ansible.builtin.fail:
@@ -129,7 +130,128 @@
       ⏳ Starting replication for VM '{{ vm_name }}'...
 
       Please wait...
-  when: not vm_already_replicating
+  when: not vm_already_replicating and not (can_resume_replication | default(false))
+
+- name: Replication process is resuming
+  ansible.builtin.debug:
+    msg: |
+      ⏳ Resuming replication for VM '{{ vm_name }}'...
+
+      Please wait...
+  when: not vm_already_replicating and (can_resume_replication | default(false))
+
+- name: Resume replication using PowerShell file
+  block:
+    - name: Run resume_replication.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/resume_replication.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+        -MachineName {{ vm_name }}
+        -ReplicationId {{ existing_replication_results.ReplicationId }}
+      register: replication_output
+      changed_when: replication_output.rc == 0
+      when:
+        - not (dry_run | default(false))
+        - can_resume_replication | default(false)
+
+    - name: Read JSON results from resume_replication.ps1
+      ansible.builtin.slurp:
+        src: resume_replication_result.json
+      register: start_replication_json_file
+      when:
+        - not (dry_run | default(false))
+        - can_resume_replication | default(false)
+
+    - name: Debug resume replication PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Resume Replication PowerShell Output:
+          {{ replication_output.stdout | default('') }}
+          {% if replication_output.stderr | default('') | length > 0 %}
+          Stderr:
+          {{ replication_output.stderr }}
+          {% endif %}
+      when:
+        - not (dry_run | default(false))
+        - can_resume_replication | default(false)
+
+    - name: Parse resume replication JSON content
+      ansible.builtin.set_fact:
+        start_replication_json: >-
+          {{
+            (start_replication_json_file.content | b64decode | from_json)
+            if not (dry_run | default(false))
+            else {
+              'VMName': vm_name,
+              'TargetVMName': final_target_vm_name,
+              'Success': true,
+              'Error': None,
+              'ReplicationId': existing_replication_results.ReplicationId | default('mock-replication-id'),
+              'ResumeTime': '2024-01-01 00:00:00'
+            }
+          }}
+      when: can_resume_replication | default(false)
+
+    - name: Mock replication resume for dry run
+      ansible.builtin.set_fact:
+        replication_output:
+          stdout: |
+            INFO: [DRY RUN] Would execute resume_replication.ps1 with parameters:
+            -ProjectName {{ azure_migrate_project_name }}
+            -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+            -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+            -MachineName {{ vm_name }}
+            -ReplicationId {{ existing_replication_results.ReplicationId }}
+          stderr: ""
+          rc: 0
+          changed: true
+        start_replication_json:
+          VMName: "{{ vm_name }}"
+          TargetVMName: "{{ final_target_vm_name }}"
+          Success: true
+          Error: None
+          ReplicationId: "{{ existing_replication_results.ReplicationId | default('mock-replication-id') }}"
+          ResumeTime: "2024-01-01 00:00:00"
+      when:
+        - dry_run | default(false)
+        - can_resume_replication | default(false)
+
+  when: not vm_already_replicating and (can_resume_replication | default(false))
+  rescue:
+    - name: Replication resume failed
+      ansible.builtin.fail:
+        msg: |
+          ❌ Replication resume failed for VM '{{ vm_name }}'
+          Error: {{ start_replication_json.Error | default('Unknown error occurred') }}
+
+          This could be due to:
+          - Azure Migrate project not accessible or doesn't exist
+          - Insufficient permissions for replication operations
+          - Replication item not found or in invalid state
+          - Network connectivity issues
+
+          Troubleshooting:
+          - Verify Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check permissions on resource group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+          - Verify replication ID: {{ existing_replication_results.ReplicationId | default('N/A') }}
+          - Review full output below for specific errors
+
+          Stderr: {{ replication_output.stderr | default('') }}
+  always:
+    - name: Log replication resume operation (always)
+      ansible.builtin.debug:
+        msg: "Triggering log write for {{ vm_name }}"
+      vars:
+        log_prefix: "AzMigrate_ResumeReplication_"
+        log_title: "Resume Replication"
+        operation_output: "{{ replication_output | default({'stdout': 'Operation failed before completion', 'rc': 1}) }}"
+        replication_result: "{{ start_replication_json | default({'VMName': vm_name, 'Success': false, 'Error': 'Operation failed before completion'}) }}"
+      notify: write_operation_log
+    - name: Flush handlers to write log now
+      ansible.builtin.meta: flush_handlers
 
 - name: Start replication using PowerShell file
   block:
@@ -162,6 +284,17 @@
       ansible.builtin.slurp:
         src: start_replication_result.json
       register: start_replication_json_file
+      when: not (dry_run | default(false))
+
+    - name: Debug start replication PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Start Replication PowerShell Output:
+          {{ replication_output.stdout | default('') }}
+          {% if replication_output.stderr | default('') | length > 0 %}
+          Stderr:
+          {{ replication_output.stderr }}
+          {% endif %}
       when: not (dry_run | default(false))
 
     - name: Parse start replication JSON content
@@ -226,7 +359,7 @@
           StartTime: "2024-01-01 00:00:00"
       when: dry_run | default(false)
 
-  when: not vm_already_replicating
+  when: not vm_already_replicating and not (can_resume_replication | default(false))
   rescue:
     - name: Replication failed
       ansible.builtin.fail:
@@ -249,7 +382,7 @@
 
           Stderr: {{ replication_output.stderr | default('') }}
   always:
-    - name: Log replication operation (always)
+    - name: Log replication start operation (always)
       ansible.builtin.debug:
         msg: "Triggering log write for {{ vm_name }}"
       vars:
@@ -280,7 +413,7 @@
 - name: Display replication result
   ansible.builtin.debug:
     msg:
-      - "VM {{ vm_name }}: {{ 'Already configured' if vm_already_replicating else 'Replication started' }}"
+      - "VM {{ vm_name }}: {{ 'Already configured' if vm_already_replicating else ('Replication resumed' if (can_resume_replication | default(false)) else 'Replication started') }}"
       - "Changed: {{ replication_output.changed | default(false) }}"
       - "Success: {{ start_replication_json.Success | default(false) }}"
       - "Replication ID: {{ start_replication_json.ReplicationId | default('N/A') }}"

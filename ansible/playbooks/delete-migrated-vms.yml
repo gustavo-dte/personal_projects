@@ -1,0 +1,22 @@
+---
+# Playbook to delete migrated VMs and their associated resources (NICs and disks)
+# This playbook loads VMs from the manifest and deletes the migrated VMs for each specified VM,
+# with idempotent handling to skip VMs that don't exist
+
+- name: Delete migrated VMs
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
+    all_delete_vm_outputs: {}
+  roles:
+    - role: common
+    - role: azure_migrate
+      vars:
+        migration_action: delete_migrated_vms
+        dry_run: "{{ dry_run }}"
+  post_tasks:
+    - name: Delete VM request output
+      ansible.builtin.debug:
+        var: all_delete_vm_outputs
