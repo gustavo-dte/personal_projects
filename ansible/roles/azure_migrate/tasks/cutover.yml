@@ -172,6 +172,8 @@
       ansible.builtin.set_fact:
         vm_ready_for_cutover: >-
           {{
+            (replication_json.get('MigrationState', '') != 'MigrationSucceeded') and
+            (replication_json.get('MigrationStateDescription', '') != 'Migrated') and
             ('Migrate' in (replication_json.get('AllowedOperationStrings', []))) and
             (replication_json.get('MigrationStateDescription', '') == 'Ready to migrate')
           }}
@@ -221,12 +223,13 @@
               
               Current VM Status:
               - MigrationState: {{ replication_json.get('MigrationState', 'Unknown') }}
-              - Description: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
-              - ReplicationStatus: {{ replication_json.get('ReplicationStatus', 'Unknown') }}
+              - MigrationStateDescription: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
               - Available Operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
               
               {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
               Reason: Migration already completed successfully
+              {% elif replication_json.get('MigrationStateDescription') == 'Migrated' %}
+              Reason: VM is already migrated
               {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
               Reason: VM not found in replication list
               {% elif 'Migrate' not in (replication_json.get('AllowedOperationStrings', [])) %}
@@ -246,6 +249,8 @@
               Success: true
               Status: >-
                 {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
+                AlreadyCompleted
+                {% elif replication_json.get('MigrationStateDescription') == 'Migrated' %}
                 AlreadyCompleted
                 {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
                 NotFound
