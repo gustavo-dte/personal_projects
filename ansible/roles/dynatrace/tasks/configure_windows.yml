@@ -1,0 +1,93 @@
+---
+# Configure Dynatrace extension on Windows VM
+
+- name: Display Windows configuration start
+  ansible.builtin.debug:
+    msg:
+      - "🖥️  Configuring Dynatrace extension for Windows VM: {{ vm_name }}"
+      - "Resource Group: {{ target_resource_group }}"
+      - "Subscription: {{ target_subscription_id }}"
+
+- name: Run configure_dynatrace_windows.ps1
+  ansible.builtin.command: >-
+    pwsh -NoLogo -NoProfile -NonInteractive -File
+    {{ role_path }}/files/configure_dynatrace_windows.ps1
+    -VMName {{ vm_name }}
+    -ResourceGroup {{ target_resource_group }}
+    -SubscriptionId {{ target_subscription_id }}
+    {{ '-DynatraceEnvironmentUrl ' ~ dynatrace_environment_url if (dynatrace_environment_url | default('')) | length > 0 else '' }}
+    {{ '-DynatraceApiToken ' ~ dynatrace_api_token if (dynatrace_api_token | default('')) | length > 0 else '' }}
+    {{ '-ExtensionVersion ' ~ dynatrace_extension_version if (dynatrace_extension_version | default('')) | length > 0 else '' }}
+    {{ '-DryRun' if (dry_run | default(false)) else '' }}
+  register: dynatrace_output
+  changed_when: false
+  failed_when: false
+
+- name: Display PowerShell output
+  ansible.builtin.debug:
+    msg: "{{ dynatrace_output.stdout }}"
+  when: dynatrace_output.stdout | default('') | length > 0
+
+- name: Display PowerShell errors if any
+  ansible.builtin.debug:
+    msg: "{{ dynatrace_output.stderr }}"
+  when: dynatrace_output.stderr | default('') | length > 0
+
+- name: Check if result file exists
+  ansible.builtin.stat:
+    path: configure_dynatrace_result.json
+  register: result_file_stat
+
+- name: Read Dynatrace configuration result
+  ansible.builtin.slurp:
+    src: configure_dynatrace_result.json
+  register: dynatrace_result_file
+  when: result_file_stat.stat.exists
+
+- name: Parse Dynatrace result
+  ansible.builtin.set_fact:
+    dynatrace_result: "{{ dynatrace_result_file.content | b64decode | from_json }}"
+  when: result_file_stat.stat.exists
+
+- name: Set default result if file doesn't exist
+  ansible.builtin.set_fact:
+    dynatrace_result:
+      VMName: "{{ vm_name }}"
+      Success: false
+      ExtensionStatus: "Failed"
+      Message: "Result file not created"
+      Error: "PowerShell script did not create result file"
+  when: not result_file_stat.stat.exists
+
+- name: Display Dynatrace configuration result
+  ansible.builtin.debug:
+    msg:
+      - "==================================================="
+      - "Dynatrace Configuration Result - Windows"
+      - "==================================================="
+      - "VM Name: {{ dynatrace_result.VMName }}"
+      - "Success: {{ dynatrace_result.Success }}"
+      - "Extension Status: {{ dynatrace_result.ExtensionStatus }}"
+      - "Extension Version: {{ dynatrace_result.ExtensionVersion | default('N/A') }}"
+      - "Message: {{ dynatrace_result.Message }}"
+      - "{% if dynatrace_result.Error %}Error: {{ dynatrace_result.Error }}{% endif %}"
+      - "Start Time: {{ dynatrace_result.StartTime | default('N/A') }}"
+      - "End Time: {{ dynatrace_result.EndTime | default('N/A') }}"
+      - "==================================================="
+
+- name: Log Dynatrace operation
+  ansible.builtin.debug:
+    msg: "Triggering log write for {{ vm_name }} Dynatrace Windows configuration"
+  vars:
+    log_prefix: "Dynatrace_Windows_"
+    log_title: "Dynatrace Windows Configuration"
+    operation_output: "{{ dynatrace_output }}"
+  notify: write_operation_log
+
+- name: Flush handlers to write log
+  ansible.builtin.meta: flush_handlers
+
+- name: Fail if Dynatrace configuration was not successful
+  ansible.builtin.fail:
+    msg: "Dynatrace configuration failed for VM '{{ vm_name }}': {{ dynatrace_result.Error | default(dynatrace_result.Message) }}"
+  when: not dynatrace_result.Success and dynatrace_result.ExtensionStatus not in ['AlreadyInstalled', 'DryRun']

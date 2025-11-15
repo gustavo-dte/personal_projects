@@ -1,0 +1,205 @@
+name: Ansible-Configure-Dynatrace
+
+# This workflow configures Dynatrace extension on Windows or Linux VMs
+# It supports both operating systems through separate playbooks
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      os_type:
+        description: "Operating System Type"
+        required: true
+        type: choice
+        options:
+          - windows
+          - linux
+          - both
+      dry_run:
+        description: "Dry run (test mode - no actual changes)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.manifest }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  configure-dynatrace-windows:
+    name: Configure Dynatrace - Windows
+    if: ${{ inputs.os_type == 'windows' || inputs.os_type == 'both' }}
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration - Windows
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🖥️  Operating System: Windows"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🚀 Configuring Dynatrace extension for Windows VMs..."
+          fi
+
+      - name: 🧱 Prepare extra vars file - Windows
+        run: |
+          cat > ansible_extra_vars_windows.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }}
+          }
+          JSON
+
+      - name: 🎬 Run playbook - Configure Dynatrace Windows
+        run: |
+          ansible-playbook ansible/playbooks/configure-dynatrace-windows.yml \
+            -e @ansible_extra_vars_windows.json
+
+      - name: 📤 Upload Logs - Windows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynatrace-windows-logs-${{ inputs.manifest }}
+          path: ansible/logs/Dynatrace_Windows_*.log
+          if-no-files-found: warn
+          retention-days: 90
+
+  configure-dynatrace-linux:
+    name: Configure Dynatrace - Linux
+    if: ${{ inputs.os_type == 'linux' || inputs.os_type == 'both' }}
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration - Linux
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🐧 Operating System: Linux"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🚀 Configuring Dynatrace extension for Linux VMs..."
+          fi
+
+      - name: 🧱 Prepare extra vars file - Linux
+        run: |
+          cat > ansible_extra_vars_linux.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }}
+          }
+          JSON
+
+      - name: 🎬 Run playbook - Configure Dynatrace Linux
+        run: |
+          ansible-playbook ansible/playbooks/configure-dynatrace-linux.yml \
+            -e @ansible_extra_vars_linux.json
+
+      - name: 📤 Upload Logs - Linux
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynatrace-linux-logs-${{ inputs.manifest }}
+          path: ansible/logs/Dynatrace_Linux_*.log
+          if-no-files-found: warn
+          retention-days: 90
+
+  summary:
+    name: Configuration Summary
+    needs: [configure-dynatrace-windows, configure-dynatrace-linux]
+    if: always()
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    steps:
+      - name: 📋 Display summary
+        run: |
+          echo "========================================"
+          echo "Dynatrace Configuration Summary"
+          echo "========================================"
+          echo "Manifest: ${{ inputs.manifest }}"
+          echo "OS Type: ${{ inputs.os_type }}"
+          echo "Dry Run: ${{ inputs.dry_run }}"
+          echo ""
+          
+          if [ "${{ inputs.os_type }}" = "windows" ] || [ "${{ inputs.os_type }}" = "both" ]; then
+            echo "Windows Job Status: ${{ needs.configure-dynatrace-windows.result }}"
+          fi
+          
+          if [ "${{ inputs.os_type }}" = "linux" ] || [ "${{ inputs.os_type }}" = "both" ]; then
+            echo "Linux Job Status: ${{ needs.configure-dynatrace-linux.result }}"
+          fi
+          echo ""
+          
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "ℹ️  This was a DRY RUN - no actual changes were made"
+          else
+            echo "✅ Configuration completed - check logs for details"
+          fi
+          echo ""
+          echo "Next steps:"
+          echo "1. Review uploaded logs for detailed results"
+          echo "2. Verify Dynatrace extension is running on target VMs"
+          echo "3. Check Dynatrace console for monitoring data"
+          echo "========================================"

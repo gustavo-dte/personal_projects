@@ -1,0 +1,13 @@
+---
+# Default variables for dynatrace role
+
+# Dynatrace configuration
+dynatrace_environment_url: ""  # Optional: Dynatrace environment URL
+dynatrace_api_token: ""        # Optional: Dynatrace API token
+dynatrace_extension_version: "latest"  # Extension version to install
+
+# Operation mode
+dry_run: false
+
+# OS type (windows or linux)
+os_type: "windows"

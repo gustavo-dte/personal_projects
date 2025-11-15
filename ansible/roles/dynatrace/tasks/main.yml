@@ -1,0 +1,16 @@
+---
+# Main tasks file for dynatrace role
+# This role configures Dynatrace extension on Windows or Linux VMs
+# It first verifies that migration is completed before proceeding
+
+- name: Load manifest and verify prerequisites
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+
+- name: Process each VM from manifest
+  ansible.builtin.include_tasks: process_vm.yml
+  loop: "{{ vms }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"

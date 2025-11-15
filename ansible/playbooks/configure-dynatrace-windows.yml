@@ -1,0 +1,42 @@
+---
+# Playbook to configure Dynatrace extension on Windows VMs
+# Loads VMs from manifest and configures Dynatrace extension for Windows machines
+
+- name: Configure Dynatrace extension for Windows VMs
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
+    all_dynatrace_outputs: []
+  
+  pre_tasks:
+    - name: Show Azure account
+      block:
+        - name: Run 'az account show'
+          ansible.builtin.command: az account show -o table
+          changed_when: false
+      rescue:
+        - name: Exit playbook when 'az account show' fails
+          ansible.builtin.fail:
+            msg: "az account show failed; exiting"
+  
+  roles:
+    - role: common
+    - role: dynatrace
+      vars:
+        os_type: windows
+        dry_run: "{{ dry_run | default(false) }}"
+  
+  post_tasks:
+    - name: Dynatrace Windows configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "Dynatrace Windows configuration completed"
+          - "Configured VMs: {{ all_dynatrace_outputs | length }}"
+          - "Check individual VM results above"
+          - ""
+          - "Next steps:"
+          - "1. Verify Dynatrace agent is running on Windows VMs"
+          - "2. Check Dynatrace console for monitoring data"
+          - "3. Validate metrics are being collected"

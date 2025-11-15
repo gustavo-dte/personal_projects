@@ -1,0 +1,26 @@
+---
+# Meta information for dynatrace role
+
+galaxy_info:
+  author: DTE Cloud Platform Team
+  description: Configure Dynatrace extension on Azure VMs (Windows and Linux)
+  company: DTE Energy
+  
+  license: MIT
+  
+  min_ansible_version: "2.9"
+  
+  platforms:
+    - name: Azure
+      versions:
+        - all
+
+  galaxy_tags:
+    - azure
+    - dynatrace
+    - monitoring
+    - vm
+    - extension
+
+dependencies:
+  - role: common

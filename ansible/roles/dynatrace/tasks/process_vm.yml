@@ -1,0 +1,143 @@
+---
+# Process individual VM for Dynatrace configuration
+# First checks migration status, then configures extension if migration succeeded
+
+- name: Set VM variables
+  ansible.builtin.set_fact:
+    vm_name: "{{ vm_spec.name }}"
+    target_resource_group: "{{ vm_spec.target_resource_group | default(target_resource_group) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(target_subscription_id) }}"
+    azure_migrate_project_name: "{{ vm_spec.azure_migrate_project_name | default(azure_migrate_project_name) }}"
+    azure_migrate_project_resource_group: "{{ vm_spec.azure_migrate_project_resource_group | default(azure_migrate_project_resource_group) }}"
+    azure_migrate_subscription_id: "{{ vm_spec.azure_migrate_subscription_id | default(azure_migrate_subscription_id | default(target_subscription_id)) }}"
+
+- name: Display VM processing header
+  ansible.builtin.debug:
+    msg:
+      - "=================================================="
+      - "Processing VM: {{ vm_name }}"
+      - "OS Type: {{ os_type }}"
+      - "Dry Run: {{ dry_run | default(false) }}"
+      - "=================================================="
+
+# Step 1: Check migration status
+- name: Check migration status for VM
+  block:
+    - name: Run get_replication_status.ps1 to check migration state
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/../azure_migrate/files/get_replication_status.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group }}
+        -VMNamesJson '["{{ vm_name }}"]'
+        -ReplicationThreshold 0
+        -SubscriptionId {{ azure_migrate_subscription_id }}
+      register: migration_status_check
+      changed_when: false
+
+    - name: Read migration status JSON result
+      ansible.builtin.slurp:
+        src: get_replication_status_result.json
+      register: migration_status_file
+
+    - name: Parse migration status
+      ansible.builtin.set_fact:
+        migration_status_json: "{{ migration_status_file.content | b64decode | from_json }}"
+
+    - name: Display current migration state
+      ansible.builtin.debug:
+        msg:
+          - "Migration Status Check Results:"
+          - "  VM Name: {{ migration_status_json.VMName | default('N/A') }}"
+          - "  Migration State: {{ migration_status_json.MigrationState | default('Not Available') }}"
+          - "  Migration State Description: {{ migration_status_json.MigrationStateDescription | default('N/A') }}"
+          - "  Replication Status: {{ migration_status_json.ReplicationStatus | default('N/A') }}"
+
+    - name: Check if migration succeeded
+      ansible.builtin.set_fact:
+        migration_succeeded: "{{ migration_status_json.MigrationState | default('') == 'MigrationSucceeded' }}"
+        current_migration_state: "{{ migration_status_json.MigrationState | default('Unknown') }}"
+        current_migration_description: "{{ migration_status_json.MigrationStateDescription | default('Unknown') }}"
+
+    - name: Stop if migration has not succeeded
+      ansible.builtin.fail:
+        msg: |
+          ❌ Cannot configure Dynatrace extension for VM '{{ vm_name }}'
+          
+          Migration Status: {{ current_migration_state }}
+          Migration Description: {{ current_migration_description }}
+          
+          Dynatrace extension can only be configured on VMs that have completed migration.
+          Current migration state must be 'MigrationSucceeded' to proceed.
+          
+          Required: MigrationState = MigrationSucceeded
+          Current:  MigrationState = {{ current_migration_state }}
+          
+          Please complete the migration for this VM before attempting to configure Dynatrace.
+          
+          Next steps:
+          1. Complete the VM migration using the migration-cutover workflow
+          2. Verify the VM is in 'MigrationSucceeded' state
+          3. Re-run this Dynatrace configuration workflow
+      when: not migration_succeeded
+
+    - name: Display migration success confirmation
+      ansible.builtin.debug:
+        msg:
+          - "✅ Migration verified successfully"
+          - "VM '{{ vm_name }}' has MigrationState = MigrationSucceeded"
+          - "Proceeding with Dynatrace extension configuration..."
+      when: migration_succeeded
+
+  rescue:
+    - name: Handle migration status check failure
+      ansible.builtin.fail:
+        msg: |
+          ❌ Failed to check migration status for VM '{{ vm_name }}'
+          
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          
+          This could mean:
+          1. The VM was not migrated using Azure Migrate
+          2. The Azure Migrate project doesn't exist
+          3. Insufficient permissions to check migration status
+          4. The VM name doesn't match any migrated VM
+          
+          If this VM was created directly in Azure (not migrated), 
+          you may need to skip the migration check.
+
+# Step 2: Configure Dynatrace extension (only if migration succeeded)
+- name: Configure Dynatrace extension
+  when: migration_succeeded
+  block:
+    - name: Include OS-specific configuration task
+      ansible.builtin.include_tasks: "configure_{{ os_type }}.yml"
+
+  rescue:
+    - name: Handle Dynatrace configuration failure
+      ansible.builtin.set_fact:
+        dynatrace_result:
+          VMName: "{{ vm_name }}"
+          Success: false
+          ExtensionStatus: "Failed"
+          Message: "Dynatrace configuration failed"
+          Error: "{{ ansible_failed_result.msg | default('Unknown error') }}"
+
+    - name: Display failure message
+      ansible.builtin.debug:
+        msg:
+          - "❌ Failed to configure Dynatrace for VM '{{ vm_name }}'"
+          - "Error: {{ ansible_failed_result.msg | default('Unknown error') }}"
+
+  always:
+    - name: Add result to collection
+      ansible.builtin.set_fact:
+        all_dynatrace_outputs: >-
+          {{
+            all_dynatrace_outputs | default([]) + [{
+              'vm_name': vm_name,
+              'os_type': os_type,
+              'migration_state': current_migration_state,
+              'result': dynatrace_result | default({'Success': false, 'Message': 'Configuration not attempted'})
+            }]
+          }}
