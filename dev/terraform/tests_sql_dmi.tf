@@ -9,8 +9,8 @@ module "test_sql_dmi" {
   source = "github.com/dteenergy/terraform-azurerm-mssqlmi"
 
   # Resource Group - using existing resource group from main.tf
-  resource_group_name = azurerm_resource_group.rg-fbk.name
-  location            = azurerm_resource_group.rg-fbk.location
+  resource_group_name = azurerm_resource_group.vm_migration_test.name
+  location            = azurerm_resource_group.vm_migration_test.location
 
   # Server configuration
   server_name             = "sqlmi-test-corpapps-dev"
@@ -23,7 +23,7 @@ module "test_sql_dmi" {
 
   # User Managed Identity - hardcoded sample values
   user_managed_identity_name                = "umi-sqlmi-corpapps-dev"
-  user_managed_identity_resource_group_name = azurerm_resource_group.rg-fbk.name
+  user_managed_identity_resource_group_name = azurerm_resource_group.vm_migration_test.name
 
   # SQL MI SKU configuration
   sku_name           = "GP_Gen5"
@@ -34,12 +34,12 @@ module "test_sql_dmi" {
   timezone           = "Eastern Standard Time"
 
   # Networking - using existing network from network.tf
-  sql_subnet_id         = module.primary_sqlmi_fbk_network.subnet_ids["main"]
+  sql_subnet_id         = module.primary_network.subnet_ids["main"]
   application_subnet_id = module.primary_network.subnet_ids["main"]
 
   # Log Analytics Workspace - hardcoded sample values
   log_analytics_workspace_name                = "law-corpapps-dev-cu"
-  log_analytics_workspace_resource_group_name = azurerm_resource_group.rg-fbk.name
+  log_analytics_workspace_resource_group_name = azurerm_resource_group.vm_migration_test.name
 
   # Vulnerability Assessment - disabled for test
   enable_vulnerability_assessment         = false
