@@ -93,15 +93,7 @@ resource "azurerm_mssql_managed_instance" "sqlmi_server" {
     ]
   }
 
-  tags = {
-    Environment         = local.tags.Environment
-    Portfolio           = local.tags.Portfolio
-    Application         = local.tags.Application
-    BillTo              = local.tags.BillTo
-    ContactEmail        = "cloudplatform@dteenergy.com"
-    BusinessCriticality = "Tier4"
-    DataClassification  = local.tags.DataClassification
-  }
+  tags = local.tags
 
   depends_on = [
     azurerm_user_assigned_identity.sqlmi_umi
