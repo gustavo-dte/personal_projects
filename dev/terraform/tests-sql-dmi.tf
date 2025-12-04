@@ -8,8 +8,8 @@
 # Log Analytics Workspace for SQL MI diagnostics
 resource "azurerm_log_analytics_workspace" "sqlmi_law" {
   name                = "law-corpapps-sqlmi-dev-cu"
-  location            = azurerm_resource_group.rg-fbk.location
-  resource_group_name = azurerm_resource_group.rg-fbk.name
+  location            = azurerm_resource_group.vm_migration_test.location
+  resource_group_name = azurerm_resource_group.vm_migration_test.name
   sku                 = "PerGB2018"
   retention_in_days   = 30
 
@@ -19,15 +19,15 @@ resource "azurerm_log_analytics_workspace" "sqlmi_law" {
 # User Assigned Managed Identity for SQL MI
 resource "azurerm_user_assigned_identity" "sqlmi_umi" {
   name                = "umi-sqlmi-corpapps-dev"
-  location            = azurerm_resource_group.rg-fbk.location
-  resource_group_name = azurerm_resource_group.rg-fbk.name
+  location            = azurerm_resource_group.vm_migration_test.location
+  resource_group_name = azurerm_resource_group.vm_migration_test.name
 
   tags = local.tags
 }
 
 module "test_sql_dmi" {
-  source = "github.com/dteenergy/terraform-azurerm-mssqlmi?ref=0.1.0-alpha"
-
+  source  = "app.terraform.io/DTE-Cloud-Platform/mssqlmi/azurerm"
+  version = "0.1.0-alpha"
   # Resource Group - using existing resource group from main.tf
   resource_group_name = azurerm_resource_group.vm_migration_test.name
   location            = azurerm_resource_group.vm_migration_test.location
@@ -39,7 +39,7 @@ module "test_sql_dmi" {
 
   # Admin credentials (break-glass local password)
   admin_username = "sqladminuser"
-  admin_password = "P@ssw0rd!Secure2024#"
+  admin_password = "P@ssw0rd!Secure2024#" # pragma: allowlist secret
 
   # User Managed Identity - referencing created resource
   user_managed_identity_name                = azurerm_user_assigned_identity.sqlmi_umi.name
