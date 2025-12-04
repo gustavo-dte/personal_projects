@@ -1,18 +1,9 @@
-Terraform validate with tflint...........................................Failed
-- hook id: terraform_tflint
-- exit code: 2
+Error: log analytics workspaces "law-corpapps-dev-cu" (Resource Group "rg-cu-CorpApps-MigrationTest-Dev") was not found
+with module.mssqlmi.data.azurerm_log_analytics_workspace.law_sqlmi_server
+on .terraform/modules/mssqlmi/data.tf line 12, in data "azurerm_log_analytics_workspace" "law_sqlmi_server":
+data "azurerm_log_analytics_workspace" "law_sqlmi_server" 
 
-Command 'tflint --init' successfully done:
-All plugins are already installed
-
-
-
-TFLint in dev/terraform/:
-1 issue(s) found:
-
-Warning: Module source "github.com/dteenergy/terraform-azurerm-mssqlmi" is not pinned (terraform_module_pinned_source)
-
-  on dev        erraform        ests_sql_dmi.tf line 9:
-   9:   source = "github.com/dteenergy/terraform-azurerm-mssqlmi"
-
-Reference: https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.13.0/docs/rules/terraform_module_pinned_source.md
+Error: User Assigned Identity (Subscription: "6796a2fb-2928-4ec6-96da-962d3b0001b7" Resource Group Name: "rg-cu-CorpApps-MigrationTest-Dev" Name: "umi-sqlmi-corpapps-dev") was not found
+with module.mssqlmi.data.azurerm_user_assigned_identity.umi_sqmi_server
+on .terraform/modules/mssqlmi/data.tf line 20, in data "azurerm_user_assigned_identity" "umi_sqmi_server":
+data "azurerm_user_assigned_identity" "umi_sqmi_server" 
