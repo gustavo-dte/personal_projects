@@ -5,8 +5,28 @@
  * Test module for Azure SQL Managed Instance deployment
  */
 
+# Log Analytics Workspace for SQL MI diagnostics
+resource "azurerm_log_analytics_workspace" "sqlmi_law" {
+  name                = "law-corpapps-sqlmi-dev-cu"
+  location            = azurerm_resource_group.rg-fbk.location
+  resource_group_name = azurerm_resource_group.rg-fbk.name
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+
+  tags = local.tags
+}
+
+# User Assigned Managed Identity for SQL MI
+resource "azurerm_user_assigned_identity" "sqlmi_umi" {
+  name                = "umi-sqlmi-corpapps-dev"
+  location            = azurerm_resource_group.rg-fbk.location
+  resource_group_name = azurerm_resource_group.rg-fbk.name
+
+  tags = local.tags
+}
+
 module "test_sql_dmi" {
-  source = "github.com/dteenergy/terraform-azurerm-mssqlmi"
+  source = "github.com/dteenergy/terraform-azurerm-mssqlmi?ref=0.1.0-alpha"
 
   # Resource Group - using existing resource group from main.tf
   resource_group_name = azurerm_resource_group.vm_migration_test.name
@@ -21,9 +41,9 @@ module "test_sql_dmi" {
   admin_username = "sqladminuser"
   admin_password = "P@ssw0rd!Secure2024#"
 
-  # User Managed Identity - hardcoded sample values
-  user_managed_identity_name                = "umi-sqlmi-corpapps-dev"
-  user_managed_identity_resource_group_name = azurerm_resource_group.vm_migration_test.name
+  # User Managed Identity - referencing created resource
+  user_managed_identity_name                = azurerm_user_assigned_identity.sqlmi_umi.name
+  user_managed_identity_resource_group_name = azurerm_user_assigned_identity.sqlmi_umi.resource_group_name
 
   # SQL MI SKU configuration
   sku_name           = "GP_Gen5"
@@ -37,9 +57,9 @@ module "test_sql_dmi" {
   sql_subnet_id         = module.primary_network.subnet_ids["main"]
   application_subnet_id = module.primary_network.subnet_ids["main"]
 
-  # Log Analytics Workspace - hardcoded sample values
-  log_analytics_workspace_name                = "law-corpapps-dev-cu"
-  log_analytics_workspace_resource_group_name = azurerm_resource_group.vm_migration_test.name
+  # Log Analytics Workspace - referencing created resource
+  log_analytics_workspace_name                = azurerm_log_analytics_workspace.sqlmi_law.name
+  log_analytics_workspace_resource_group_name = azurerm_log_analytics_workspace.sqlmi_law.resource_group_name
 
   # Vulnerability Assessment - disabled for test
   enable_vulnerability_assessment         = false
