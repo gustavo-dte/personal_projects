@@ -3,28 +3,7 @@
  * Internal Use Only
  *
  * Test deployment for Azure SQL Managed Instance
- * Note: Resources created directly to avoid module data source timing issues
  */
-
-#------------------------------------------------------------------------------
-# Local variables for SQL MI configuration
-#------------------------------------------------------------------------------
-locals {
-  sqlmi_environment             = "dev"
-  sqlmi_location_short          = "cu"
-  sqlmi_server_name             = "sqlmi-test-corpapps-dev"
-  sqlmi_resource_name           = "dte-sqlmi-${local.sqlmi_location_short}-${local.sqlmi_environment}-${local.sqlmi_server_name}"
-  sqlmi_endpoint_name           = "${local.sqlmi_resource_name}-pep"
-  sqlmi_service_name            = "${local.sqlmi_endpoint_name}sc"
-  sqlmi_audit_log_name          = "${local.sqlmi_resource_name}-audit-logs"
-  sqlmi_short_term_retention    = 5  # Tier4 default
-  sqlmi_long_term_retention = {
-    weekly_retention  = "P1W"
-    monthly_retention = "P1M"
-    yearly_retention  = null
-    week_of_year      = null
-  }
-}
 
 #------------------------------------------------------------------------------
 # Log Analytics Workspace for SQL MI diagnostics
@@ -51,120 +30,65 @@ resource "azurerm_user_assigned_identity" "sqlmi_umi" {
 }
 
 #------------------------------------------------------------------------------
-# SQL Managed Instance
+# SQL Managed Instance Module
 #------------------------------------------------------------------------------
-resource "azurerm_mssql_managed_instance" "sqlmi_server" {
-  name                = local.sqlmi_resource_name
+module "mssqlmi" {
+  source  = "app.terraform.io/DTE-Cloud-Platform/mssqlmi/azurerm"
+  version = "0.1.0-alpha"
+
+  # Resource Group
   resource_group_name = azurerm_resource_group.vm_migration_test.name
   location            = azurerm_resource_group.vm_migration_test.location
-  subnet_id           = module.primary_sqlmi_fbk_network.subnet_ids["main"]
 
-  # Identity and access
-  identity {
-    type = "UserAssigned"
-    identity_ids = [
-      azurerm_user_assigned_identity.sqlmi_umi.id
-    ]
-  }
+  # Server configuration
+  server_name             = "test-corpapps"
+  environment             = "Dev"
+  application_criticality = "Tier4"
 
-  administrator_login          = "sqladminuser"
-  administrator_login_password = "P@ssw0rd!Secure2024#" # pragma: allowlist secret
+  # Admin credentials
+  admin_username = "sqladminuser"
+  admin_password = "P@ssw0rd!Secure2024#" # pragma: allowlist secret
 
-  # Zone redundancy (false for Tier4)
-  zone_redundant_enabled = false
+  # User Managed Identity - referencing created resource
+  user_managed_identity_name                = azurerm_user_assigned_identity.sqlmi_umi.name
+  user_managed_identity_resource_group_name = azurerm_user_assigned_identity.sqlmi_umi.resource_group_name
 
-  # Compute configuration
+  # SQL MI SKU configuration
   sku_name           = "GP_Gen5"
   vcores             = 4
   storage_size_in_gb = 32
+  license_type       = "LicenseIncluded"
+  collation          = "SQL_Latin1_General_CP1_CI_AS"
+  timezone           = "Eastern Standard Time"
 
-  # Locale
-  collation   = "SQL_Latin1_General_CP1_CI_AS"
-  timezone_id = "Eastern Standard Time"
+  # Networking
+  sql_subnet_id         = module.primary_sqlmi_fbk_network.subnet_ids["main"]
+  application_subnet_id = module.primary_network.subnet_ids["main"]
 
-  # License
-  license_type                 = "LicenseIncluded"
-  public_data_endpoint_enabled = false
+  # Log Analytics Workspace - referencing created resource
+  log_analytics_workspace_name                = azurerm_log_analytics_workspace.sqlmi_law.name
+  log_analytics_workspace_resource_group_name = azurerm_log_analytics_workspace.sqlmi_law.resource_group_name
 
-  lifecycle {
-    ignore_changes = [
-      administrator_login,
-      administrator_login_password,
-    ]
-  }
+  # Vulnerability Assessment
+  enable_vulnerability_assessment         = false
+  vulnerability_assessment_container_path = null
 
+  # AAD Admin Group configuration
+  do_admin_aad_group_registration = false
+  admin_aad_group_login_name      = "Azure-IDSS-SQL-Server-Contributor"
+  admin_aad_group_login_object_id = "6637f678-d27f-4a7e-b194-bc685c8a8e1d"
+
+  # Databases
+  databases = [
+    "TestDatabase01",
+    "TestDatabase02"
+  ]
+
+  # Tags
   tags = local.tags
 
   depends_on = [
+    azurerm_log_analytics_workspace.sqlmi_law,
     azurerm_user_assigned_identity.sqlmi_umi
-  ]
-}
-
-#------------------------------------------------------------------------------
-# SQL Managed Instance Databases
-#------------------------------------------------------------------------------
-resource "azurerm_mssql_managed_database" "sqlmi_databases" {
-  for_each = toset(["TestDatabase01", "TestDatabase02"])
-
-  name                      = each.key
-  managed_instance_id       = azurerm_mssql_managed_instance.sqlmi_server.id
-  short_term_retention_days = local.sqlmi_short_term_retention
-
-  long_term_retention_policy {
-    weekly_retention  = local.sqlmi_long_term_retention.weekly_retention
-    monthly_retention = local.sqlmi_long_term_retention.monthly_retention
-    yearly_retention  = local.sqlmi_long_term_retention.yearly_retention
-    week_of_year      = local.sqlmi_long_term_retention.week_of_year
-  }
-
-  depends_on = [
-    azurerm_mssql_managed_instance.sqlmi_server
-  ]
-}
-
-#------------------------------------------------------------------------------
-# SQL Managed Instance Private Endpoint
-#------------------------------------------------------------------------------
-resource "azurerm_private_endpoint" "sqlmi_pep" {
-  name                = local.sqlmi_endpoint_name
-  resource_group_name = azurerm_resource_group.vm_migration_test.name
-  location            = azurerm_resource_group.vm_migration_test.location
-  subnet_id           = module.primary_network.subnet_ids["main"]
-
-  private_service_connection {
-    name                           = local.sqlmi_service_name
-    private_connection_resource_id = azurerm_mssql_managed_instance.sqlmi_server.id
-    subresource_names              = ["managedInstance"]
-    is_manual_connection           = false
-  }
-
-  lifecycle {
-    ignore_changes = [
-      private_dns_zone_group
-    ]
-  }
-
-  tags = local.tags
-
-  depends_on = [
-    azurerm_mssql_managed_instance.sqlmi_server
-  ]
-}
-
-#------------------------------------------------------------------------------
-# Diagnostic Settings for SQL MI Audit Logs
-#------------------------------------------------------------------------------
-resource "azurerm_monitor_diagnostic_setting" "sqlmi_audit_logs" {
-  name                       = local.sqlmi_audit_log_name
-  target_resource_id         = azurerm_mssql_managed_instance.sqlmi_server.id
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.sqlmi_law.id
-
-  enabled_log {
-    category = "SQLSecurityAuditEvents"
-  }
-
-  depends_on = [
-    azurerm_mssql_managed_instance.sqlmi_server,
-    azurerm_log_analytics_workspace.sqlmi_law
   ]
 }
