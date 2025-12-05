@@ -84,8 +84,16 @@ module "mssqlmi" {
     "TestDatabase02"
   ]
 
-  # Tags
-  tags = local.tags
+  # Tags - matching module's expected structure
+  tags = {
+    Environment         = local.tags.Environment
+    Portfolio           = local.tags.Portfolio
+    Application         = local.tags.Application
+    BillTo              = local.tags.BillTo
+    ContactEmail        = local.tags.ItAppOwnerEmail
+    BusinessCriticality = local.tags.BusinessCriticality
+    DataClassification  = local.tags.DataClassification
+  }
 
   depends_on = [
     azurerm_log_analytics_workspace.sqlmi_law,
