@@ -5,45 +5,40 @@ repos:
     rev: v0.11.0
     hooks:
       - id: check-pre-commit-install
+      - id: check-terraform-resource-names
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
       - id: check-added-large-files
-      - id: check-case-conflict
       - id: check-illegal-windows-names
       - id: check-json
       - id: check-merge-conflict
-      - id: check-toml
-      - id: check-xml
       - id: check-yaml
-      - id: debug-statements
       - id: end-of-file-fixer
       - id: mixed-line-ending
-        args: [--fix, auto]
-      - id: name-tests-test
-      - id: pretty-format-json
-        args: [--autofix]
+        args: ['--fix', 'auto']
       - id: no-commit-to-branch
         args: ['--pattern', '^(?!((story|task|hotfix)\/\d+[-_].+)$)']
       - id: trailing-whitespace
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.7
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
     hooks:
-      - id: ruff-check
-        args: [--fix]
-      - id: ruff-check
-        args: [--select, I, --fix]
-      - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.17.0
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.99.5
     hooks:
-      - id: mypy
-  # - repo: local
-  #   hooks:
-  #     - id: pytest-check
-  #       name: pytest-check
-  #       entry: pytest
-  #       language: system
-  #       pass_filenames: false
-  #       always_run: true
-  #       args: [--tb=short]
+      - id: terraform_fmt
+        args:
+          - --args=-write=true
+          - --args=-recursive
+      - id: terraform_tflint
+        args:
+          - --hook-config=--delegate-chdir
+      - id: terraform_docs
+        args:
+          - --args=--config=.terraform-docs.yml
+      - id: terraform_validate
+        args:
+          - --tf-init-args=-upgrade
+          - --hook-config=--retry-once-with-cleanup=true
