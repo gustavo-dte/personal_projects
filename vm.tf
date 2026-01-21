@@ -41,10 +41,6 @@ resource "azurerm_windows_virtual_machine" "main" {
   vtpm_enabled               = var.security_features.vtpm_enabled
   encryption_at_host_enabled = true
 
-  # Enable Windows Update Manager integration
-  patch_mode            = "AutomaticByPlatform"
-  patch_assessment_mode = "AutomaticByPlatform"
-
   dynamic "boot_diagnostics" {
     for_each = var.boot_diagnostics_uri != null ? [1] : []
     content {
@@ -74,9 +70,7 @@ resource "azurerm_windows_virtual_machine" "main" {
       boot_diagnostics,
       os_disk[0].caching,
       allow_extension_operations,
-      bypass_platform_safety_checks_on_user_schedule_enabled,
-      patch_mode,
-      patch_assessment_mode
+      bypass_platform_safety_checks_on_user_schedule_enabled
     ]
   }
 }
@@ -191,11 +185,16 @@ resource "azurerm_virtual_machine_extension" "windows_update_assessment" {
   type                 = "WindowsUpdateExtension"
   type_handler_version = "1.0"
 
-  settings = <<SETTINGS
-    {
-      "assessmentMode": "AutomaticByPlatform"
+  settings = jsonencode({
+    assessmentMode = "AutomaticByPlatform"
+    periodicUpdateAssessment = {
+      enabled = true
+      schedule = {
+        frequency = var.patch_assessment_schedule.frequency
+        timeOfDay = var.patch_assessment_schedule.time_of_day
+      }
     }
-SETTINGS
+  })
 
   depends_on = [azurerm_windows_virtual_machine.main]
   tags       = var.tags

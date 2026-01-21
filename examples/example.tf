@@ -71,6 +71,10 @@ module "imported_windows_vm" {
 
   # Optional: Windows Update Assessment
   enable_periodic_update_assessment = true
+  patch_assessment_schedule = {
+    frequency   = "Daily"
+    time_of_day = "02:00"
+  }
 
   # Optional: Domain Join
   enable_domain_join       = true

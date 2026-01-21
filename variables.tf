@@ -196,6 +196,26 @@ variable "enable_periodic_update_assessment" {
   default     = false
 }
 
+variable "patch_assessment_schedule" {
+  description = "Configuration for periodic update assessment schedule. Only applies when enable_periodic_update_assessment is true."
+  type = object({
+    frequency  = optional(string, "Daily")
+    time_of_day = optional(string, "02:00")
+  })
+  default = {
+    frequency  = "Daily"
+    time_of_day = "02:00"
+  }
+  validation {
+    condition     = contains(["Daily", "Weekly"], var.patch_assessment_schedule.frequency)
+    error_message = "Frequency must be either 'Daily' or 'Weekly'."
+  }
+  validation {
+    condition     = can(regex("^([0-1][0-9]|2[0-3]):[0-5][0-9]$", var.patch_assessment_schedule.time_of_day))
+    error_message = "Time of day must be in HH:MM format (24-hour clock), e.g., '02:00' or '14:30'."
+  }
+}
+
 # Domain Join Configuration
 variable "enable_domain_join" {
   description = "Enable Azure AD Domain Services join for the VM"
