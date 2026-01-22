@@ -1,11 +1,12 @@
 formatter: md
 output:
   file: README.md
-  mode: inject
+  mode: replace
   template: |-
     <!-- BEGIN_TF_DOCS -->
     {{ .Content }}
     <!-- END_TF_DOCS -->
+    {{- printf "\n" -}}
 
 version: '>=0.13.0'
 
@@ -21,9 +22,11 @@ settings:
   hide-empty: true
 
 content: |-
-  ## Terraform AzureRM MSSQL Managed Instance Module
+  # Terraform Module for Cloud Platform Feature
 
-  ### Usage
+  This respository contains Terraform configuration for deploying resources into a subscription.
+
+  ## Usage
 
   ```hcl
   {{ include "examples/example.tf" }}
