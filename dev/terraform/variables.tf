@@ -8,6 +8,12 @@ variable "secondary_region" {
   description = "Secondary Azure location or region"
 }
 
+variable "vm_password" {
+  type        = string
+  sensitive   = true
+  description = "password to connect to vm for vmware migration testing"
+}
+
 variable "environment" {
   type        = string
   description = "Environment"
@@ -57,4 +63,16 @@ variable "github_token" {
 variable "github_organization" {
   description = "GitHub organization"
   type        = string
+}
+
+variable "sqldb_password" {
+  description = "SQL Database Password"
+  type        = string
+  sensitive   = true
+}
+
+variable "sqlmi_password" {
+  description = "SQL Managed Instance password for the 'sqladminuser' account"
+  type        = string
+  sensitive   = true
 }

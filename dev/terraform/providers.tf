@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~>4.0"
     }
+    azapi = {
+      source  = "Azure/azapi"
+      version = "1.15.0"
+    }
     github = {
       source  = "integrations/github"
       version = "6.4.0"
@@ -26,6 +30,12 @@ terraform {
 provider "azurerm" {
   use_cli             = false
   storage_use_azuread = true
+  features {}
+}
+
+provider "azurerm" {
+  alias           = "vmimage"
+  subscription_id = "13e903eb-325f-4183-b412-5fa8b77bbaad"
   features {}
 }
 

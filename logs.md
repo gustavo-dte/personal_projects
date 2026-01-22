@@ -1,7 +1,0 @@
-Error: creating Managed Instance (Subscription: "6796a2fb-2928-4ec6-96da-962d3b0001b7" Resource Group Name: "rg-cu-CorpApps-MigrationTest-Dev" Managed Instance Name: "dte-sqlmi-cu-dev-test-corpapps"): performing CreateOrUpdate: unexpected status 400 (400 Bad Request) with error: CreateManagedInstanceInvalidSubnetSize: Cannot create Managed Instance in the subnet 'main' because subnet is too small. Minimal allowed size of a subnet is 32 IP addresses. See https://aka.ms/move-managed-instance on how to move your instance to a larger subnet.
-with module.mssqlmi.azurerm_mssql_managed_instance.sqlmi_server
-on .terraform/modules/mssqlmi/main.tf line 9, in resource "azurerm_mssql_managed_instance" "sqlmi_server":
-resource "azurerm_mssql_managed_instance" "sqlmi_server" {
-creating Managed Instance (Subscription: "6796a2fb-2928-4ec6-96da-962d3b0001b7"
-Resource Group Name: "rg-cu-CorpApps-MigrationTest-Dev"
-Managed Instance Name: "dte-sqlmi-cu-dev-test-corpapps"): performing CreateOrUpdate: unexpected status 400 (400 Bad Request) with error: CreateManagedInstanceInvalidSubnetSize: Cannot create Managed Instance in the subnet 'main' because subnet is too small. Minimal allowed size of a subnet is 32 IP addresses. See https://aka.ms/move-managed-instance on how to move your instance to a larger subnet.

@@ -33,3 +33,14 @@ import {
   to = azurerm_resource_group.rg-fbk
   id = "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-corpapps-fermibest-dev"
 }
+
+//vmware
+resource "azurerm_resource_group" "primary_vmware_network_rg" {
+  name     = "rg-${local.primary_region}-${local.migration_name}-Network-Dev"
+  location = var.primary_region
+}
+
+resource "azurerm_resource_group" "secondary_vmware_network_rg" {
+  name     = "rg-${local.secondary_region}-${local.migration_name}-Network-Dev"
+  location = var.secondary_region
+}
