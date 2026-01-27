@@ -44,15 +44,14 @@ If a section is not not application, please state as such
 
 #### 🏷 Resource Tagging
 
+- [ ] Tags are an input to this module
 - [ ] All resources are tagged with required tags
 - [ ] Tag values are standardized across resources
-- [ ] All resources are tagged with required tags (e.g., `Application`, `BillTo`, `BusinessCriticality`, `ContactEmail`, `DataClassification`,`Environment`,`Portfolio` and `Project`)
 
 #### 📐 Code Quality
 
 - [ ] Code is formatted using `terraform fmt`
 - [ ] Code passes `terraform validate`
-- [ ] `terraform plan` check has passed
 - [ ] Obsolete resources, variables, or comments are cleaned up
 
 #### 📁 Structure & File Organization
