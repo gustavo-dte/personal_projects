@@ -1,11 +1,12 @@
 formatter: md
 output:
   file: README.md
-  mode: inject
+  mode: replace
   template: |-
     <!-- BEGIN_TF_DOCS -->
     {{ .Content }}
     <!-- END_TF_DOCS -->
+    {{- printf "\n" -}}
 
 version: '>=0.13.0'
 
@@ -21,11 +22,11 @@ settings:
   hide-empty: true
 
 content: |-
-  ## Terraform Module for Cloud Platform Feature
+  # Terraform Module for Cloud Platform Feature
 
-  This respository contains Terraform configuration for deploying a reuseable module.
+  This respository contains Terraform configuration for deploying resources into a subscription.
 
-  ### Usage
+  ## Usage
 
   ```hcl
   {{ include "examples/example.tf" }}

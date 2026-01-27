@@ -1,0 +1,11 @@
+{
+  "vmcuwinwebd01": {
+    "maintenance_configuration": "weekly-sunday-2am",
+    "frequency": "Weekly",
+    "day_of_week": "Sunday",
+    "time_of_day": "02:00",
+    "duration": "03:00",
+    "reboot_setting": "IfRequired",
+    "description": "Web server - patched weekly on Sunday at 2 AM"
+  }
+}

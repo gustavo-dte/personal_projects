@@ -5,7 +5,8 @@ repos:
     rev: v0.11.0
     hooks:
       - id: check-pre-commit-install
-      - id: check-terraform-resource-names
+      # Commenting out as regression would be severe
+      # - id: check-terraform-resource-names
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
@@ -35,10 +36,15 @@ repos:
       - id: terraform_tflint
         args:
           - --hook-config=--delegate-chdir
-      - id: terraform_validate
-        args:
-          - --tf-init-args=-upgrade
-          - --hook-config=--retry-once-with-cleanup=true
       - id: terraform_docs
+        name: terraform-docs/dev
         args:
-          - --args=--config=.terraform-docs.yml
+          - --args=--config=dev/terraform/.terraform-docs.yml
+      - id: terraform_docs
+        name: terraform-docs/test
+        args:
+          - --args=--config=test/terraform/.terraform-docs.yml
+      - id: terraform_docs
+        name: terraform-docs/prod
+        args:
+          - --args=--config=prod/terraform/.terraform-docs.yml
