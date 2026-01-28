@@ -125,6 +125,7 @@ vms:
     target_vm_size: Standard_D4as_v5
     target_license_type: WindowsServer
     target_disk_type: Standard_LRS
+    target_resource_group: rg-cu-corpapps-Powerbi-dev
     portfolio: CorpApps
     tier: 4
     env: dev
@@ -158,6 +159,7 @@ vms:
     target_vm_size: Standard_D4as_v5
     target_license_type: WindowsServer
     target_disk_type: Standard_LRS
+    target_resource_group: rg-cu-corpapps-Powerbi-dev
     portfolio: CorpApps
     tier: 4
     env: dev
@@ -192,6 +194,7 @@ vms:
     target_vm_size: Standard_D8s_v5
     target_license_type: WindowsServer
     target_disk_type: Premium_LRS
+    target_resource_group: rg-cu-corpapps-Powerbi-prod
     portfolio: CorpApps
     tier: 4
     env: prod
@@ -225,6 +228,7 @@ vms:
     target_vm_size: Standard_D8s_v5
     target_license_type: WindowsServer
     target_disk_type: Premium_LRS
+    target_resource_group: rg-cu-corpapps-Powerbi-prod
     portfolio: CorpApps
     tier: 4
     env: prod
@@ -259,6 +263,7 @@ vms:
     target_vm_size: Standard_D4as_v5
     target_license_type: WindowsServer
     target_disk_type: Standard_LRS
+    target_resource_group: rg-cu-corpapps-RightFax-dev
     portfolio: CorpApps
     tier: 4
     env: dev
@@ -293,6 +298,7 @@ vms:
     target_vm_size: Standard_D4as_v5
     target_license_type: WindowsServer
     target_disk_type: Premium_LRS
+    target_resource_group: rg-cu-corpapps-RightFax-prod
     portfolio: CorpApps
     tier: 4
     env: prod
