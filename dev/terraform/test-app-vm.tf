@@ -253,9 +253,8 @@ module "test_app_vms" {
   backup_vault_resource_group_name = each.value.backup.backup_vault_resource_group_name
   backup_vault_policy_name         = each.value.backup.backup_vault_policy_name
 
-  # Windows Update Manager configuration
-  # Enable for ALL Windows VMs - schedule is configured in Azure Update Manager
-  enable_periodic_update_assessment = lower(each.value.disk.os.os_type) == "windows" ? true : false
+  # Windows Update Manager configuration - DISABLED (using maintenance configs below instead)
+  enable_periodic_update_assessment = false
 
   # Tags
   tags = local.tags
@@ -309,6 +308,7 @@ resource "azurerm_maintenance_configuration" "vm_patching" {
   resource_group_name = "rg-cu-CorpApps-MigrationTest-Dev"
   location            = azurerm_resource_group.primary.location
   scope               = "InGuestPatch"
+  in_guest_user_patch_mode = "User"
   
   window {
     start_date_time = "2026-01-01 ${each.value.time_of_day}:00"
