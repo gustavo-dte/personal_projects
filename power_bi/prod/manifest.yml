@@ -1,0 +1,142 @@
+## Manifest for Power BI Prod Environment Migration
+
+# Global defaults
+app_name: Power BI
+environment: prod
+target_gh_repo: dteenergy/cloud-platform-isolation-zone-subscription-corpapps
+azure_migrate_project_name: azure-migrate-automation
+azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
+azure_migrate_subscription_id: 00d26f19-0dc3-4c90-9c6b-2e9ce8b14f5a
+target_subscription_id: <prod_subscription_id>
+target_resource_group: rg-cu-corpapps-Powerbi-prod
+os_disk_scsi_id: scsi0:0
+
+# Azure Update Manager / Patch scheduling defaults
+update_manager:
+  policy_assignment_name: PeriodicAssessMissingUpdates-Windows
+  remediation_name: Remediate-PeriodicAssess
+  # ISO8601 start time for scheduled patch window (e.g. "2025-10-16T00:00:00Z")
+  patch_start_time: null
+  # When true, skip running the real assessment during dry-run
+  skip_assessment_in_dry_run: true
+
+  # Maintenance (InGuestPatch) configuration defaults
+  maintenance:
+    resource_group: null
+    config_name: PatchConfig-InGuestPatch
+    assignment_name: Assign-PatchConfig
+    location: null
+    window_duration: "03:00"
+    window_recur_every: "7days"
+    window_start_date_time: null
+    window_time_zone: UTC
+    windows:
+      kb_exclude: ""
+      kb_include: ""
+      classifications: Critical
+    reboot_setting: IfRequired
+    ingest_patch_mode: User
+
+# Azure VMSS defaults
+vmss_enabled: true
+vmss_config:
+  health_probe_settings:
+    protocol: tcp
+    port: 3389
+  automatic_instance_repair:
+    enabled: true
+    grace_period: PT10M
+    repair_action: Restart
+
+# Network configuration
+target_network_id: <prod_network_id>
+target_subnet_name: powerbi-app
+test_network_id: <prod_network_id>
+
+# VM configuration
+target_vm_size: Standard_D8s_v5
+target_license_type: WindowsServer
+target_disk_type: Premium_LRS
+
+# Global tag defaults for Azure Migrate replication
+global_tags:
+  Application: "Power BI"
+  BillTo: "200000060548"
+  BusinessCriticality: "Tier 4"
+  ContactEmail: "cloudplatform@dteenergy.com"
+  DataClassification: "Internal"
+  ItAppOwnerEmail: "cloudplatform@dteenergy.com"
+  Environment: "Prod"
+  Portfolio: "CorpApps"
+  Project: "Storm Resiliency"
+
+# Default list of software to uninstall
+uninstall_tools_list:
+  - Puppet Agent
+  - VMware Tools
+  - EMC PowerPath
+  - HP Insight Management Agents
+
+# List of VMs to replicate
+vms:
+  - name: dca-prod5469
+    target_vm_name: vmcuwinpbip01
+    description: "Power BI Prod Server 1 - Storm Resiliency Migration"
+    target_vm_size: Standard_D8s_v5
+    target_license_type: WindowsServer
+    target_disk_type: Premium_LRS
+    target_resource_group: rg-cu-corpapps-Powerbi-prod
+    portfolio: CorpApps
+    tier: 4
+    env: prod
+    app_name: Power BI
+
+    nsg_rules:
+      allow-rdp:
+        priority: 1000
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        destination_port_range: "3389"
+        source_address_prefixes: ["10.0.0.0/8"]
+
+    tags:
+      Environment: "Prod"
+      Portfolio: "CorpApps"
+      DataClassification: "Internal"
+      Application: "Power BI"
+      Project: "Storm Resiliency"
+
+  - name: dca-prod7070
+    target_vm_name: vmcuwinpbip02
+    description: "Power BI Prod Server 2 - Storm Resiliency Migration"
+    target_vm_size: Standard_D8s_v5
+    target_license_type: WindowsServer
+    target_disk_type: Premium_LRS
+    target_resource_group: rg-cu-corpapps-Powerbi-prod
+    portfolio: CorpApps
+    tier: 4
+    env: prod
+    app_name: Power BI
+
+    nsg_rules:
+      allow-rdp:
+        priority: 1000
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        destination_port_range: "3389"
+        source_address_prefixes: ["10.0.0.0/8"]
+
+    tags:
+      Environment: "Prod"
+      Portfolio: "CorpApps"
+      DataClassification: "Internal"
+      Application: "Power BI"
+      Project: "Storm Resiliency"
+
+# List of load balancers to create
+load_balancers: []
+
+# List of SQL VMs to replicate
+sqlvms: []
