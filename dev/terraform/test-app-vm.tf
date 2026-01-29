@@ -300,6 +300,15 @@ module "test_app_vms" {
 
 ### MAINTENANCE CONFIGURATIONS FOR VM PATCHING ###
 
+# Remove the extension from Terraform state if it exists (module tries to create it even when disabled)
+removed {
+  from = module.test_app_vms["vmcuwinwebd01"].azurerm_virtual_machine_extension.windows_update_assessment[0]
+  
+  lifecycle {
+    destroy = false  # Don't actually delete the resource, just remove from state
+  }
+}
+
 # Create Maintenance Configurations based on JSON schedules
 resource "azurerm_maintenance_configuration" "vm_patching" {
   for_each = local.maintenance_config_settings
@@ -311,7 +320,7 @@ resource "azurerm_maintenance_configuration" "vm_patching" {
   in_guest_user_patch_mode = "User"
   
   window {
-    start_date_time = "2026-01-01 ${each.value.time_of_day}:00"
+    start_date_time = "2026-02-01T${each.value.time_of_day}:00"
     duration        = each.value.duration
     time_zone       = "Central Standard Time"
     recur_every     = each.value.frequency == "Weekly" ? "Week ${each.value.day_of_week}" : "Day"
