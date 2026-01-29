@@ -7,12 +7,12 @@ locals {
   # Load patching schedules from JSON file
   # Each VM will have its own schedule configuration
   patching_schedules = fileexists("${path.module}/vm_patching_schedules.json") ? jsondecode(file("${path.module}/vm_patching_schedules.json")) : {}
-  
+
   # Extract unique maintenance configurations from the schedules
   unique_maintenance_configs = distinct([
     for vm_key, schedule in local.patching_schedules : schedule.maintenance_configuration
   ])
-  
+
   # Create a map of maintenance config name to its settings
   # Take the first VM's settings for each unique maintenance configuration
   maintenance_config_settings = {
@@ -21,12 +21,12 @@ locals {
       if schedule.maintenance_configuration == config_name
     ][0]
   }
-  
+
   # Map VMs to their maintenance configurations
   vm_to_maintenance_config = {
     for vm_key, schedule in local.patching_schedules : vm_key => schedule.maintenance_configuration
   }
-  
+
   test_app_vms = {
     vmcuwinwebd01 = {
       vmss_name = "vmss-vmcuwinwebd01"
@@ -71,6 +71,7 @@ locals {
           }
         }
       }
+
       vm_resource_id                     = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01"
       nic_resource_id                    = "${local.test_app_resource_prefix}/providers/Microsoft.Network/networkInterfaces/nic-vmcuwinwebd01-00"
       os_disk_resource_id                = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/disks/vmcuwinwebd01-OSdisk-00-dda752f1-7395-4bcf-ac67-58716e5de28e"
@@ -81,6 +82,58 @@ locals {
         backup_vault_resource_group_name = "rg-cu-CorpApps-MigrationTest-Dev"
         backup_vault_policy_name         = "daily-migration-test-vm-backup-policy"
       }
+
+      enable_monitoring            = true
+      log_analytics_workspace_name = "lawvmcuwinwebd01"
+      log_analytics_sku            = "PerGB2018"
+      log_analytics_retention_days = 30
+      app_insights_name            = "aivmcuwinwebd01"
+      app_insights_kind            = "web"
+      dcr_name                     = "dcrvmcuwinwebd01"
+      action_group_name            = "agvmcuwinwebd01"
+      notification_email           = "vmcuwinwebd01@example.com"
+      windows_performance_counters = [
+        {
+          counter_name = "\\Processor(_Total)\\% Processor Time"
+          sample_rate  = 60
+        },
+        {
+          counter_name = "\\Memory\\% Committed Bytes In Use"
+          sample_rate  = 60
+        }
+      ]
+      ama_enabled              = true
+      dependency_agent_enabled = true
+      vm_insights_enabled      = true
+      # VM alert rules (unchanged)
+      vm_alert_rules = [
+        {
+          name             = "CPU Usage Alert"
+          description      = "Alert when CPU usage exceeds 80%"
+          metric_namespace = "Microsoft.Compute/virtualMachines"
+          metric_name      = "Percentage CPU"
+          dimensions       = []
+          threshold        = 80
+          operator         = "GreaterThan"
+          time_aggregation = "Average"
+          frequency        = "PT1M"
+          window_size      = "PT5M"
+          severity         = 2
+        },
+        {
+          name             = "Memory Usage Alert"
+          description      = "Alert when memory usage exceeds 90%"
+          metric_namespace = "Microsoft.Compute/virtualMachines"
+          metric_name      = "Available Memory Bytes"
+          dimensions       = []
+          threshold        = 90
+          operator         = "LessThan"
+          time_aggregation = "Average"
+          frequency        = "PT1M"
+          window_size      = "PT5M"
+          severity         = 2
+        }
+      ]
     }
   }
 
@@ -222,7 +275,7 @@ locals {
 
 module "test_app_vms" {
   source  = "app.terraform.io/DTE-Cloud-Platform/imported-vm-pattern/azurerm"
-  version = "1.0.6"
+  version = "1.0.7-alpha.2"
 
   for_each = local.test_app_vms
 
@@ -252,6 +305,22 @@ module "test_app_vms" {
   backup_vault_name                = each.value.backup.backup_vault_name
   backup_vault_resource_group_name = each.value.backup.backup_vault_resource_group_name
   backup_vault_policy_name         = each.value.backup.backup_vault_policy_name
+
+  # Monitoring Configuration
+  enable_monitoring            = each.value.enable_monitoring
+  log_analytics_workspace_name = each.value.log_analytics_workspace_name
+  log_analytics_sku            = each.value.log_analytics_sku
+  log_analytics_retention_days = each.value.log_analytics_retention_days
+  app_insights_name            = each.value.app_insights_name
+  app_insights_kind            = each.value.app_insights_kind
+  dcr_name                     = each.value.dcr_name
+  action_group_name            = each.value.action_group_name
+  notification_email           = each.value.notification_email
+  windows_performance_counters = each.value.windows_performance_counters
+  ama_enabled                  = each.value.ama_enabled
+  dependency_agent_enabled     = each.value.dependency_agent_enabled
+  vm_insights_enabled          = each.value.vm_insights_enabled
+  vm_alert_rules               = each.value.vm_alert_rules
 
   # Windows Update Manager configuration - DISABLED (using maintenance configs below instead)
   enable_periodic_update_assessment = false
@@ -303,28 +372,28 @@ module "test_app_vms" {
 # Create Maintenance Configurations based on JSON schedules
 resource "azurerm_maintenance_configuration" "vm_patching" {
   for_each = local.maintenance_config_settings
-  
-  name                = each.key
-  resource_group_name = "rg-cu-CorpApps-MigrationTest-Dev"
-  location            = azurerm_resource_group.primary.location
-  scope               = "InGuestPatch"
+
+  name                     = each.key
+  resource_group_name      = "rg-cu-CorpApps-MigrationTest-Dev"
+  location                 = azurerm_resource_group.primary.location
+  scope                    = "InGuestPatch"
   in_guest_user_patch_mode = "User"
-  
+
   window {
-    start_date_time = "2026-02-01T${each.value.time_of_day}:00"
+    start_date_time = "2026-01-01 ${each.value.time_of_day}:00"
     duration        = each.value.duration
     time_zone       = "Central Standard Time"
     recur_every     = each.value.frequency == "Weekly" ? "Week ${each.value.day_of_week}" : "Day"
   }
-  
+
   install_patches {
     reboot = each.value.reboot_setting
-    
+
     windows {
       classifications_to_include = ["Critical", "Security", "UpdateRollup", "FeaturePack", "ServicePack", "Definition", "Tools", "Updates"]
     }
   }
-  
+
   tags = merge(
     local.tags,
     {
@@ -340,11 +409,11 @@ resource "azurerm_maintenance_assignment_virtual_machine" "vm_patching" {
     for vm_key in keys(local.test_app_vms) : vm_key => vm_key
     if lower(local.test_app_vms[vm_key].disk.os.os_type) == "windows" && contains(keys(local.vm_to_maintenance_config), vm_key)
   }
-  
+
   location                     = azurerm_resource_group.primary.location
   maintenance_configuration_id = azurerm_maintenance_configuration.vm_patching[local.vm_to_maintenance_config[each.key]].id
   virtual_machine_id           = module.test_app_vms[each.key].vm_id
-  
+
   depends_on = [
     module.test_app_vms
   ]
