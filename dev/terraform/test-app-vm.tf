@@ -53,7 +53,7 @@ locals {
       }
       disk = {
         os = {
-          name                 = "vmcuwinwebd01-OSdisk-00-dda752f1-7395-4bcf-ac67-58716e5de28e"
+          name                 = "vmcuwinwebd01-OSdisk-00"
           caching              = "ReadWrite"
           size_gb              = 100
           storage_account_type = "Standard_LRS"
@@ -61,20 +61,19 @@ locals {
           os_type              = "Windows"
         }
         data = {
-          "vmcuwinwebd01-datadisk-01-073cfec7-5b88-491e-8e62-3b6b95371acc" = {
+          "vmcuwinwebd01-datadisk-01" = {
             lun                       = 0
             caching                   = "None"
             write_accelerator_enabled = false
-            resource_id               = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/disks/vmcuwinwebd01-datadisk-01-073cfec7-5b88-491e-8e62-3b6b95371acc"
+            resource_id               = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/disks/vmcuwinwebd01-datadisk-01"
             disk_size_gb              = 50
             storage_account_type      = "Standard_LRS"
           }
         }
       }
-
       vm_resource_id                     = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01"
       nic_resource_id                    = "${local.test_app_resource_prefix}/providers/Microsoft.Network/networkInterfaces/nic-vmcuwinwebd01-00"
-      os_disk_resource_id                = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/disks/vmcuwinwebd01-OSdisk-00-dda752f1-7395-4bcf-ac67-58716e5de28e"
+      os_disk_resource_id                = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/disks/vmcuwinwebd01-OSdisk-00"
       user_assigned_identity_resource_id = null
       backup = {
         enable_backup                    = true
@@ -380,7 +379,7 @@ resource "azurerm_maintenance_configuration" "vm_patching" {
   in_guest_user_patch_mode = "User"
 
   window {
-    start_date_time = "2026-01-01 ${each.value.time_of_day}:00"
+    start_date_time = "2026-01-01 ${each.value.time_of_day}"
     duration        = each.value.duration
     time_zone       = "Central Standard Time"
     recur_every     = each.value.frequency == "Weekly" ? "Week ${each.value.day_of_week}" : "Day"
@@ -403,7 +402,50 @@ resource "azurerm_maintenance_configuration" "vm_patching" {
   )
 }
 
-# Assign VMs to their Maintenance Configurations
+# Configure patch mode for VMs with maintenance assignments (BEFORE assignment)
+resource "azurerm_resource_group_template_deployment" "vm_patch_mode" {
+  for_each = {
+    for vm_key in keys(local.test_app_vms) : vm_key => vm_key
+    if lower(local.test_app_vms[vm_key].disk.os.os_type) == "windows" && contains(keys(local.vm_to_maintenance_config), vm_key)
+  }
+
+  name                = "vm-patch-mode-${each.key}"
+  resource_group_name = "rg-cu-CorpApps-MigrationTest-Dev"
+  deployment_mode     = "Incremental"
+
+  template_content = jsonencode({
+    "$schema"      = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+    contentVersion = "1.0.0.0"
+    resources = [
+      {
+        type       = "Microsoft.Compute/virtualMachines"
+        apiVersion = "2024-03-01"
+        name       = module.test_app_vms[each.key].vm_name
+        location   = azurerm_resource_group.primary.location
+        properties = {
+          osProfile = {
+            windowsConfiguration = {
+              patchSettings = {
+                patchMode      = "AutomaticByPlatform"
+                assessmentMode = "AutomaticByPlatform"
+                automaticByPlatformSettings = {
+                  bypassPlatformSafetyChecksOnUserSchedule = true
+                  rebootSetting                            = "Never"
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [
+    module.test_app_vms
+  ]
+}
+
+# Assign VMs to their Maintenance Configurations (AFTER patch mode is set)
 resource "azurerm_maintenance_assignment_virtual_machine" "vm_patching" {
   for_each = {
     for vm_key in keys(local.test_app_vms) : vm_key => vm_key
@@ -415,7 +457,7 @@ resource "azurerm_maintenance_assignment_virtual_machine" "vm_patching" {
   virtual_machine_id           = module.test_app_vms[each.key].vm_id
 
   depends_on = [
-    module.test_app_vms
+    azurerm_resource_group_template_deployment.vm_patch_mode
   ]
 }
 
@@ -434,18 +476,18 @@ import {
 
 import {
   to = module.test_app_vms["vmcuwinwebd01"].azurerm_managed_disk.os_disk
-  id = "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/disks/vmcuwinwebd01-OSdisk-00-dda752f1-7395-4bcf-ac67-58716e5de28e"
+  id = "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/disks/vmcuwinwebd01-OSdisk-00"
 }
 
 
 import {
-  to = module.test_app_vms["vmcuwinwebd01"].azurerm_managed_disk.data_disk["vmcuwinwebd01-datadisk-01-073cfec7-5b88-491e-8e62-3b6b95371acc"]
-  id = "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/disks/vmcuwinwebd01-datadisk-01-073cfec7-5b88-491e-8e62-3b6b95371acc"
+  to = module.test_app_vms["vmcuwinwebd01"].azurerm_managed_disk.data_disk["vmcuwinwebd01-datadisk-01"]
+  id = "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/disks/vmcuwinwebd01-datadisk-01"
 }
 
 import {
-  to = module.test_app_vms["vmcuwinwebd01"].azurerm_virtual_machine_data_disk_attachment.data_disk_attachment["vmcuwinwebd01-datadisk-01-073cfec7-5b88-491e-8e62-3b6b95371acc"]
-  id = "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01/dataDisks/vmcuwinwebd01-datadisk-01-073cfec7-5b88-491e-8e62-3b6b95371acc"
+  to = module.test_app_vms["vmcuwinwebd01"].azurerm_virtual_machine_data_disk_attachment.data_disk_attachment["vmcuwinwebd01-datadisk-01"]
+  id = "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01/dataDisks/vmcuwinwebd01-datadisk-01"
 }
 
 import {
