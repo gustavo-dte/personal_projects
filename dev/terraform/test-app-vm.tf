@@ -280,8 +280,8 @@ module "test_app_vms" {
 
   # Required context
   vm_name             = each.value.vm_name
-  resource_group_name = "rg-cu-CorpApps-MigrationTest-Dev"
-  location            = azurerm_resource_group.primary.location
+  resource_group_name = azurerm_resource_group.vm_migration_test.name
+  location            = azurerm_resource_group.vm_migration_test.location
   vm_size             = each.value.vm_size
 
   # Network
@@ -321,8 +321,9 @@ module "test_app_vms" {
   vm_insights_enabled          = each.value.vm_insights_enabled
   vm_alert_rules               = each.value.vm_alert_rules
 
-  # Windows Update Manager configuration - DISABLED (using maintenance configs below instead)
-  enable_periodic_update_assessment = false
+  # Windows Update Manager configuration
+  # Enable patching for Windows VMs - patch mode will be set by maintenance config
+  enable_periodic_update_assessment = lower(each.value.disk.os.os_type) == "windows" ? true : false
 
   # Tags
   tags = local.tags
@@ -373,13 +374,13 @@ resource "azurerm_maintenance_configuration" "vm_patching" {
   for_each = local.maintenance_config_settings
 
   name                     = each.key
-  resource_group_name      = "rg-cu-CorpApps-MigrationTest-Dev"
-  location                 = azurerm_resource_group.primary.location
+  resource_group_name      = azurerm_resource_group.vm_migration_test.name
+  location                 = azurerm_resource_group.vm_migration_test.location
   scope                    = "InGuestPatch"
   in_guest_user_patch_mode = "User"
 
   window {
-    start_date_time = "2026-01-01 ${each.value.time_of_day}"
+    start_date_time = "2026-01-01 ${each.value.time_of_day}:00"
     duration        = each.value.duration
     time_zone       = "Central Standard Time"
     recur_every     = each.value.frequency == "Weekly" ? "Week ${each.value.day_of_week}" : "Day"
@@ -402,62 +403,19 @@ resource "azurerm_maintenance_configuration" "vm_patching" {
   )
 }
 
-# Configure patch mode for VMs with maintenance assignments (BEFORE assignment)
-resource "azurerm_resource_group_template_deployment" "vm_patch_mode" {
-  for_each = {
-    for vm_key in keys(local.test_app_vms) : vm_key => vm_key
-    if lower(local.test_app_vms[vm_key].disk.os.os_type) == "windows" && contains(keys(local.vm_to_maintenance_config), vm_key)
-  }
-
-  name                = "vm-patch-mode-${each.key}"
-  resource_group_name = "rg-cu-CorpApps-MigrationTest-Dev"
-  deployment_mode     = "Incremental"
-
-  template_content = jsonencode({
-    "$schema"      = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
-    contentVersion = "1.0.0.0"
-    resources = [
-      {
-        type       = "Microsoft.Compute/virtualMachines"
-        apiVersion = "2024-03-01"
-        name       = module.test_app_vms[each.key].vm_name
-        location   = azurerm_resource_group.primary.location
-        properties = {
-          osProfile = {
-            windowsConfiguration = {
-              patchSettings = {
-                patchMode      = "AutomaticByPlatform"
-                assessmentMode = "AutomaticByPlatform"
-                automaticByPlatformSettings = {
-                  bypassPlatformSafetyChecksOnUserSchedule = true
-                  rebootSetting                            = "Never"
-                }
-              }
-            }
-          }
-        }
-      }
-    ]
-  })
-
-  depends_on = [
-    module.test_app_vms
-  ]
-}
-
-# Assign VMs to their Maintenance Configurations (AFTER patch mode is set)
+# Assign VMs to their Maintenance Configurations
 resource "azurerm_maintenance_assignment_virtual_machine" "vm_patching" {
   for_each = {
     for vm_key in keys(local.test_app_vms) : vm_key => vm_key
     if lower(local.test_app_vms[vm_key].disk.os.os_type) == "windows" && contains(keys(local.vm_to_maintenance_config), vm_key)
   }
 
-  location                     = azurerm_resource_group.primary.location
+  location                     = azurerm_resource_group.vm_migration_test.location
   maintenance_configuration_id = azurerm_maintenance_configuration.vm_patching[local.vm_to_maintenance_config[each.key]].id
   virtual_machine_id           = module.test_app_vms[each.key].vm_id
 
   depends_on = [
-    azurerm_resource_group_template_deployment.vm_patch_mode
+    module.test_app_vms
   ]
 }
 
