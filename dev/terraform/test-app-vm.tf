@@ -71,6 +71,13 @@ locals {
           }
         }
       }
+      
+      # Patching configuration - will be applied during import
+      patch_mode                                          = "AutomaticByPlatform"
+      patch_assessment_mode                               = "AutomaticByPlatform"
+      bypass_platform_safety_checks_on_user_schedule     = true
+      automatic_updates_enabled                           = false
+      
       vm_resource_id                     = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01"
       nic_resource_id                    = "${local.test_app_resource_prefix}/providers/Microsoft.Network/networkInterfaces/nic-vmcuwinwebd01-00"
       os_disk_resource_id                = "${local.test_app_resource_prefix}/providers/Microsoft.Compute/disks/vmcuwinwebd01-OSdisk-00"
@@ -292,6 +299,12 @@ module "test_app_vms" {
 
   # OS selection
   vm_os_type = lower(each.value.disk.os.os_type)
+  
+  # Patching configuration (for Windows VMs with schedules)
+  patch_mode                                      = try(each.value.patch_mode, null)
+  patch_assessment_mode                           = try(each.value.patch_assessment_mode, null)
+  bypass_platform_safety_checks_on_user_schedule = try(each.value.bypass_platform_safety_checks_on_user_schedule, null)
+  automatic_updates_enabled                       = try(each.value.automatic_updates_enabled, null)
 
   # Optional VMSS anchor if vmss_name provided (imports live in root)
   enable_vmss = each.value.vmss_name != null
@@ -322,8 +335,8 @@ module "test_app_vms" {
   vm_alert_rules               = each.value.vm_alert_rules
 
   # Windows Update Manager configuration
-  # Enable patching for Windows VMs - patch mode will be set by maintenance config
-  enable_periodic_update_assessment = lower(each.value.disk.os.os_type) == "windows" ? true : false
+  # DISABLED - All patching configured via maintenance configurations below in test-app-vm.tf
+  enable_periodic_update_assessment = false
 
   # Tags
   tags = local.tags
