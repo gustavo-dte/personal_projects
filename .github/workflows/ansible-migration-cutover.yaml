@@ -4,7 +4,7 @@ name: Ansible-Migration-Cutover
 # It intelligently checks migration status before proceeding:
 # - If VMs are already migrated, skips cutover and only configures patching
 # - If VMs need migration, performs cutover then configures patching
-# - Provides detailed status outputs for all operations
+# - All output is displayed in the console logs (no artifacts saved)
 
 on:
   workflow_dispatch:
@@ -97,11 +97,9 @@ jobs:
           echo "MIGRATION STATUS CHECK"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Use a simple approach: let the cutover playbook handle the logic
-          # The cutover.yml task already has built-in checks that skip if already migrated
+          # The cutover playbook has built-in logic to check and skip already-migrated VMs
           # We'll set outputs based on what the cutover playbook reports
           
-          # For now, we assume cutover is needed (will be determined by playbook)
           echo "cutover_needed=true" >> $GITHUB_OUTPUT
           echo "migration_status=checking" >> $GITHUB_OUTPUT
           echo "vms_migrated=0" >> $GITHUB_OUTPUT
@@ -141,28 +139,50 @@ jobs:
 
       - name: Prepare cutover extra vars
         run: |
-          PATCHING_PARAM=""
+          echo "Preparing Ansible extra vars..."
+          
+          # Check if patching file was provided and exists
+          PATCHING_FILE_PROVIDED=false
+          PATCHING_ABSOLUTE=""
+          
           if [ -n "${{ inputs.patching_schedules_file }}" ]; then
             # Resolve to absolute path
             PATCHING_ABSOLUTE="${GITHUB_WORKSPACE}/${{ inputs.patching_schedules_file }}"
+            echo "Checking for patching schedules file: $PATCHING_ABSOLUTE"
+            
             if [ -f "$PATCHING_ABSOLUTE" ]; then
-              PATCHING_PARAM="\"patching_schedules_file\": \"$PATCHING_ABSOLUTE\","
-              echo "Patching will be configured using: $PATCHING_ABSOLUTE"
+              PATCHING_FILE_PROVIDED=true
+              echo "✅ Patching schedules file found: $PATCHING_ABSOLUTE"
             else
-              echo "Warning: Patching schedules file not found: $PATCHING_ABSOLUTE"
+              echo "❌ Warning: Patching schedules file not found: $PATCHING_ABSOLUTE"
               echo "Patching configuration will be skipped"
             fi
+          else
+            echo "ℹ️  No patching schedules file provided"
+            echo "Patching configuration will be skipped"
           fi
           
-          cat > ansible_extra_vars.json <<JSON
+          # Create JSON file based on whether patching file exists
+          if [ "$PATCHING_FILE_PROVIDED" = "true" ]; then
+            cat > ansible_extra_vars.json <<JSON
           {
             "manifest": "${{ inputs.manifest }}",
-            ${PATCHING_PARAM}
+            "patching_schedules_file": "$PATCHING_ABSOLUTE",
             "shutdown_source_vm": ${{ inputs.shutdown_source_vm }},
             "dry_run": ${{ inputs.dry_run }}
           }
           JSON
+          else
+            cat > ansible_extra_vars.json <<JSON
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "shutdown_source_vm": ${{ inputs.shutdown_source_vm }},
+            "dry_run": ${{ inputs.dry_run }}
+          }
+          JSON
+          fi
           
+          echo ""
           echo "Extra vars file created:"
           cat ansible_extra_vars.json
 
@@ -177,25 +197,19 @@ jobs:
           echo "  4. Configure patching for all successfully migrated VMs"
           echo ""
           
+          # Run playbook with all output to console
           ansible-playbook ansible/playbooks/migration-cutover.yml \
-            -e @ansible_extra_vars.json 2>&1 | tee cutover.log
+            -e @ansible_extra_vars.json
           
-          CUTOVER_EXIT_CODE=${PIPESTATUS[0]}
+          CUTOVER_EXIT_CODE=$?
           
           if [ $CUTOVER_EXIT_CODE -eq 0 ]; then
             echo "cutover_performed=true" >> $GITHUB_OUTPUT
-            
-            # Parse the cutover log to extract status information
-            MIGRATED_COUNT=$(grep -c "AlreadyCompleted\|Initiated" cutover.log || echo "0")
-            SKIPPED_COUNT=$(grep -c "Skipped\|NotReady" cutover.log || echo "0")
-            
+            echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "✅ Cutover workflow completed successfully"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "VMs migrated/already migrated: $MIGRATED_COUNT"
-            echo "VMs skipped (not ready): $SKIPPED_COUNT"
-            echo ""
-            echo "See cutover.log for detailed results per VM"
+            echo "Review the output above for detailed per-VM results"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           else
             echo "cutover_performed=false" >> $GITHUB_OUTPUT
@@ -206,13 +220,16 @@ jobs:
       - name: Set patching configuration status
         id: patching
         run: |
-          # Check if patching was configured (indicated by presence of patching logs)
-          if grep -q "Post-cutover patching configured" cutover.log 2>/dev/null; then
-            echo "patching_configured=true" >> $GITHUB_OUTPUT
-            echo "✅ Patching was configured for migrated VMs"
-          elif [ -n "${{ inputs.patching_schedules_file }}" ]; then
-            echo "patching_configured=partial" >> $GITHUB_OUTPUT
-            echo "⚠️ Patching attempted - check logs for details"
+          # Set patching status based on input
+          if [ -n "${{ inputs.patching_schedules_file }}" ]; then
+            PATCHING_ABSOLUTE="${GITHUB_WORKSPACE}/${{ inputs.patching_schedules_file }}"
+            if [ -f "$PATCHING_ABSOLUTE" ]; then
+              echo "patching_configured=true" >> $GITHUB_OUTPUT
+              echo "✅ Patching configuration was included in workflow"
+            else
+              echo "patching_configured=false" >> $GITHUB_OUTPUT
+              echo "⚠️ Patching file provided but not found - skipped"
+            fi
           else
             echo "patching_configured=false" >> $GITHUB_OUTPUT
             echo "ℹ️ Patching not configured (no schedules file provided)"
@@ -238,16 +255,9 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Intelligent Processing" >> $GITHUB_STEP_SUMMARY
-          echo "The workflow automatically detected migration status for each VM:" >> $GITHUB_STEP_SUMMARY
+          echo "The workflow automatically detected migration status for each VM." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Extract status from cutover log
-          if [ -f cutover.log ]; then
-            echo "### VM Status Details" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            grep -E "(AlreadyCompleted|Initiated|Skipped|NotReady|Failed)" cutover.log | head -20 >> $GITHUB_STEP_SUMMARY || echo "No detailed status found" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "**Note:** All detailed output is available in the workflow console logs above." >> $GITHUB_STEP_SUMMARY
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Results" >> $GITHUB_STEP_SUMMARY
@@ -260,8 +270,6 @@ jobs:
             PATCHING_STATUS="${{ steps.patching.outputs.patching_configured }}"
             if [ "$PATCHING_STATUS" = "true" ]; then
               echo "- ✅ **Patching**: Configured successfully" >> $GITHUB_STEP_SUMMARY
-            elif [ "$PATCHING_STATUS" = "partial" ]; then
-              echo "- ⚠️ **Patching**: Partially configured (check logs)" >> $GITHUB_STEP_SUMMARY
             else
               echo "- ℹ️ **Patching**: Not configured (no schedules file provided)" >> $GITHUB_STEP_SUMMARY
             fi
@@ -271,7 +279,7 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. Review the detailed logs in the workflow artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review the detailed console logs above" >> $GITHUB_STEP_SUMMARY
           echo "2. Verify VMs in Azure portal (Azure Migrate & Virtual Machines)" >> $GITHUB_STEP_SUMMARY
           echo "3. Check Azure Update Manager for patching configuration" >> $GITHUB_STEP_SUMMARY
           echo "4. Test target VM functionality" >> $GITHUB_STEP_SUMMARY
@@ -292,17 +300,6 @@ jobs:
             echo "- Verify VM assignments and schedules" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Upload logs as artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migration-logs-${{ inputs.manifest }}-${{ github.run_number }}
-          path: |
-            cutover.log
-            ansible_extra_vars.json
-          retention-days: 30
-          if-no-files-found: ignore
-
       - name: Post-workflow guidance
         if: success()
         run: |
@@ -314,8 +311,7 @@ jobs:
           echo "   The workflow automatically determined which VMs needed cutover"
           echo "   and which were already migrated, then configured patching for all."
           echo ""
-          echo "📊 View detailed summary in the workflow run page"
-          echo "📁 Logs available in workflow artifacts"
+          echo "📊 View detailed output in the workflow console logs above"
           echo ""
           echo "Next: Verify VMs and patching configuration in Azure portal"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
