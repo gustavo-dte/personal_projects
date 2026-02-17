@@ -1,0 +1,20 @@
+{
+  "vmcuwinwebd02": {
+    "maintenance_configuration": "weekly-sunday-2am",
+    "frequency": "Weekly",
+    "day_of_week": "Sunday",
+    "time_of_day": "02:00",
+    "duration": "03:00",
+    "reboot_setting": "IfRequired",
+    "description": "Test web server - patched weekly on Sunday at 2 AM"
+  },
+  "dca-dev7048": {
+    "maintenance_configuration": "weekly-saturday-midnight",
+    "frequency": "Weekly",
+    "day_of_week": "Saturday",
+    "time_of_day": "00:00",
+    "duration": "04:00",
+    "reboot_setting": "Never",
+    "description": "Test SQL server - patched weekly on Saturday at midnight, no reboot"
+  }
+}
