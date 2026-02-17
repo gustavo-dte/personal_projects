@@ -73,7 +73,11 @@ resource "azurerm_windows_virtual_machine" "main" {
       additional_capabilities,
       boot_diagnostics,
       os_disk[0].caching,
-      allow_extension_operations
+      allow_extension_operations,
+      patch_mode,
+      patch_assessment_mode,
+      bypass_platform_safety_checks_on_user_schedule_enabled,
+      automatic_updates_enabled
     ]
   }
 }
@@ -152,7 +156,9 @@ resource "azurerm_linux_virtual_machine" "main" {
       additional_capabilities,
       boot_diagnostics,
       os_disk[0].caching,
-      allow_extension_operations
+      allow_extension_operations,
+      patch_mode,
+      patch_assessment_mode
     ]
   }
 }
