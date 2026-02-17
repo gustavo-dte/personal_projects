@@ -1,3 +1,4 @@
+Run echo "Preparing Ansible extra vars..."
 Preparing Ansible extra vars...
 Checking for patching schedules file: /opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/vm_patching_schedules/testing_vm_patching_schedules.json
 ❌ Warning: Patching schedules file not found: /opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/vm_patching_schedules/testing_vm_patching_schedules.json
