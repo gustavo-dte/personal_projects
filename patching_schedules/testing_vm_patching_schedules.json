@@ -8,7 +8,7 @@
     "reboot_setting": "IfRequired",
     "description": "Test web server - patched weekly on Sunday at 2 AM"
   },
-  "dca-dev7048": {
+  "vmcuwinwebd01": {
     "maintenance_configuration": "weekly-saturday-midnight",
     "frequency": "Weekly",
     "day_of_week": "Saturday",

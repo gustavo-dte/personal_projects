@@ -1,0 +1,11 @@
+{
+  "dca-dev7048": {
+    "maintenance_configuration": "weekly-saturday-midnight",
+    "frequency": "Weekly",
+    "day_of_week": "Saturday",
+    "time_of_day": "00:00",
+    "duration": "04:00",
+    "reboot_setting": "Never",
+    "description": "Test SQL server - patched weekly on Saturday at midnight, no reboot"
+  }
+}
