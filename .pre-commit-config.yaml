@@ -16,7 +16,7 @@ repos:
       - id: check-yaml
       - id: end-of-file-fixer
       - id: mixed-line-ending
-        args: ['--fix', 'auto']
+        args: ['--fix=auto']
       - id: no-commit-to-branch
         args: ['--pattern', '^(?!((story|task|hotfix)\/\d+[-_].+)$)']
       - id: trailing-whitespace
@@ -25,20 +25,3 @@ repos:
     hooks:
       - id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
-  - repo: https://github.com/antonbabenko/pre-commit-terraform
-    rev: v1.99.5
-    hooks:
-      - id: terraform_fmt
-        args:
-          - --args=-write=true
-          - --args=-recursive
-      - id: terraform_tflint
-        args:
-          - --hook-config=--delegate-chdir
-      - id: terraform_docs
-        args:
-          - --args=--config=.terraform-docs.yml
-      - id: terraform_validate
-        args:
-          - --tf-init-args=-upgrade
-          - --hook-config=--retry-once-with-cleanup=true

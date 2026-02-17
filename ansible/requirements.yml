@@ -1,0 +1,5 @@
+---
+# Install Azure collection for Ansible
+collections:
+  - name: azure.azcollection
+    version: "1.19.0"

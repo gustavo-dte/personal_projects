@@ -1,0 +1,273 @@
+---
+# Delete migrated VMs and their associated resources (NICs and disks)
+
+- name: Verify prerequisites for delete_migrated_vms
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: azure_verify_prerequisites
+
+- name: Assert additional required variables for delete_migrated_vms
+  ansible.builtin.assert:
+    that:
+      - (target_resource_group | default('')) | length > 0
+      - (target_subscription_id | default('')) | length > 0
+      - (target_vm_name | default('')) | length > 0
+    fail_msg: |
+      Required variables missing. Please provide:
+      - target_resource_group: {{ target_resource_group | default('NOT SET') }}
+      - target_subscription_id: {{ target_subscription_id | default('NOT SET') }}
+      - target_vm_name: {{ target_vm_name | default('NOT SET') }}
+
+- name: Check if VM exists before deletion
+  block:
+    - name: Debug - Starting VM existence check
+      ansible.builtin.debug:
+        msg: |
+          Starting VM existence check for:
+          - VM Name: {{ target_vm_name }}
+          - Resource Group: {{ target_resource_group }}
+          - Subscription ID: {{ target_subscription_id }}
+          - Dry Run: {{ dry_run | default(false) }}
+
+    - name: Get VM information
+      azure.azcollection.azure_rm_virtualmachine_info:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ target_vm_name }}"
+        subscription_id: "{{ target_subscription_id }}"
+      register: vm_info_result
+      changed_when: false
+      when: not (dry_run | default(false))
+      ignore_errors: true
+
+    - name: Mock VM info for dry run
+      ansible.builtin.set_fact:
+        vm_info_result:
+          failed: false
+          vms:
+            - name: "{{ target_vm_name }}"
+              network_interface_names:
+                - "nic-{{ target_vm_name }}-00"
+              os_disk:
+                name: "{{ target_vm_name }}-OSdisk-00"
+              data_disks:
+                - name: "{{ target_vm_name }}-datadisk-01"
+      when: dry_run | default(false)
+
+    - name: Debug raw VM info result
+      ansible.builtin.debug:
+        var: vm_info_result
+
+    - name: Check if VM info was retrieved successfully
+      ansible.builtin.set_fact:
+        vm_data: "{{ vm_info_result.vms | selectattr('name', 'equalto', target_vm_name) | first | default({}) if (vm_info_result is defined and vm_info_result.vms is defined) else {} }}"
+
+    - name: Determine if VM was found
+      ansible.builtin.set_fact:
+        vm_info_success: "{{ (vm_data.name is defined and vm_data.name == target_vm_name) | bool }}"
+        vm_info_error_msg: "{{ vm_info_result.msg | default(vm_info_result.stderr | default('Unknown error')) if (vm_info_result is defined and vm_info_result.failed is defined) else '' }}"
+
+    - name: Set VM existence flag
+      ansible.builtin.set_fact:
+        vm_exists: "{{ vm_info_success | default(false) }}"
+        vm_facts: "{{ vm_data }}"
+        vm_nic_names: "{{ vm_data.network_interface_names | default([]) if vm_info_success | default(false) else [] }}"
+        vm_os_disk_name: "{{ vm_data.os_disk.name | default('') if vm_info_success | default(false) else '' }}"
+        vm_data_disk_names: "{{ vm_data.data_disks | map(attribute='name') | list if (vm_info_success | default(false) and vm_data.data_disks is defined) else [] }}"
+        vm_info_error: "{{ vm_info_error_msg }}"
+
+  rescue:
+    - name: Debug VM information
+      ansible.builtin.debug:
+        msg: |
+          VM Information:
+          - Name: {{ target_vm_name }}
+          - Resource Group: {{ target_resource_group }}
+          - Subscription ID: {{ target_subscription_id }}
+          - VM Data Name: {{ vm_data.name | default('NOT FOUND') }}
+          - VM Data Present: {{ (vm_data | default({}) | length > 0) }}
+          - Info Retrieved: {{ vm_info_success }}
+          - Exists: {{ vm_exists }}
+          - NIC Names: {{ vm_nic_names | join(', ') }}
+          - OS Disk: {{ vm_os_disk_name }}
+          - Data Disks: {{ vm_data_disk_names | join(', ') }}
+          {% if vm_info_error_msg | default('') | length > 0 %}
+          - Error: {{ vm_info_error_msg }}
+          {% endif %}
+
+    - name: Handle VM info retrieval failure - skip deletion
+      ansible.builtin.set_fact:
+        vm_exists: false
+        vm_facts: {}
+        vm_nic_names: []
+        vm_os_disk_name: ""
+        vm_data_disk_names: []
+        vm_info_error: "{{ ansible_failed_result.msg | default('Unknown error') }}"
+        vm_info_success: false
+
+    - name: Log VM info retrieval error and skip
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  Skipping deletion for VM '{{ target_vm_name }}' due to error retrieving VM information.
+          Error: {{ vm_info_error }}
+          Treating as if VM does not exist.
+
+- name: Delete VM and associated resources
+  when: vm_exists
+  block:
+
+    - name: Please wait - deleting VM and associated resources
+      ansible.builtin.debug:
+        msg: |
+          ⏳  Deleting VM '{{ target_vm_name }}' and associated resources...
+          This may take a few moments. Please wait.
+      when: not (dry_run | default(false))
+
+    - name: Delete virtual machine
+      azure.azcollection.azure_rm_virtualmachine:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ target_vm_name }}"
+        subscription_id: "{{ target_subscription_id }}"
+        state: absent
+      register: delete_vm_result
+      when: not (dry_run | default(false))
+
+    - name: Mock VM deletion for dry run
+      ansible.builtin.set_fact:
+        delete_vm_result:
+          changed: true
+          msg: "[DRY RUN] Would delete VM {{ target_vm_name }}"
+      when: dry_run | default(false)
+
+    - name: Delete network interfaces
+      azure.azcollection.azure_rm_networkinterface:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ item }}"
+        subscription_id: "{{ target_subscription_id }}"
+        state: absent
+      register: delete_nic_results
+      loop: "{{ vm_nic_names }}"
+      when:
+        - not (dry_run | default(false))
+        - vm_nic_names | length > 0
+        - item | length > 0
+
+    - name: Mock NIC deletion for dry run
+      ansible.builtin.set_fact:
+        delete_nic_results:
+          results: "{{ vm_nic_names | map('regex_replace', '^(.*)$', '[DRY RUN] Would delete NIC \\1') | list }}"
+      when: dry_run | default(false)
+
+    - name: Delete OS disk
+      azure.azcollection.azure_rm_manageddisk:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ vm_os_disk_name }}"
+        subscription_id: "{{ target_subscription_id }}"
+        state: absent
+      register: delete_os_disk_result
+      ignore_errors: true
+      when:
+        - not (dry_run | default(false))
+        - vm_os_disk_name | length > 0
+
+    - name: Mock OS disk deletion for dry run
+      ansible.builtin.set_fact:
+        delete_os_disk_result:
+          changed: true
+          msg: "[DRY RUN] Would delete OS disk {{ vm_os_disk_name }}"
+      when: dry_run | default(false)
+
+    - name: Delete data disks
+      azure.azcollection.azure_rm_manageddisk:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ item }}"
+        subscription_id: "{{ target_subscription_id }}"
+        state: absent
+      register: delete_data_disk_results
+      loop: "{{ vm_data_disk_names }}"
+      when:
+        - not (dry_run | default(false))
+        - vm_data_disk_names | length > 0
+        - item | length > 0
+
+    - name: Mock data disk deletion for dry run
+      ansible.builtin.set_fact:
+        delete_data_disk_results:
+          results: "{{ vm_data_disk_names | map('regex_replace', '^(.*)$', '[DRY RUN] Would delete data disk \\1') | list }}"
+      when: dry_run | default(false)
+
+    - name: Compile deletion results
+      ansible.builtin.set_fact:
+        delete_vm_output:
+          VMName: "{{ target_vm_name }}"
+          Success: true
+          VMDeleted: "{{ delete_vm_result.changed | default(false) }}"
+          NICsDeleted: "{{ (delete_nic_results.results | default([]) | selectattr('changed', 'defined') | list | length) if not (dry_run | default(false)) else (vm_nic_names | length) }}"
+          NICNames: "{{ vm_nic_names }}"
+          OSDiskName: "{{ vm_os_disk_name }}"
+          DataDisksDeleted: "{{ (delete_data_disk_results.results | default([]) | selectattr('changed', 'defined') | list | length) if not (dry_run | default(false)) else (vm_data_disk_names | length) }}"
+          DataDiskNames: "{{ vm_data_disk_names }}"
+          Error: null
+          DryRun: "{{ dry_run | default(false) }}"
+
+  rescue:
+    - name: VM deletion failed
+      ansible.builtin.fail:
+        msg: |
+          ❌ Failed to delete VM '{{ target_vm_name }}'
+          Error: {{ ansible_failed_result.msg | default('Unknown error occurred') }}
+
+          This could be due to:
+          - VM is locked or in use
+          - Insufficient permissions for deletion operations
+          - Network connectivity issues
+          - Resource group or subscription access issues
+
+          Troubleshooting:
+          - Verify VM exists: {{ target_vm_name }}
+          - Check permissions on resource group: {{ target_resource_group }}
+          - Verify subscription ID: {{ target_subscription_id }}
+          - Review full output below for specific errors
+      vars:
+        delete_vm_output:
+          VMName: "{{ target_vm_name }}"
+          Success: false
+          Error: "{{ ansible_failed_result.msg | default('Unknown error occurred') }}"
+
+- name: Set output for VM that does not exist
+  ansible.builtin.set_fact:
+    delete_vm_result:
+      changed: false
+    delete_vm_output:
+      VMName: "{{ target_vm_name }}"
+      Error: "{{ vm_info_error | default('') }}"
+      Skipped: true
+  when: not vm_exists
+
+- name: Display VM deletion result
+  ansible.builtin.debug:
+    msg:
+      - "VM {{ target_vm_name }}: {{ 'Does not exist' if (delete_vm_output.Skipped | default(false)) else ('Deleted successfully' if (delete_vm_output.Success | default(false) and delete_vm_output.VMDeleted | default(false)) else 'Deletion failed') }}"
+      - "Changed: {{ delete_vm_result.changed | default(false) }}"
+      - "Success: {{ delete_vm_output.Success | default(false) }}"
+      - "Skipped: {{ delete_vm_output.Skipped | default(false) }}"
+      - "VM Deleted: {{ delete_vm_output.VMDeleted | default(false) }}"
+      - "NICs Deleted: {{ delete_vm_output.NICsDeleted | default(0) }}"
+      - "OS Disk Deleted: {{ delete_vm_output.OSDiskDeleted | default(false) }}"
+      - "Data Disks Deleted: {{ delete_vm_output.DataDisksDeleted | default(0) }}"
+
+- name: Set VM deletion output for main playbook
+  ansible.builtin.set_fact:
+    delete_vm_result_output: "{{ delete_vm_result }}"
+    delete_vm_output: "{{ delete_vm_output }}"
+
+- name: Add VM deletion output to collection
+  ansible.builtin.set_fact:
+    all_delete_vm_outputs: >-
+      {{
+        all_delete_vm_outputs | default({}) | combine({
+          target_vm_name: {
+            'changed': delete_vm_result.changed | default(false),
+            'delete_vm_output': delete_vm_output | default({})
+          }
+        })
+      }}

@@ -1,0 +1,55 @@
+- name: Configure Azure Database Migration Service and Migrate to SQL DB
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  collections:
+    - azure.azcollection
+
+  vars:
+    resource_group_name: "{{ resource_group_name }}"
+    location: "{{ location }}" # Choose an appropriate Azure location
+    dms_service_name: "{{dms_service_name}}"
+    source_sql_server_name: "{{source_sql_server_name}}"
+    source_database_name: "{{source_database_name}}"
+    target_sql_server_name: "{{target-sql-server}}.database.windows.net" # FQDN of Azure SQL Server
+    target_database_name: "{{target_database_name}}" # The input parameter variable destination
+    sql_user: "{{sql_user}}"
+    sql_password: "{{sql_password}}" # Use Ansible Vault for security
+
+  tasks:
+    - name: Create Azure Resource Group if not exists
+      azure_rm_resourcegroup:
+        name: "{{ resource_group_name }}"
+        location: "{{ location }}"
+
+    - name: Create an instance of Azure Database Migration Service
+      azure_rm_resource:
+        resource_group: "{{ resource_group_name }}"
+        provider: "Microsoft.DataMigration"
+        resource_type: "services"
+        resource_name: "{{ dms_service_name }}"
+        api_version: "2022-03-30-preview" # Use a compatible API version
+        location: "{{ location }}"
+        properties:
+          sku:
+            name: "Standard_1" # Or Basic_1, Premium_4, etc., depending on needs
+      register: dms_service_result
+
+    - name: Initiate the SQL Database migration using Azure CLI
+      # This task uses the Azure CLI because direct DMS task configuration via generic ARM modules is complex
+      # and specific modules do not exist.
+      ansible.builtin.shell:
+        cmd: |
+          az dms project create --resource-group {{ resource_group_name }} --service-name {{ dms_service_name }} --project-name "SqlToSqlDBMigration" --source-platform "SQL" --target-platform "AzureSQLDB" --location {{ location }}
+
+          az dms task create --resource-group {{ resource_group_name }} --service-name {{ dms_service_name }} --project-name "SqlToSqlDBMigration" --task-name "Migrate_{{ source_database_name }}" --task-type "Migrate.SQL.AzureSQLDB" --source-connection-info "{{ source_sql_server_name }}:1433" --target-connection-info "{{ target_sql_server_name }}:1433" --source-database-info name="{{ source_database_name }}" target-database-name="{{ target_database_name }}" source-user="{{ sql_user }}" source-pwd="{{ sql_password }}" target-user="{{ sql_user }}" target-pwd="{{ sql_password }}"
+      args:
+        executable: /bin/bash
+      register: migration_task_initiation
+      # Warning: This is a blocking call and might take time. Consider running the initiation
+      # and then having a separate task to monitor the status if necessary.
+      # The exact Azure CLI command syntax might need slight adjustment based on your specific DMS requirements and version.
+
+    - name: Display migration task initiation result
+      ansible.builtin.debug:
+        var: migration_task_initiation.stdout

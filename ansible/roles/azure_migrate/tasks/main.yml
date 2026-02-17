@@ -1,0 +1,55 @@
+---
+# Main entry point for azure_migrate role
+# Routes to appropriate action orchestrators
+
+- name: Load migration manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+  when: migration_action in manifest_dependent_actions
+
+- name: Assert migration_action is valid
+  ansible.builtin.assert:
+    that:
+      - migration_action in migration_actions
+    fail_msg: "❌ migration_action must be one of: {{ migration_actions | join(', ') }}"
+
+- name: Execute start_replication action
+  ansible.builtin.include_tasks: orchestrators/start_replication.yml
+  when: migration_action == 'start_replication'
+
+- name: Execute stop_replication action
+  ansible.builtin.include_tasks: orchestrators/stop_replication.yml
+  when: migration_action == 'stop_replication'
+
+- name: Execute delete_migrated_vms action
+  ansible.builtin.include_tasks: orchestrators/delete_migrated_vms.yml
+  when: migration_action == 'delete_migrated_vms'
+
+- name: Execute list_projects action
+  ansible.builtin.include_tasks: list_projects.yml
+  when: migration_action == 'list_projects'
+  vars:
+    target_resource_group: "{{ resource_group | default('') }}"
+    target_subscription_id: "{{ subscription_id | default('') }}"
+    dry_run: "{{ dry_run | default(false) }}"
+
+- name: Execute get_replication_status action
+  ansible.builtin.include_tasks: get_replication_status.yml
+  when: migration_action == 'get_replication_status'
+  vars:
+    dry_run: "{{ dry_run | default(false) }}"
+
+- name: Execute cutover action
+  ansible.builtin.include_tasks: orchestrators/cutover.yml
+  when: migration_action == 'cutover'
+
+- name: Execute test_migration action
+  ansible.builtin.include_tasks: orchestrators/test_migration.yml
+  when: migration_action == 'test_migration'
+
+- name: Execute test_migration_cleanup action
+  ansible.builtin.include_tasks: orchestrators/test_migration_cleanup.yml
+  when: migration_action == 'test_migration_cleanup'

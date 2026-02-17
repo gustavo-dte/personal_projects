@@ -1,0 +1,16 @@
+# TODO: Code is not tested yet, needs to be tested against actual vms.
+
+---
+- name: Enable Dynatrace monitoring on Azure VMs
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
+  roles:
+    - role: common
+    - role: azure_dynatrace
+      vars:
+        manifest: "{{ manifest }}"
+        dry_run: "{{ dry_run }}"
+        enable_vm_monitoring: true

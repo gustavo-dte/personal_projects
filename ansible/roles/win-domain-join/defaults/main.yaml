@@ -1,0 +1,18 @@
+---
+# TODO: This role has not been tested yet. Testing is pending due to Windows/Ansible compatibility issues locally.
+# The code will be validated when run in GitHub Actions (Linux environment where Ansible is fully supported).
+# Default variables for win-domain-join role
+
+# Domain configuration
+domain_name: ""
+domain_admin_username: ""
+domain_admin_password: ""  # Should be passed via Ansible Vault or environment variable
+domain_ou_path: ""  # Optional: OU path where computer account will be created (e.g., "OU=Computers,DC=example,DC=com")
+
+# Computer account configuration
+computer_name: ""  # Optional: Custom computer name (defaults to inventory_hostname)
+
+# Behavior flags
+dry_run: false
+restart_on_success: true  # Whether to restart the server after successful domain join
+wait_for_reboot: true  # Whether to wait for reboot to complete

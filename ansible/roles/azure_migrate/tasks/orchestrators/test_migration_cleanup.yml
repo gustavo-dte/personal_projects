@@ -1,0 +1,62 @@
+---
+# Orchestrator for test_migration_cleanup action
+# Handles execution, result collection, and summary display
+
+- name: Include start test migration cleanup tasks
+  ansible.builtin.include_tasks: start_test_migration_cleanup.yml
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
+    azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
+
+- name: Collect test migration cleanup results
+  ansible.builtin.set_fact:
+    all_test_migration_cleanup_results: "{{ all_test_migration_cleanup_results | default([]) + [vm_result] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: >-
+        {{
+          'success' if (all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Success | default(false))
+          else (
+            'skipped' if (all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Skipped | default(false))
+            else 'failed'
+          )
+        }}
+      changed: "{{ all_test_migration_cleanup_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_test_migration_cleanup_outputs[vm_item.name].stderr | default(all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Error | default('')) }}"
+      output: "{{ all_test_migration_cleanup_outputs[vm_item.name].stdout | default('') }}"
+      skipped: "{{ all_test_migration_cleanup_outputs[vm_item.name].test_migration_cleanup_json.Skipped | default(false) }}"
+  when: all_test_migration_cleanup_outputs is defined
+
+- name: Build test migration cleanup summary details
+  ansible.builtin.set_fact:
+    test_migration_cleanup_summary_details: "{{ test_migration_cleanup_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_test_migration_cleanup_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: all_test_migration_cleanup_results is defined and all_test_migration_cleanup_results | length > 0
+
+- name: Display test migration cleanup summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration test migration cleanup summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_test_migration_cleanup_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Skipped: {{ all_test_migration_cleanup_results | default([]) | selectattr('status', 'equalto', 'skipped') | list | length }}"
+      - "Failed: {{ all_test_migration_cleanup_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ test_migration_cleanup_summary_details | default([]) | join('\n  ') }}"
+  when: all_test_migration_cleanup_results is defined

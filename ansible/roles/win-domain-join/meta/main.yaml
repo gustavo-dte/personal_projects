@@ -1,0 +1,20 @@
+---
+# TODO: This role has not been tested yet. Testing is pending due to Windows/Ansible compatibility issues locally.
+# The code will be validated when run in GitHub Actions (Linux environment where Ansible is fully supported).
+# Windows Domain Join role metadata
+galaxy_info:
+  author: Cloud Platform Team
+  description: Join Windows Servers to Active Directory domain
+  company: DTE Energy
+  license: MIT
+  min_ansible_version: "2.9"
+  platforms:
+    - name: Windows
+      versions:
+        - all
+
+dependencies:
+  - common  # Depends on the common role for manifest loading
+
+# Allow this role to be used as a dependency
+allow_duplicates: false

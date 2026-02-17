@@ -1,0 +1,75 @@
+# TODO: Code is not tested yet, needs to be tested against actual vms.
+
+name: Ansible-Windows-VM-Enable-Monitoring-Dynatrace
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  enable-dynatrace:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        if: ${{ !inputs.dry_run }}
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display workflow configuration
+        run: |
+          echo "✅ Workflow configuration:"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          echo "🗂️  Output directory: ansible/output"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - Azure lookups will be skipped"
+          fi
+
+      - name: 🧱 Prepare extra vars file to maintain variable types (secrets injected)
+        run: |
+          # Write extra-vars JSON for Ansible. Secrets are injected from GitHub Actions secrets
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }},
+            "dynatrace_token": "${{ secrets.DYNATRACE_TOKEN }}"
+          }
+          JSON
+
+      - name: Run playbook - enable dynatrace
+        run: |
+          ansible-playbook ansible/playbooks/enable-dynatrace-for-vm.yml \
+          -e @ansible_extra_vars.json

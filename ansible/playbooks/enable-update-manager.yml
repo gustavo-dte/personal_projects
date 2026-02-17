@@ -1,0 +1,13 @@
+---
+- name: Enable Azure Update Manager for VMs
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
+  roles:
+    - role: common
+    - role: azure_update_manager
+      vars:
+        manifest: "{{ manifest }}"
+        dry_run: "{{ dry_run }}"

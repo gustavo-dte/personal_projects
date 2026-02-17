@@ -1,0 +1,23 @@
+---
+- name: Enable Dynatrace Azure Monitor Integration
+  uri:
+    url: "{{ manifest_data.dynatrace.url }}/api/v2/azure/credentials"
+    method: POST
+    headers:
+      Authorization: "Api-Token {{ manifest_data.dynatrace_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      label: "Azure-Monitoring-{{ manifest_data.dynatrace.azure_subscription_id }}"
+      appId: "{{ azure_app.app_id }}"
+      directoryId: "{{ azure_sp.tenant_id }}"
+      secret: "{{ azure_app_secret.secret_text }}"
+      subscriptions:
+        - "{{ manifest_data.dynatrace.azure_subscription_id }}"
+      active: true
+    status_code: [201, 409]
+  register: dynatrace_integration_response
+
+- name: Check Dynatrace integration result
+  debug:
+    var: dynatrace_integration_response.json

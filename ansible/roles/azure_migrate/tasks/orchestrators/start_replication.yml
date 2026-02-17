@@ -1,0 +1,81 @@
+---
+# Orchestrator for start_replication action
+# Handles execution, result collection, and summary display
+
+- name: Include start replication tasks
+  ansible.builtin.include_tasks: start_replication.yml
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
+    azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
+    target_network_id: "{{ vm_spec.target_network_id | default(manifest_data.target_network_id | default('')) }}"
+    target_subnet_name: "{{ vm_spec.target_subnet_name | default(manifest_data.target_subnet_name | default('')) }}"
+    target_vm_size: "{{ vm_spec.target_vm_size | default(manifest_data.target_vm_size | default('')) }}"
+    target_license_type: "{{ vm_spec.target_license_type | default(manifest_data.target_license_type | default('')) }}"
+    target_disk_type: "{{ vm_spec.target_disk_type | default(manifest_data.target_disk_type | default('')) }}"
+    target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
+    os_disk_scsi_id: "{{ vm_spec.os_disk_scsi_id | default(manifest_data.os_disk_scsi_id | default('')) }}"
+    global_tags: "{{ manifest_data.global_tags | default({}) }}"
+    vm_tags: "{{ vm_spec.tags | default({}) }}"
+    dry_run: "{{ dry_run | default(false) }}"
+
+- name: Collect replication results
+  ansible.builtin.set_fact:
+    all_replication_results: "{{ all_replication_results | default([]) + [vm_result] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: >-
+        {{
+          'resumed' if (
+            all_replication_outputs[vm_item.name].was_resumed | default(false)
+            and all_replication_outputs[vm_item.name].replication_json.Success | default(false)
+          )
+          else (
+            'success' if (all_replication_outputs[vm_item.name].changed | default(false))
+            else (
+              'already_configured' if (
+                (all_replication_outputs[vm_item.name].rc | default(1)) == 0
+                and not (all_replication_outputs[vm_item.name].changed | default(false))
+              )
+              else 'failed'
+            )
+          )
+        }}
+      changed: "{{ all_replication_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_replication_outputs[vm_item.name].stderr | default('') }}"
+      output: "{{ all_replication_outputs[vm_item.name].stdout | default('') }}"
+  when: all_replication_outputs is defined
+
+- name: Build replication summary details
+  ansible.builtin.set_fact:
+    replication_summary_details: "{{ replication_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_replication_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: all_replication_results is defined and all_replication_results | length > 0
+
+- name: Display migration replication summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration replication summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Resumed: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'resumed') | list | length }}"
+      - "Already configured: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'already_configured') | list | length }}"
+      - "Failed: {{ all_replication_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ replication_summary_details | default([]) | join('\n  ') }}"
+  when: all_replication_results is defined

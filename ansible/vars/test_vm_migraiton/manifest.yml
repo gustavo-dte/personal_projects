@@ -1,0 +1,261 @@
+## Manifest for migration replication
+# Add uninstall step
+
+# Global defaults
+app_name: testApp
+environment: dev
+target_gh_repo: dteenergy/cloud-platform-isolation-zone-subscription-corpapps
+azure_migrate_project_name: azure-migrate-automation
+azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
+azure_migrate_subscription_id: 00d26f19-0dc3-4c90-9c6b-2e9ce8b14f5a
+target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
+target_resource_group: rg-cu-CorpApps-MigrationTest-Dev
+os_disk_scsi_id: scsi0:0
+
+# Azure Update Manager / Patch scheduling defaults
+update_manager:
+  policy_assignment_name: PeriodicAssessMissingUpdates-Windows
+  remediation_name: Remediate-PeriodicAssess
+  # ISO8601 start time for scheduled patch window (e.g. "2025-10-16T00:00:00Z")
+  patch_start_time: null
+  # When true, skip running the real assessment during dry-run
+  skip_assessment_in_dry_run: true
+
+  # Maintenance (InGuestPatch) configuration defaults
+  maintenance:
+    resource_group: null
+    config_name: PatchConfig-InGuestPatch
+    assignment_name: Assign-PatchConfig
+    location: null
+    window_duration: "03:00"
+    window_recur_every: "7days"
+    window_start_date_time: null
+    window_time_zone: UTC
+    windows:
+      kb_exclude: ""
+      kb_include: ""
+      classifications: Critical
+    reboot_setting: IfRequired
+    ingest_patch_mode: User
+
+# Azure Backup defaults
+enable_backup: true
+backup_vault_resource_group_name: rg-cu-CorpApps-MigrationTest-Dev
+backup_vault_name: backup-vault-cu-dev-migration-test
+backup_vault_policy_name: daily-migration-test-vm-backup-policy
+
+# Dynatrace configuration for Azure VM monitoring
+# Role reads these values from manifest_data.dynatrace
+dynatrace:
+  # If null the role will default to manifest top-level target_resource_group
+  resource_group: null
+  # Tag selection for target VMs (role will filter by this tag)
+  vm_tag_key: dynatrace
+  vm_tag_value: "true"
+
+  # Azure Variables for Dynatrace monitoring integration
+  azure_subscription_id: "<subscription_id>"
+  azure_app_name: "dynatrace-monitoring"
+  azure_role_name: "Reader"
+  azure_secret_duration: 2 # years (default secret expiry)
+
+  # Dynatrace connection - store sensitive token in ansible-vault
+  env_id: "rya18973"                                 # Dynatrace environment/tenant ID
+  url: "https://rya18973.live.dynatrace.com"         # e.g. https://<your-tenant>.live.dynatrace.com
+
+  # Alerting profile configuration (minimal example)
+  alerting_profile_name: "Azure VM Monitoring - Ansible Managed"
+  alerting_profile:
+    name: "Azure VM Monitoring - Ansible Managed"
+    severityRules: []
+    eventFilters: []
+
+  # Extension and install behavior
+  extension_version: "1.*"
+  install_extension_async: false
+  # When true, skip performing real changes (create/update) in dry-run
+  skip_in_dry_run: true
+
+# Azure VMSS defaults
+vmss_enabled: true
+vmss_config:
+  health_probe_settings:
+    protocol: tcp
+    port: 3389
+  automatic_instance_repair:
+    enabled: true
+    grace_period: PT10M
+    repair_action: Restart
+
+# Network configuration
+target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
+target_subnet_name: main
+test_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
+
+# VM configuration
+target_vm_size: Standard_D4s_v5
+target_license_type: NoLicenseType
+target_disk_type: Standard_LRS
+
+# Global tag defaults for Azure Migrate replication
+# These tags will be applied to VM, Disk, and NIC resources
+global_tags:
+  Application: "Movit"
+  BillTo: "200000060548"
+  BusinessCriticality: "Tier 4"
+  ContactEmail: "cloudplatform@dteenergy.com"
+  DataClassification: "Internal"
+  ItAppOwnerEmail: "cloudplatform@dteenergy.com"
+  Environment: "Dev"
+  Portfolio: "CorpApps"
+  Project: "VVMWare"
+
+# Default list of software to uninstall
+uninstall_tools_list:
+  - Puppet Agent
+  - VMware Tools
+  - EMC PowerPath
+  - HP Insight Management Agents
+  - EMC Avamar
+
+# List of VMs to replicate
+vms:
+  - name: dca-dev7048
+    target_vm_name: vmcuwinwebd01
+    description: "Server created to test migration pipeline"
+    target_vm_size: Standard_D2s_v5
+    target_license_type: WindowsServer
+    target_disk_type: Standard_LRS
+    portfolio: Test-Portfolio
+    tier: 4
+    env: dev
+    app_name: web
+
+    nsg_rules:
+      allow-rdp:
+        priority: 1000
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        destination_port_range: "3389"
+        source_address_prefixes: ["10.0.0.0/8"]
+
+    backup:
+      enable_backup: true
+      backup_vault_name: backup-vault-cu-dev-migration-test
+      backup_vault_resource_group_name: rg-cu-CorpApps-MigrationTest-Dev
+      backup_vault_policy_name: daily-migration-test-vm-backup-policy
+
+    # VM-specific tag overrides (optional)
+    # These will override global_tags for this specific VM
+    tags:
+      Environment: "Dev"
+      Portfolio: "CorpApps"
+      # Any tags not specified here will use global_tags values
+
+# List of load balancers to create
+# Each load balancer can reference multiple VMs by their target_vm_name
+load_balancers:
+  # Name is the suffix of lb name (will be prefixed with dte-lb-<location>-<env>-)
+  # Suffix character limit is 10 characters
+  - name: int-web
+    description: "Internal load balancer for web tier"
+    load_balancer_sku: Standard
+    load_balancer_sku_tier: Regional
+
+    # Frontend IP configurations
+    # For internal LB: use subnet_id and optionally private_ip_address
+    # For public LB: use either public_ip_address_id (existing IP) or create_public_ip=true (create new IP)
+    frontend_ip_configurations:
+      - name: frontend-ip-internal
+        subnet_id: main
+        private_ip_address_allocation: Dynamic
+        # For public LB with existing IP:
+        # subnet_id: null
+        # public_ip_address_id: "/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/publicIPAddresses/..."
+        # For public LB creating new IP:
+        # subnet_id: null
+        # create_public_ip: true
+        # public_ip_name: "pip-lb-example"
+        # domain_name_label: "lb-example"  # Optional: creates DNS name
+
+    # Health probes configuration
+    health_probes:
+      http-probe:
+        name: http-probe
+        port: 80
+        protocol: Http
+        request_path: /health
+        interval_in_seconds: 15
+        number_of_probes: 2
+
+    # Load balancer rules
+    # If backend_pool_name is not specified, uses the default backend pool
+    load_balancer_rules:
+      http-rule:
+        name: http-rule
+        protocol: Tcp
+        frontend_port: 80
+        backend_port: 80
+        frontend_ip_configuration_name: frontend-ip-internal
+        backend_pool_name: null  # Uses default pool when null, or specify pool key from backend_address_pools
+        probe_name: http-probe
+        floating_ip_enabled: false
+        tcp_reset_enabled: true
+        idle_timeout_in_minutes: 4
+        load_distribution: Default
+        disable_outbound_snat: false
+
+    # List of VM target_vm_names to associate with this load balancer
+    # The template will automatically resolve these to NIC IDs
+    vm_names:
+      - vmcuwinwebd01
+
+    # Optional: Backend address pools configuration
+    # If not specified, a default pool will be created with the VMs from vm_names
+    # If specified, each pool can have its own name and network_interface_ids
+    # Note: When using backend_address_pools, you must manually specify network_interface_ids for each pool
+    backend_address_pools: null
+    # Example with multiple pools:
+    # backend_address_pools:
+    #   web-pool:
+    #     name: "lb-web-backend"
+    #     network_interface_ids: ["/subscriptions/.../networkInterfaces/nic-web1"]
+    #   api-pool:
+    #     name: "lb-api-backend"
+    #     network_interface_ids: ["/subscriptions/.../networkInterfaces/nic-api1"]
+
+
+    # Optional: Availability set configuration
+    # create_availability_set: true
+    # availability_set_name: null  # Defaults to '{name}-avset' if create_availability_set is true
+    # availability_set_platform_fault_domain_count: 2
+    # availability_set_platform_update_domain_count: 5
+    # availability_set_managed: true
+
+    # Optional: Load balancer-specific tags (will merge with global_tags)
+    tags:
+      Application: "WebTier"
+      # Any tags not specified here will use global_tags values
+
+# List of SQL VMs to replicate
+sqlvms:
+  - name: dca-dev7048
+    description: "Server created to test migration pipeline"
+    target_vm_size: Standard_D2s_v5
+    target_license_type: WindowsServer
+    target_disk_type: Standard_LRS
+    portfolio: Test-Portfolio
+    tier: 4
+    env: dev
+    app_name: test-app
+
+    backup:
+      recovery_vault_name: cloud-platform-prod-cu-backup-vault
+
+    # VM-specific tag overrides (optional)
+    # These will override global_tags for this specific VM
+    tags:
+      Environment: "Dev"
+      Portfolio: "CorpApps"
+      # Any tags not specified here will use global_tags values

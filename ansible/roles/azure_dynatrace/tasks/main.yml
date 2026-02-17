@@ -1,0 +1,61 @@
+---
+# azure_dynatrace role - main orchestrator
+- name: Load manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+  when: manifest is defined
+
+- name: "Ensure Azure collections are available (informational)"
+  ansible.builtin.debug:
+    msg: "Make sure ansible-galaxy collection azure.azcollection is installed."
+
+- name: Enable Azure for VM using azure extension
+  block:
+    # Discover VMs (list resources then filter by tag) - shared input for sub-tasks
+    - name: "Gather Azure resources of type virtualMachines"
+      azure.azcollection.azure_rm_resource_info:
+        type: "Microsoft.Compute/virtualMachines"
+        resource_group: "{{ manifest_data.dynatrace.resource_group | default(azure_resource_group | default(omit)) }}"
+      register: azure_vms_raw
+
+    - name: "Filter VMs by tag"
+      set_fact:
+        dynatrace_target_vms: >-
+          {{
+            (azure_vms_raw.resources | default([]))
+            | selectattr('tags', 'defined')
+            | selectattr('tags', 'contains', (manifest_data.dynatrace.vm_tag_key | default(vm_tag_key)))
+            | selectattr('tags.' ~ (manifest_data.dynatrace.vm_tag_key | default(vm_tag_key)), 'equalto', manifest_data.dynatrace.vm_tag_value | default(vm_tag_value))
+            | list
+          }}
+
+    - name: "Show discovered VM count"
+      ansible.builtin.debug:
+        msg: "Will configure Dynatrace on {{ dynatrace_target_vms | length }} VM(s)."
+
+    # Include extension installation (per-VM)
+    - name: Install Dynatrace extension on VMs
+      import_tasks: install_extension.yml
+
+    # Include Dynatrace settings management (alerting profile)
+    - name: Manage Dynatrace alerting profile
+      import_tasks: manage_alerting.yml
+  when: enable_vm_monitoring | default(false)
+
+- name: Azure Monitoring API integration for SQL DB
+  block:
+    # Include extension installation (per-VM)
+    - name: setup azure app for dynatrace integration
+      import_tasks: azure_app.yml
+
+    # Include extension installation (per-VM)
+    - name: add Dynatrace integration
+      import_tasks: dynatrace_integration.yml
+
+    # Include Dynatrace settings management (alerting profile)
+    - name: Manage Dynatrace alerting profile
+      import_tasks: manage_alerting.yml
+  when: enable_sql_monitoring | default(false)

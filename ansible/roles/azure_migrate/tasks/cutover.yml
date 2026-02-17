@@ -1,0 +1,437 @@
+---
+# Perform migration cutover using Azure Migrate
+# Completes migration by creating target VMs in Azure
+# This task is designed to be called in a loop over VMs from a manifest
+
+- name: Skip if dry run
+  ansible.builtin.meta: end_play
+  when: dry_run | bool
+
+- name: Verify prerequisites for cutover
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: azure_verify_prerequisites
+
+- name: Assert required variables for cutover
+  ansible.builtin.assert:
+    that:
+      - (azure_migrate_project_name | default('')) | length > 0
+      - (azure_migrate_project_resource_group | default('')) | length > 0
+      - (vm_name | default('')) | length > 0
+      - (target_resource_group | default('')) | length > 0
+    fail_msg: |
+      Missing required variables for cutover:
+      - azure_migrate_project_name: {{ azure_migrate_project_name | default('NOT SET') }}
+      - azure_migrate_project_resource_group: {{ azure_migrate_project_resource_group | default('NOT SET') }}
+      - vm_name: {{ vm_name | default('NOT SET') }}
+      - target_resource_group: {{ target_resource_group | default('NOT SET') }}
+
+- name: Display cutover operation details
+  ansible.builtin.debug:
+    msg:
+      - Starting cutover operation
+      - "VM: {{ vm_name }}"
+      - "Project: {{ azure_migrate_project_name }}"
+      - "Resource Group: {{ azure_migrate_project_resource_group }}"
+      - "Target Resource Group: {{ target_resource_group | default('NOT SET') }}"
+      - "Subscription: {{ target_subscription_id | default('Current') }}"
+      - "Shutdown Source: {{ shutdown_source_vm | default(false) }}"
+
+- name: Check current replication status before cutover
+  block:
+    - name: Get replication status for VM
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/get_replication_status.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group }}
+        -VMNamesJson '["{{ vm_name }}"]'
+        -SubscriptionId {{ azure_migrate_subscription_id | default(target_subscription_id | default('')) }}
+      register: replication_status_check
+      changed_when: false
+
+    - name: Read JSON results from file
+      ansible.builtin.slurp:
+        src: get_replication_status_result.json
+      register: json_file_content
+      failed_when: false
+
+    - name: Parse JSON content and set replication data
+      ansible.builtin.set_fact:
+        replication_json: "{{ json_file_content.content | b64decode | from_json }}"
+      when: json_file_content.failed is not defined or not json_file_content.failed
+
+    - name: Set default replication data if file read failed
+      ansible.builtin.set_fact:
+        replication_json:
+          VMName: "{{ vm_name }}"
+          ReplicationStatus: "Error"
+          Error: "Failed to read replication status result file"
+      when: json_file_content.failed is defined and json_file_content.failed
+
+    - name: Display replication status context
+      ansible.builtin.debug:
+        msg: |
+          Replication Status Context:
+          - Migration State: '{{ replication_json.MigrationState | default('N/A') }}'
+          - Migration Description: '{{ replication_json.MigrationStateDescription | default('N/A') }}'
+          - VM Name: '{{ replication_json.VMName | default('N/A') }}'
+          - Target VM Name: '{{ replication_json.TargetVMName | default('N/A') }}'
+          - Replication Status: '{{ replication_json.ReplicationStatus | default('N/A') }}'
+          - Current Job: '{{ replication_json.CurrentJobName | default('N/A') }}'
+          - Allowed Operations: {{ replication_json.AllowedOperationStrings | default([]) | join(', ') if replication_json.AllowedOperationStrings | default([]) | length > 0 else 'None' }}
+          - Azure Migrate Subscription: {{ azure_migrate_subscription_id | default('Not set') }}
+          - Target Subscription: {{ target_subscription_id | default('Not set') }}
+          - Error (if any): {{ replication_json.Error | default('None') }}
+
+    - name: Parse and validate replication status
+      ansible.builtin.set_fact:
+        replication_status_results: "{{ replication_json }}"
+        vm_ready_for_cutover: "{{ vm_is_ready }}"
+        current_replication_status: "{{ current_status }}"
+        current_migration_state: "{{ migration_state }}"
+        current_migration_description: "{{ migration_description }}"
+        replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
+        replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
+      vars:
+        vm_is_ready: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error', 'Not Replicating', 'Failed', 'Unknown'] }}"
+        current_status: "{{ replication_json.ReplicationStatus | default('Unknown') }}"
+        migration_state: "{{ replication_json.MigrationState | default('Unknown') }}"
+        migration_description: "{{ replication_json.MigrationStateDescription | default('Unknown') }}"
+
+    - name: Handle "Solution not found" error
+      ansible.builtin.fail:
+        msg: |
+          ❌ Azure Migrate solution not found for VM '{{ vm_name }}'
+
+          This error typically means:
+          1. The Azure Migrate project '{{ azure_migrate_project_name }}' doesn't exist
+          2. The VM '{{ vm_name }}' hasn't been discovered/assessed yet
+          3. The project name or resource group is incorrect
+          4. Insufficient permissions to access the Azure Migrate project
+
+          Troubleshooting steps:
+          - Verify the Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check the project resource group: {{ azure_migrate_project_resource_group }}
+          - Verify the target subscription ID: {{ target_subscription_id }}
+          - Ensure the VM has been discovered and assessed in Azure Migrate
+          - Verify you have proper permissions on both Azure Migrate and target subscriptions
+          - Check if the VM name matches exactly (case-sensitive)
+
+          Error details: {{ replication_error_message }}
+      when: replication_error and "Solution not found" in replication_error_message
+
+  rescue:
+    - name: Fail when replication status check fails
+      ansible.builtin.fail:
+        msg: |
+          Failed to check replication status for VM '{{ vm_name }}'.
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          Cannot proceed with cutover without valid replication status.
+
+# Check for migration completion and skip cutover if already done
+- name: Check migration completion status
+  block:
+
+    - name: Determine if VM is ready for cutover
+      ansible.builtin.set_fact:
+        vm_ready_for_cutover: >-
+          {{
+            (replication_json.get('MigrationState', '') != 'MigrationSucceeded') and
+            (replication_json.get('MigrationStateDescription', '') != 'Migrated') and
+            ('Migrate' in (replication_json.get('AllowedOperationStrings', []))) and
+            (replication_json.get('MigrationStateDescription', '') == 'Ready to migrate')
+          }}
+
+    - name: Set skip_cutover based on readiness
+      ansible.builtin.set_fact:
+        skip_cutover: "{{ not vm_ready_for_cutover }}"
+
+    - name: Display cutover proceed message
+      ansible.builtin.debug:
+        msg: |
+          - ✅ PROCEEDING: VM is ready for migration cutover
+      when: vm_ready_for_cutover
+
+    - name: Display skip message and set result
+      block:
+        - name: Display skip message
+          ansible.builtin.debug:
+            msg: |
+              ⚠️ SKIPPING CUTOVER for VM '{{ vm_name }}'
+
+              Current VM Status:
+              - MigrationState: {{ replication_json.get('MigrationState', 'Unknown') }}
+              - MigrationStateDescription: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
+              - Available Operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
+
+              {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
+              Reason: Migration already completed successfully
+              {% elif replication_json.get('MigrationStateDescription') == 'Migrated' %}
+              Reason: VM is already migrated
+              {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
+              Reason: VM not found in replication list
+              {% elif 'Migrate' not in (replication_json.get('AllowedOperationStrings', [])) %}
+              Reason: VM is not ready for migration (Migrate operation not allowed)
+              {% elif replication_json.get('MigrationStateDescription', '') != 'Ready to migrate' %}
+              Reason: VM state is not "Ready to migrate"
+              {% else %}
+              Reason: VM does not meet cutover requirements
+              {% endif %}
+
+              No cutover operation will be performed.
+
+        - name: Set cutover result for skipped operation
+          ansible.builtin.set_fact:
+            cutover_result:
+              VMName: "{{ vm_name }}"
+              Success: true
+              Status: >-
+                {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
+                AlreadyCompleted
+                {% elif replication_json.get('MigrationStateDescription') == 'Migrated' %}
+                AlreadyCompleted
+                {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
+                NotFound
+                {% else %}
+                NotReady
+                {% endif %}
+              MigrationState: "{{ replication_json.get('MigrationState', 'Unknown') }}"
+              MigrationStateDescription: "{{ replication_json.get('MigrationStateDescription', 'Unknown') }}"
+              ReplicationStatus: "{{ replication_json.get('ReplicationStatus', 'Unknown') }}"
+              TargetVMName: "{{ replication_json.get('TargetVMName', 'Unknown') }}"
+              CurrentJobName: "{{ replication_json.get('CurrentJobName', '') }}"
+              AllowedOperations: "{{ replication_json.get('AllowedOperationStrings', []) | join(', ') }}"
+              Message: >-
+                {% if replication_json.get('MigrationState') == 'MigrationSucceeded' %}
+                Migration was already completed successfully - no cutover needed
+                {% elif replication_json.get('ReplicationStatus') == 'Not Found' %}
+                VM not found in Azure Migrate replication list
+                {% elif 'Migrate' not in (replication_json.get('AllowedOperationStrings', [])) %}
+                VM is not ready for migration - current operations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') }}
+                {% elif replication_json.get('MigrationStateDescription', '') != 'Ready to migrate' %}
+                VM state is not ready for migration - current state: {{ replication_json.get('MigrationStateDescription', 'Unknown') }}
+                {% else %}
+                VM does not meet cutover requirements
+                {% endif %}
+              JobId: null
+              StartTime: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%SZ') }}"
+
+        - name: End play if cutover skipped
+          ansible.builtin.meta: end_play
+      when: skip_cutover | bool
+
+# ========================================
+# CUTOVER EXECUTION (Only runs if VM is ready)
+# ========================================
+
+- name: Validate VM is ready for cutover
+  block:
+    - name: Check for force cutover option
+      ansible.builtin.set_fact:
+        force_cutover_enabled: "{{ force_cutover | default(false) | bool }}"
+
+    - name: Display warning if forcing cutover
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  WARNING: Force cutover enabled - bypassing replication status validation
+
+          Migration State: {{ current_migration_state }}
+          Migration Description: {{ current_migration_description }}
+          Replication Status: {{ current_replication_status }}
+          VM Ready for Cutover: {{ vm_ready_for_cutover }}
+
+          Proceeding with cutover anyway due to force_cutover=true...
+      when: force_cutover_enabled and not vm_ready_for_cutover
+
+    - name: Fail if VM is not ready and force is not enabled
+      ansible.builtin.fail:
+        msg: |
+          ❌ VM '{{ vm_name }}' is not ready for cutover.
+
+          Migration State: {{ current_migration_state }}
+          Migration Description: {{ current_migration_description }}
+          Replication Status: {{ current_replication_status }}
+          VM Ready for Cutover: {{ vm_ready_for_cutover }}
+
+          ⚠️  IMPORTANT: Migration state check details.
+
+          The VM migration state shows '{{ current_migration_state }}' with description '{{ current_migration_description }}',
+          and replication status shows '{{ current_replication_status }}'.
+
+          For cutover to proceed, the VM must have:
+          1. 'Migrate' in AllowedOperations: {{ 'Migrate' in (replication_json.get('AllowedOperationStrings', [])) }}
+          2. MigrationStateDescription = 'Ready to migrate': {{ replication_json.get('MigrationStateDescription', '') == 'Ready to migrate' }}
+
+          🔍 Current VM State:
+          - AllowedOperations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
+          - MigrationStateDescription: {{ replication_json.get('MigrationStateDescription', 'Not defined') }}
+          - MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
+
+          💡 Possible Solutions:
+          - If VM migration already completed successfully (MigrationState = MigrationSucceeded), no further action needed
+          - If VM needs test migration first, run test migration before cutover
+          - If VM is ready but check failed, use: --extra-vars "force_cutover=true"
+          - Check Azure Migrate portal for detailed VM migration status
+
+          📋 Full replication data: {{ replication_json }}
+      when: not vm_ready_for_cutover and not force_cutover_enabled
+  when: not (skip_cutover | default(false) | bool)
+
+- name: Display success message when VM is ready
+  ansible.builtin.debug:
+    msg: |
+      ✅ VM '{{ vm_name }}' is ready for cutover
+
+      Migration State: {{ current_migration_state }}
+      Migration Description: {{ current_migration_description }}
+      Replication Status: {{ current_replication_status }}
+      Proceeding with cutover operation...
+  when: (vm_ready_for_cutover or force_cutover_enabled) and not (skip_cutover | default(false) | bool)
+
+- name: Perform cutover operation
+  block:
+    - name: Final check before PowerShell execution
+      ansible.builtin.fail:
+        msg: "ERROR: PowerShell cutover should not run - migration already completed (skip_cutover = {{ skip_cutover | default('undefined') }})"
+      when: skip_cutover | default(false) | bool
+
+    - name: Run cutover.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/cutover.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group }}
+        -MachineName {{ vm_name }}
+        -SubscriptionId {{ azure_migrate_subscription_id | default('target_subscription_id') | default('') }}
+        {{ '-ShutdownSourceVM' if (shutdown_source_vm | default(false)) else '' }}
+        {{ ('-TargetVMName ' ~ target_vm_name) if (target_vm_name | default('') | length) > 0 else '' }}
+      register: cutover_output
+      changed_when: false  # Will be set correctly after parsing results
+
+    - name: Check if JSON file exists
+      ansible.builtin.stat:
+        path: cutover_result.json
+      register: json_file_stat
+
+    - name: Read JSON results from file
+      ansible.builtin.slurp:
+        src: cutover_result.json
+      register: cutover_json_file_content
+      when: json_file_stat.stat.exists
+
+    - name: Parse JSON content and set cutover result
+      ansible.builtin.set_fact:
+        cutover_result: "{{ cutover_json_file_content.content | b64decode | from_json }}"
+      when: json_file_stat.stat.exists
+
+    - name: Set changed status based on actual work performed
+      ansible.builtin.set_fact:
+        cutover_output: "{{ cutover_output | combine({'changed': cutover_result.get('Status') in ['Initiated', 'InProgress'] and cutover_result.get('Success', false)}) }}"
+      when: json_file_stat.stat.exists and cutover_result is defined
+
+    - name: Handle case when JSON file doesn't exist
+      ansible.builtin.set_fact:
+        cutover_result:
+          Status: "Failed"
+          Error: "JSON result file not created"
+          Message: "PowerShell script did not create cutover_result.json file"
+          ExitCode: "{{ cutover_output.rc | default(-1) }}"
+          Success: false
+          VMName: "{{ vm_name }}"
+          RawOutput: "{{ cutover_output.stdout | default('') }}"
+          RawError: "{{ cutover_output.stderr | default('') }}"
+      when: not json_file_stat.stat.exists
+
+  rescue:
+    - name: Handle any errors in cutover execution
+      ansible.builtin.set_fact:
+        cutover_result:
+          Status: "Failed"
+          Error: "Cutover execution failed"
+          Message: "Error during cutover operation - check logs"
+          ExitCode: "{{ cutover_output.rc | default(-1) }}"
+          Success: false
+          VMName: "{{ vm_name }}"
+          RawOutput: "{{ cutover_output.stdout | default('') }}"
+          RawError: "{{ cutover_output.stderr | default('') }}"
+          AnsibleError: "{{ ansible_failed_result.msg | default('') }}"
+  when: not (skip_cutover | default(false) | bool)
+
+- name: Display cutover result
+  ansible.builtin.debug:
+    msg:
+      - Cutover Result
+      - "VM: {{ vm_name }} - {{ cutover_result.get('Status', 'Unknown') }}"
+      - >-
+        {% if cutover_result.get('Status') == 'Initiated' -%}
+        Message: Cutover initiated successfully - {{ cutover_result.get('Message', 'Azure will create the target VM') }}
+        {%- elif cutover_result.get('Status') == 'Skipped' -%}
+        Message: {{ cutover_result.get('Message', 'Cutover was skipped') }}
+        {%- elif cutover_result.get('Status') == 'AlreadyCompleted' -%}
+        Message: {{ cutover_result.get('Message', 'Migration was already completed') }}
+        {%- elif cutover_result.get('Status') == 'AlreadyInProgress' -%}
+        Message: {{ cutover_result.get('Message', 'Migration is already in progress') }}
+        {%- else -%}
+        Message: {{ cutover_result.get('Message', 'No additional details available') }}
+        {%- endif %}
+      - >-
+        {% if cutover_result.get('Status') == 'Initiated' -%}
+        Target VM: Will be created by Azure (name may be auto-generated)
+        {%- elif cutover_result.get('TargetVMName') and cutover_result.get('TargetVMName') != 'Unknown' -%}
+        Target VM: {{ cutover_result.get('TargetVMName') }}
+        {%- else -%}
+        Target VM: {{ cutover_result.get('TargetVMName', 'Not applicable') }}
+        {%- endif %}
+      - >-
+        {% if cutover_result.get('JobId') -%}
+        Job ID: {{ cutover_result.get('JobId') }}
+        {%- endif %}
+      - "Changed: {{ cutover_output.changed | default(false) }}"
+
+- name: Show detailed cutover CLI output
+  ansible.builtin.debug:
+    var: cutover_output
+  when: ansible_verbosity >= 1
+
+- name: Show cutover operation summary
+  ansible.builtin.debug:
+    msg:
+      - >-
+        {% if cutover_result is defined and cutover_result.get('Status') == 'Initiated' -%}
+        ✅ Cutover operation initiated for '{{ vm_name }}'
+        {%- elif cutover_result is defined and cutover_result.get('Status') == 'Skipped' -%}
+        ⚠️ Cutover operation skipped for '{{ vm_name }}'
+        {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted' -%}
+        ℹ️ Migration already completed for '{{ vm_name }}'
+        {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress' -%}
+        🔄 Migration already in progress for '{{ vm_name }}'
+        {%- elif cutover_result is defined and cutover_result.get('Status') == 'Failed' -%}
+        ❌ Cutover operation failed for '{{ vm_name }}'
+        {%- elif cutover_result is defined -%}
+        Cutover operation completed for '{{ vm_name }}'
+        {%- else -%}
+        ⚠️ Cutover result not available for '{{ vm_name }}'
+        {%- endif %}
+      - "Status: {{ cutover_result.get('Status', 'Unknown') if cutover_result is defined else 'Not Available' }}"
+      - >-
+        {% if cutover_result is defined and cutover_result.get('JobId') and cutover_result.get('Status') == 'Initiated' -%}
+        Monitor job: {{ cutover_result.get('JobId') }}
+        {%- endif %}
+      - >-
+        {% if cutover_result is defined and cutover_result.get('CurrentJobName') and cutover_result.get('Status') == 'AlreadyInProgress' -%}
+        Monitor existing job: {{ cutover_result.get('CurrentJobName') }}
+        {%- endif %}
+      - >-
+        {% if not (shutdown_source_vm | default(false)) and cutover_result is defined and cutover_result.get('Status') == 'Initiated' -%}
+        Manual shutdown may be required for source VM
+        {%- endif %}
+      - >-
+        {% if cutover_result is defined and cutover_result.get('Message') and cutover_result.get('Status') in ['AlreadyCompleted', 'Skipped', 'AlreadyInProgress', 'Failed'] -%}
+        {% if cutover_result.get('Status') == 'AlreadyCompleted' -%}✅ {%- endif -%}
+        {% if cutover_result.get('Status') == 'Skipped' -%}⚠️ {%- endif -%}
+        {% if cutover_result.get('Status') == 'AlreadyInProgress' -%}🔄 {%- endif -%}
+        {% if cutover_result.get('Status') == 'Failed' -%}❌ {%- endif -%}
+        {{ cutover_result.get('Message') }}
+        {%- endif %}
+      - "{{ '❌ ' ~ cutover_result.get('Message', 'No details available') if cutover_result is defined and cutover_result.get('Status') == 'Failed' else '' }}"

@@ -1,0 +1,6 @@
+---
+# Defaults for onprem-tools-uninstallation role (Azure Run Command path)
+# When true, play fails if the VM is not found in the resource group (recommended for production)
+fail_if_vm_not_found: true
+# When true, no uninstall is performed; only lookups and summaries
+dry_run: true

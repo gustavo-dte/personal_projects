@@ -1,0 +1,33 @@
+# TODO: This playbook has not been tested yet. Testing is pending due to Windows/Ansible compatibility issues locally.
+# The code will be validated when run in GitHub Actions (Linux environment where Ansible is fully supported).
+
+- name: Load manifest and build target inventory
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    manifest: "{{ manifest }}"
+  tasks:
+    - name: Load manifest via common role
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: load_manifest
+      vars:
+        manifest: "{{ manifest }}"
+
+    - name: Add each VM from manifest to in-memory inventory group 'target_vms'
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: target_vms
+      loop: "{{ manifest_data.vms }}"
+
+- name: Join Windows servers to domain
+  hosts: target_vms
+  gather_facts: false
+  tasks:
+    - name: Include win-domain-join role
+      ansible.builtin.include_role:
+        name: win-domain-join
+      vars:
+        manifest: "{{ manifest }}"
+        dry_run: "{{ dry_run | default(false) }}"

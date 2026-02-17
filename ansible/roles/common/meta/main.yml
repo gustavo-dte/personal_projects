@@ -1,0 +1,17 @@
+---
+# Common role metadata
+galaxy_info:
+  author: Cloud Platform Team
+  description: Common tasks and utilities for Azure operations
+  company: DTE Energy
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: EL
+      versions:
+        - all
+
+dependencies: []
+
+# Allow this role to be used as a dependency
+allow_duplicates: false

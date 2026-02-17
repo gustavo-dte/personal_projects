@@ -1,0 +1,75 @@
+---
+# Orchestrator for stop_replication action
+# Handles execution, result collection, and summary display
+
+- name: Compute filtered VM list for stop_replication
+  ansible.builtin.set_fact:
+    stop_vm_specs: "{{ (manifest_data.vms | default([])) | filter_vm_specs_by_names(vm_names | default('')) }}"
+
+- name: Ensure at least one VM specified for stop_replication
+  ansible.builtin.assert:
+    that:
+      - stop_vm_specs | length > 0
+    fail_msg: "❌ No VM names provided. Specify vm_names (comma-delimited) or use STOP_ALL to stop replication for all VMs in the manifest."
+
+- name: Include stop replication tasks
+  ansible.builtin.include_tasks: stop_replication.yml
+  loop: "{{ stop_vm_specs }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
+    azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
+    dry_run: "{{ dry_run | default(false) }}"
+
+- name: Collect stop replication results
+  ansible.builtin.set_fact:
+    all_stop_replication_results: "{{ all_stop_replication_results | default([]) + [vm_result] }}"
+  loop: "{{ stop_vm_specs }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: >-
+        {{
+          'success' if (all_stop_replication_outputs[vm_item.name].changed | default(false))
+          else (
+            'no_replication' if (
+              (all_stop_replication_outputs[vm_item.name].rc | default(1)) == 0
+              and not (all_stop_replication_outputs[vm_item.name].changed | default(false))
+            )
+            else 'failed'
+          )
+        }}
+      changed: "{{ all_stop_replication_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_stop_replication_outputs[vm_item.name].stderr | default('') }}"
+      output: "{{ all_stop_replication_outputs[vm_item.name].stdout | default('') }}"
+  when: all_stop_replication_outputs is defined
+
+- name: Build stop replication summary details
+  ansible.builtin.set_fact:
+    stop_replication_summary_details: "{{ stop_replication_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_stop_replication_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: all_stop_replication_results is defined and all_stop_replication_results | length > 0
+
+- name: Display migration stop replication summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration stop replication summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_stop_replication_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "No active replication: {{ all_stop_replication_results | default([]) | selectattr('status', 'equalto', 'no_replication') | list | length }}"
+      - "Failed: {{ all_stop_replication_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ stop_replication_summary_details | default([]) | join('\n  ') }}"
+  when: all_stop_replication_results is defined

@@ -1,0 +1,18 @@
+---
+# List Azure Migrate projects for testing purposes
+- name: List Azure Migrate projects
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
+    # Map common inputs to role variables
+    target_resource_group: "{{ resource_group | default('') }}"
+    target_subscription_id: "{{ subscription_id | default('') }}"
+    dry_run: "{{ dry_run | default(false) }}"
+  roles:
+    - role: common
+    - role: azure_migrate
+      vars:
+        migration_action: list_projects
+        dry_run: "{{ dry_run }}"

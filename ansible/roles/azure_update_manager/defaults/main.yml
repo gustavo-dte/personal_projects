@@ -1,0 +1,25 @@
+---
+# Defaults for azure_update_manager role
+# These provide safe fallback values. Manifest can override under `update_manager`.
+
+policy_assignment_name: "PeriodicAssessMissingUpdates-Windows"
+policy_assignment_name_linux: "PeriodicAssessMissingUpdates-Linux"
+remediation_name: "Remediate-PeriodicAssess"
+remediation_name_linux: "Remediate-PeriodicAssess-Linux"
+
+patch_start_time: null
+skip_assessment_in_dry_run: true
+
+maintenance_resource_group: null
+maintenance_config_name: "PatchConfig-InGuestPatch"
+maintenance_assignment_name: "Assign-PatchConfig"
+maintenance_location: null
+maintenance_window_duration: "03:00"
+maintenance_window_recur_every: "7days"
+maintenance_window_start_date_time: null
+maintenance_window_time_zone: "UTC"
+windows_kb_exclude: ""
+windows_kb_include: ""
+windows_classifications: "Critical"
+reboot_setting: "IfRequired"
+ingest_patch_mode: "User"

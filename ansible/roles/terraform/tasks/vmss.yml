@@ -1,0 +1,275 @@
+---
+# Create or discover VMSS and configure extensions/automatic repairs
+
+- name: Build per-VM vmss config merged with globals
+  ansible.builtin.set_fact:
+    vm_vmss_config: |  # pragma: allowlist secret
+      {{ {
+          'enabled': (vm.vmss_config.enabled
+                      | default(vm.vmss_enabled
+                      | default(manifest_data.vmss_enabled | default(false)))) | bool,
+          'name': vm.vmss_config.name
+                   | default(vm.vmss_name
+                   | default(manifest_data.vmss_name | default('vmss-' ~ vm.target_vm_name))),
+          'zones': (vm.vmss_config.zones
+                    | default(vm.vmss_zones
+                    | default(manifest_data.vmss_zones | default(['1'])))),
+          'admin_username': vm.vmss_config.admin_username
+                             | default(vm.vmss_admin_username
+                             | default(manifest_data.vmss_admin_username | default('azureuser'))),
+          'admin_password': vm.vmss_config.admin_password
+                             | default(vm.vmss_admin_password
+                             | default(manifest_data.vmss_admin_password | default('Thisisapassword123$'))),
+          'image': vm.vmss_config.image
+                    | default(vm.vmss_image
+                    | default(manifest_data.vmss_image | default('Win2022Datacenter'))),
+          'instance_count': (vm.vmss_config.instance_count
+                              | default(vm.vmss_instance_count
+                              | default(manifest_data.vmss_instance_count | default(0)))) | int,
+          'health_probe_settings': vm.vmss_config.health_probe_settings
+                                   | default(vm.vmss_health_probe_settings
+                                   | default(manifest_data.vmss_config.health_probe_settings | default({}))),
+          'automatic_repairs': (vm.vmss_config.automatic_repairs
+                                | default(vm.vmss_config.automatic_instance_repair)
+                                | default(vm.vmss_automatic_repairs)
+                                | default(vm.vmss_automatic_instance_repair)
+                                | default(manifest_data.vmss_config.automatic_instance_repair)
+                                | default({'enabled': true,'grace_period': 'PT30M','repair_action': 'Restart'}))
+        } }}
+
+- name: When VMSS not enabled, record null vmss_resource_id and skip
+  ansible.builtin.set_fact:
+    vmss_result: { 'id': null, 'name': null }
+  when: not (vm_vmss_config.enabled | bool)
+
+- name: Derive virtual network and subnet names from IDs
+  ansible.builtin.set_fact:
+    vmss_vnet_name: "{{ (target_network_id | default('') | split('/'))[-1] }}"
+    vmss_vnet_resource_group: "{{ (target_network_id | default('') | split('/'))[4] if (target_network_id | default('') | split('/') | length) > 4 else target_resource_group }}"
+    vmss_subnet_name: "{{ (target_subnet_name | default('') | split('/'))[-1] }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Compute OS-aware short hostname prefix
+  ansible.builtin.set_fact:
+    vmss_short_hostname: "{{ vm.target_vm_name | compute_vmss_short_hostname(vm.os_disk_os_type | default('Windows')) }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Compute health extension name by OS
+  ansible.builtin.set_fact:
+    vmss_health_extension_name: "{{ ((vm.os_disk_os_type | default('Windows')) | lower == 'linux') | ternary('ApplicationHealthLinux','ApplicationHealthWindows') }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Set health extension type equal to name
+  ansible.builtin.set_fact:
+    vmss_health_extension_type: "{{ vmss_health_extension_name }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Merge global tags with VM-specific tags for VMSS
+  ansible.builtin.set_fact:
+    vmss_tags: "{{ global_tags | default({}) | combine(vm.tags | default({}), recursive=True) }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Check if VMSS already exists
+  block:
+    - name: Get VMSS information
+      azure.azcollection.azure_rm_resource:
+        url: "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Compute/virtualMachineScaleSets/{{ vm_vmss_config.name }}?api-version=2023-09-01"
+        method: GET
+      register: vmss_existence_check
+      changed_when: false
+      ignore_errors: true
+      when: vm_vmss_config.enabled | bool
+
+    - name: Set VMSS existence flag to true
+      ansible.builtin.set_fact:
+        vmss_exists: true
+      when:
+        - vm_vmss_config.enabled | bool
+        - vmss_existence_check.response is defined
+
+  rescue:
+    - name: Set VMSS existence flag to false
+      ansible.builtin.set_fact:
+        vmss_exists: false
+      when: vm_vmss_config.enabled | bool
+
+  when: vm_vmss_config.enabled | bool
+
+- name: Set VMSS existence flag default
+  ansible.builtin.set_fact:
+    vmss_exists: false
+  when:
+    - vm_vmss_config.enabled | bool
+    - vmss_exists is not defined
+
+- name: Create VMSS
+  azure.azcollection.azure_rm_virtualmachinescaleset:
+    resource_group: "{{ target_resource_group }}"
+    name: "{{ vm_vmss_config.name }}"
+    subscription_id: "{{ target_subscription_id }}"
+    state: present
+    location: "{{ (primary_region | lower | regex_replace('\\s+', '')) }}"
+    orchestration_mode: Flexible
+    vm_size: "{{ vm.target_vm_size | default(manifest_data.target_vm_size | default('Standard_DS1_v2')) }}"
+    tier: Standard
+    capacity: "{{ vm_vmss_config.instance_count }}"
+    image:
+      offer: "{{ (vm_vmss_config.image == 'Win2022Datacenter') | ternary('WindowsServer', 'WindowsServer') }}"
+      publisher: MicrosoftWindowsServer
+      sku: "{{ (vm_vmss_config.image == 'Win2022Datacenter') | ternary('2022-datacenter-g2', vm_vmss_config.image) }}"
+      version: latest
+    admin_username: "{{ vm_vmss_config.admin_username }}"
+    admin_password: "{{ vm_vmss_config.admin_password }}"
+    os_type: "{{ ((vm.os_disk_os_type | default('Windows')) | lower == 'linux') | ternary('Linux', 'Windows') }}"
+    short_hostname: "{{ vmss_short_hostname }}"
+    single_placement_group: false
+    virtual_network_name: "{{ vmss_vnet_name }}"
+    virtual_network_resource_group: "{{ vmss_vnet_resource_group }}"
+    subnet_name: "{{ vmss_subnet_name }}"
+    tags: "{{ vmss_tags | default({}) }}"
+  register: create_vmss
+  when:
+    - vm_vmss_config.enabled | bool
+    - not (vmss_exists | default(false))
+
+- name: Set vmss id fact (created)
+  ansible.builtin.set_fact:
+    vmss_result:
+      id: "{{ create_vmss.id | default('/subscriptions/' ~ target_subscription_id ~ '/resourceGroups/' ~ target_resource_group ~ '/providers/Microsoft.Compute/virtualMachineScaleSets/' ~ vm_vmss_config.name) }}"
+      name: "{{ vm_vmss_config.name }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Get VMSS details (for extension and repairs status)
+  azure.azcollection.azure_rm_resource:
+    url: "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Compute/virtualMachineScaleSets/{{ vm_vmss_config.name }}?api-version=2023-09-01"
+    method: GET
+  register: get_vmss
+  when: vm_vmss_config.enabled | bool
+
+- name: Compute VMSS extension presence and previous state
+  ansible.builtin.set_fact:
+    vmss_has_health_extension: "{{ (get_vmss.response.properties.virtualMachineProfile.extensionProfile.extensions | default([])) | selectattr('name','equalto', vmss_health_extension_name) | list | length > 0 }}"
+    vmss_prev_health_settings: "{{ ((get_vmss.response.properties.virtualMachineProfile.extensionProfile.extensions | default([]) | selectattr('name','equalto', vmss_health_extension_name) | list | first).properties.settings | default({})) }}"
+    vmss_prev_auto_repairs_policy: "{{ get_vmss.response.properties.automaticRepairsPolicy | default({}) }}"
+    vmss_auto_repairs_enabled: "{{ (get_vmss.response.properties.automaticRepairsPolicy.enabled | default(false)) }}"
+    vmss_desired_auto_repairs_policy:
+      enabled: "{{ (vm_vmss_config.automatic_repairs.enabled | default(true)) | bool }}"
+      gracePeriod: "{{ vm_vmss_config.automatic_repairs.grace_period | default('PT30M') }}"
+      repairAction: Restart
+  when: vm_vmss_config.enabled | bool
+
+- name: Compute health extension settings difference
+  ansible.builtin.set_fact:
+    vmss_health_settings_changed: "{{ (vm_vmss_config.health_probe_settings | default({}) | to_json) != (vmss_prev_health_settings | default({}) | to_json) }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Remove existing ApplicationHealthWindows extension to avoid type conflicts
+  block:
+
+    - name: Disable automatic repairs when health extension present and repairs enabled
+      azure.azcollection.azure_rm_resource:
+        url: "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Compute/virtualMachineScaleSets/{{ vm_vmss_config.name }}?api-version=2023-09-01"
+        method: PATCH
+        body:
+          properties:
+            automaticRepairsPolicy:
+              enabled: false
+      when:
+        - vmss_has_health_extension | bool
+        - vmss_auto_repairs_enabled | bool
+
+    - name: Report automatic repairs change (previous -> applied)
+      ansible.builtin.debug:
+        msg:
+          - "Auto repairs previously: {{ vmss_prev_auto_repairs_policy.enabled | default(false) }}"
+          - "Auto repairs applied: false"
+      when:
+        - false  # suppress noisy duplicate debug
+
+    - name: Remove ApplicationHealthWindows extension (present)
+      azure.azcollection.azure_rm_virtualmachinescalesetextension:
+        resource_group: "{{ target_resource_group }}"
+        vmss_name: "{{ vm_vmss_config.name }}"
+        name: "{{ vmss_health_extension_name }}"
+        subscription_id: "{{ target_subscription_id }}"
+        state: absent
+      when: vmss_has_health_extension | bool
+
+    - name: Report health extension removal (previous -> applied)
+      ansible.builtin.debug:
+        msg:
+          - "Health extension previously present: {{ vmss_has_health_extension | bool }}"
+          - "Previous health settings: {{ vmss_prev_health_settings | to_nice_json }}"
+          - "Health extension applied: absent"
+      when:
+        - vmss_has_health_extension | bool
+        - (vm_vmss_config.health_probe_settings | length) == 0
+  rescue:
+    - name: Note missing health extension or API error; proceeding
+      ansible.builtin.debug:
+        msg: "Health extension not present or delete failed non-critically; continuing"
+  when:
+    - vm_vmss_config.enabled | bool
+    - (vm_vmss_config.health_probe_settings | length) > 0
+    - vmss_health_settings_changed | bool
+
+- name: Configure ApplicationHealthWindows extension (HTTP/TCP) when provided
+  azure.azcollection.azure_rm_virtualmachinescalesetextension:
+    resource_group: "{{ target_resource_group }}"
+    name: "{{ vmss_health_extension_name }}"
+    vmss_name: "{{ vm_vmss_config.name }}"
+    subscription_id: "{{ target_subscription_id }}"
+    publisher: Microsoft.ManagedServices
+    type: "{{ vmss_health_extension_type }}"
+    type_handler_version: "1.0"
+    auto_upgrade_minor_version: true
+    settings: "{{ vm_vmss_config.health_probe_settings }}"
+    state: present
+  when:
+    - vm_vmss_config.enabled | bool
+    - (vm_vmss_config.health_probe_settings | length) > 0
+    - vmss_health_settings_changed | bool
+
+- name: Report health extension configuration (previous -> applied)
+  ansible.builtin.debug:
+    msg:
+      - "Previous health settings: {{ vmss_prev_health_settings | to_nice_json }}"
+      - "Applied health settings: {{ vm_vmss_config.health_probe_settings | to_nice_json }}"
+  when:
+    - vm_vmss_config.enabled | bool
+    - (vm_vmss_config.health_probe_settings | length) > 0
+    - vmss_health_settings_changed | bool
+
+- name: Configure automatic repairs
+  azure.azcollection.azure_rm_resource:
+    url: "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Compute/virtualMachineScaleSets/{{ vm_vmss_config.name }}?api-version=2023-09-01"
+    method: PATCH
+    body:
+      properties:
+        automaticRepairsPolicy: "{{ vmss_desired_auto_repairs_policy }}"
+  when:
+    - vm_vmss_config.enabled | bool
+    - (vmss_prev_auto_repairs_policy | to_json) != (vmss_desired_auto_repairs_policy | to_json)
+
+- name: Report automatic repairs configuration (previous -> applied)
+  ansible.builtin.debug:
+    msg:
+      - "Previous repairs policy: {{ vmss_prev_auto_repairs_policy | default({}) | to_nice_json }}"
+      - "Applied repairs policy: {{ vmss_desired_auto_repairs_policy | to_nice_json }}"
+  when:
+    - vm_vmss_config.enabled | bool
+    - (vmss_prev_auto_repairs_policy | to_json) != (vmss_desired_auto_repairs_policy | to_json)
+
+- name: Link existing VM to VMSS (Flexible) when enabled
+  azure.azcollection.azure_rm_resource:
+    url: "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm.target_vm_name }}?api-version=2023-09-01"
+    method: PATCH
+    body:
+      properties:
+        virtualMachineScaleSet:
+          id: "{{ vmss_result.id }}"
+  when: vm_vmss_config.enabled | bool
+
+- name: Accumulate per-VM VMSS outputs into vms_enriched
+  ansible.builtin.set_fact:
+    vms_enriched: "{{ (vms_enriched | default([])) + [ vm | combine({'vmss_resource_id': vmss_result.id, 'vmss_name': vm_vmss_config.name}) ] }}"

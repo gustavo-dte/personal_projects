@@ -1,0 +1,164 @@
+name: Ansible-Generate-Terraform
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (skip Azure lookups; still renders files)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  generate-terraform:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        if: ${{ !inputs.dry_run }}
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display workflow configuration
+        run: |
+          echo "✅ Workflow configuration:"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          echo "🗂️  Output directory: ansible/output"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - Azure lookups will be skipped"
+          fi
+
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }},
+            "github_workflow_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          }
+          JSON
+
+      - name: 🎬 Run playbook - Generate Terraform
+        run: |
+          ansible-playbook ansible/playbooks/generate-terraform.yml \
+            -e @ansible_extra_vars.json
+
+      - name: 📤 Upload generated Terraform
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-terraform
+          path: output/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 🔧 Derive repo_full/repo_name
+        id: derive
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="ansible/vars/${{ inputs.manifest }}/manifest.yml"
+          repo=$(grep -E "^target_gh_repo:" "$MANIFEST" | sed 's/.*: *//' | tr -d '"' | xargs || echo "")
+          env=$(grep -E "^environment:" "$MANIFEST" | sed 's/.*: *//' | tr -d '"' | xargs || echo "")
+          if [[ "$repo" == */* ]]; then
+            repo_full="$repo"; repo_name="${repo##*/}"
+          else
+            repo_full="${GITHUB_REPOSITORY_OWNER}/$repo"; repo_name="$repo"
+          fi
+          echo "repo_full=$repo_full" >> "$GITHUB_OUTPUT"
+          echo "repo_name=$repo_name" >> "$GITHUB_OUTPUT"
+          echo "env=$env"           >> "$GITHUB_OUTPUT"
+
+      - name: 🔎 Preflight - verify access to target repo
+        if: ${{ steps.derive.outputs.repo_full != '' && steps.derive.outputs.env != '' }}
+        env:
+          ACCESS_TOKEN: ${{ secrets.GH_OAUTH_TOKEN || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${{ github.api_url }}/repos/${{ steps.derive.outputs.repo_full }}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ACCESS_TOKEN" -H "Accept: application/vnd.github+json" "$url")
+          echo "GET $url -> $code"
+          if [ "$code" -ge 400 ]; then
+            echo "Repository not accessible with provided token. Ensure GH_OAUTH_TOKEN has repo read/write and SSO is authorized for the dteenergy org."
+            exit 1
+          fi
+
+      - name: 📥 Checkout target repo into output/
+        if: ${{ steps.derive.outputs.repo_full != '' && steps.derive.outputs.env != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.derive.outputs.repo_full }}
+          path: output/${{ steps.derive.outputs.repo_name }}
+          token: ${{ secrets.GH_OAUTH_TOKEN || github.token }}
+
+      - name: 🔧 Remove pre-commit install file
+        if: ${{ steps.derive.outputs.repo_full != '' && steps.derive.outputs.env != '' }}
+        working-directory: output/${{ steps.derive.outputs.repo_name }}
+        run: |
+          set -euo pipefail
+          if [ -f .github/pre-commit-install.txt ]; then
+            git rm .github/pre-commit-install.txt
+          fi
+
+      - name: 📦 Place generated Terraform into target repo folder
+        if: ${{ steps.derive.outputs.repo_full != '' && steps.derive.outputs.env != '' }}
+        run: |
+          set -euo pipefail
+          DEST_DIR="output/${{ steps.derive.outputs.repo_name }}/${{ steps.derive.outputs.env }}/terraform"
+          mkdir -p "$DEST_DIR"
+          # copy only root tf files from `output`
+          shopt -s nullglob
+          for f in output/*.tf; do
+            cp -f "$f" "$DEST_DIR/"
+          done
+          echo "Copied Terraform files to $DEST_DIR"
+
+      - name: 📝 Create draft PR with changes
+        id: create-pr
+        if: ${{ steps.derive.outputs.repo_full != '' && steps.derive.outputs.env != '' }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: output/${{ steps.derive.outputs.repo_name }}
+          token: ${{ secrets.GH_OAUTH_TOKEN || github.token }}
+          add-paths: "${{ steps.derive.outputs.env }}/terraform/**"
+          commit-message: "MigrationPipeline: generate terraform from manifest ${{ inputs.manifest }} (run ${{ github.run_id }})"
+          branch: task/terraform-gen-${{ inputs.manifest }}-${{ github.run_id }}
+          title: "MigrationPipeline: Terraform from manifest ${{ inputs.manifest }} run ${{ github.run_id }}"
+          body: |
+            Automated Terraform generation using manifest '${{ inputs.manifest }}'.
+            - Environment: ${{ steps.derive.outputs.env }}
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          draft: true
+
+      - name: 🔗 PR link
+        if: ${{ steps.derive.outputs.repo_full != '' && steps.derive.outputs.env != '' }}
+        run: |
+          echo "PR link: ${{ steps.create-pr.outputs.pull-request-url }}"

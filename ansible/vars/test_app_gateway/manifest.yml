@@ -1,0 +1,310 @@
+## Manifest for Application Gateway testing
+
+# Global defaults
+app_name: testApp
+environment: dev
+target_gh_repo: dteenergy/cloud-platform-isolation-zone-subscription-corpapps
+azure_migrate_project_name: azure-migrate-automation
+azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
+azure_migrate_subscription_id: 00d26f19-0dc3-4c90-9c6b-2e9ce8b14f5a
+target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
+target_resource_group: rg-cu-CorpApps-MigrationTest-Dev
+os_disk_scsi_id: scsi0:0
+
+# Azure Update Manager / Patch scheduling defaults
+update_manager:
+  policy_assignment_name: PeriodicAssessMissingUpdates-Windows
+  remediation_name: Remediate-PeriodicAssess
+  patch_start_time: null
+  skip_assessment_in_dry_run: true
+
+  maintenance:
+    resource_group: null
+    config_name: PatchConfig-InGuestPatch
+    assignment_name: Assign-PatchConfig
+    location: null
+    window_duration: "03:00"
+    window_recur_every: "7days"
+    window_start_date_time: null
+    window_time_zone: UTC
+    windows:
+      kb_exclude: ""
+      kb_include: ""
+      classifications: Critical
+    reboot_setting: IfRequired
+    ingest_patch_mode: User
+
+# Azure Backup defaults
+enable_backup: true
+backup_vault_resource_group_name: rg-cu-CorpApps-MigrationTest-Dev
+backup_vault_name: backup-vault-cu-dev-migration-test
+backup_vault_policy_name: daily-migration-test-vm-backup-policy
+
+# Dynatrace configuration for Azure VM monitoring
+dynatrace:
+  resource_group: null
+  vm_tag_key: dynatrace
+  vm_tag_value: "true"
+  azure_subscription_id: "<subscription_id>"
+  azure_app_name: "dynatrace-monitoring"
+  azure_role_name: "Reader"
+  azure_secret_duration: 2
+  env_id: "rya18973"
+  url: "https://rya18973.live.dynatrace.com"
+  alerting_profile_name: "Azure VM Monitoring - Ansible Managed"
+  alerting_profile:
+    name: "Azure VM Monitoring - Ansible Managed"
+    severityRules: []
+    eventFilters: []
+  extension_version: "1.*"
+  install_extension_async: false
+  skip_in_dry_run: true
+
+# Azure VMSS defaults
+vmss_enabled: true
+vmss_config:
+  health_probe_settings:
+    protocol: tcp
+    port: 3389
+  automatic_instance_repair:
+    enabled: true
+    grace_period: PT10M
+    repair_action: Restart
+
+# Network configuration
+target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
+target_subnet_name: main
+test_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-corpapps-vnet
+
+# VM configuration
+target_vm_size: Standard_D4s_v5
+target_license_type: NoLicenseType
+target_disk_type: Standard_LRS
+
+# Global tag defaults
+global_tags:
+  Application: "Movit"
+  BillTo: "200000060548"
+  BusinessCriticality: "Tier 4"
+  ContactEmail: "cloudplatform@dteenergy.com"
+  DataClassification: "Internal"
+  ItAppOwnerEmail: "cloudplatform@dteenergy.com"
+  Environment: "Dev"
+  Portfolio: "CorpApps"
+  Project: "VVMWare"
+
+# Default list of software to uninstall
+uninstall_tools_list:
+  - Puppet Agent
+  - VMware Tools
+  - EMC PowerPath
+  - HP Insight Management Agents
+
+# List of VMs to replicate
+vms:
+  - name: dca-dev7048
+    target_vm_name: vmcuwinwebd01
+    description: "Server created to test migration pipeline"
+    target_vm_size: Standard_D2s_v5
+    target_license_type: WindowsServer
+    target_disk_type: Standard_LRS
+    portfolio: Test-Portfolio
+    tier: 4
+    env: dev
+    app_name: web
+
+    nsg_rules:
+      allow-rdp:
+        priority: 1000
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        destination_port_range: "3389"
+        source_address_prefixes: ["10.0.0.0/8"]
+
+    backup:
+      enable_backup: true
+      backup_vault_name: backup-vault-cu-dev-migration-test
+      backup_vault_resource_group_name: rg-cu-CorpApps-MigrationTest-Dev
+      backup_vault_policy_name: daily-migration-test-vm-backup-policy
+
+    tags:
+      Environment: "Dev"
+      Portfolio: "CorpApps"
+
+# List of Application Gateways to create
+# Each Application Gateway can reference multiple VMs by their target_vm_name
+app_gateways:
+  # Name is the suffix of app gateway name (will be prefixed with dte-appgw-<location>-<env>-)
+  # Suffix character limit is 10 characters
+  - name: int-web
+    description: "Internal Application Gateway for web tier"
+
+    # SKU Configuration
+    # For WAF: use WAF_v2 for both sku_name and sku_tier
+    # For Standard: use Standard_v2 for both sku_name and sku_tier
+    # NOTE: WAF_v2 requires private_ip_address_allocation = "Static" and a specific private_ip_address
+    sku_name: WAF_v2
+    sku_tier: WAF_v2
+    sku_capacity: 2
+
+    # Key Vault Configuration (optional - for SSL certificate management)
+    # If key_vault_name is specified, the module will create or use Key Vault for SSL certs
+    key_vault_name: kv-cu-dev-migration-test
+    key_vault_public_network_access_enabled: false  # Must be false for OPA compliance
+    create_private_endpoint: true  # Creates private endpoint for Key Vault
+    private_endpoint_subnet_id: main  # Subnet for private endpoint (references module.primary_network.subnet_ids)
+    skip_dns_zone_for_pep: true  # Set to false if you have a private DNS zone configured
+    identity_name: id-appgw-cu-dev-migration-test  # Name for auto-created managed identity
+
+    # Gateway IP Configuration (requires dedicated subnet)
+    # NOTE: The subnet must have delegation to Microsoft.Network/applicationGateways for Network Isolation
+    gateway_ip_configuration:
+      name: appgw-ip-config
+      subnet_id: app-gateway  # References module.primary_network.subnet_ids["app-gateway"]
+
+    # Frontend IP configurations
+    # For internal AGW: use subnet_id and optionally private_ip_address
+    # For public AGW: use either public_ip_address_id (existing IP) or create_public_ip=true (create new IP)
+    # NOTE: WAF_v2 SKU requires private_ip_address_allocation = "Static" and a specific private_ip_address
+    frontend_ip_configurations:
+      - name: frontend-ip-internal
+        subnet_id: app-gateway  # References module.primary_network.subnet_ids["app-gateway"]
+        # For WAF_v2: private_ip_address is REQUIRED and must be a specific IP (not null)
+        # The IP can be calculated using: cidrhost(module.primary_app_gateway_ipam.allocated_cidr, 5)
+        # Or specify directly: "10.0.1.5"
+        private_ip_address: 10.205.158.5  # Required for WAF_v2: specify static IP (e.g., "10.0.1.5"). For v2 SKUs, must be provided when allocation is Static
+        private_ip_address_allocation: Static  # Required for WAF_v2: must be "Static". Defaults to "Static" if not specified
+        # private_link_configuration_name: null  # Optional: name of private link configuration for Front Door integration
+        # For public AGW with existing IP:
+        # subnet_id: null
+        # public_ip_address_id: "/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/publicIPAddresses/..."
+        # For public AGW creating new IP:
+        # subnet_id: null
+        # create_public_ip: true
+        # public_ip_name: "pip-agw-example"
+        # domain_name_label: "agw-example"  # Optional: creates DNS name
+
+    # Frontend ports configuration
+    frontend_ports:
+      http:
+        name: http_port
+        port: 80
+      https:
+        name: https_port
+        port: 443
+
+    # Backend address pools
+    # If not specified, a default pool will be created with VMs from vm_names
+    # If specified, each pool can reference VMs by name or provide explicit NIC IDs
+    backend_address_pools:
+      default:
+        name: backend-pool
+        # Option 1: Reference VMs by target_vm_name (template will resolve to NIC IDs)
+        vm_names:
+          - vmcuwinwebd01
+        # Option 2: Provide explicit network_interface_ids (full resource IDs)
+        # network_interface_ids:
+        #   - "/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/networkInterfaces/nic-..."
+        # Option 3: Provide explicit IP addresses
+        # ip_addresses:
+        #   - "10.0.1.4"
+        #   - "10.0.1.5"
+        # Option 4: Provide FQDNs
+        # fqdns:
+        #   - "backend.example.com"
+
+    # Backend HTTP settings
+    backend_http_settings:
+      default:
+        name: http-settings
+        cookie_based_affinity: Disabled  # Options: Enabled, Disabled
+        affinity_cookie_name: null  # Optional: name for affinity cookie when cookie_based_affinity is Enabled
+        path: "/"
+        port: 80
+        protocol: Http  # Options: Http, Https
+        request_timeout: 20
+        probe_name: http-probe  # References a health probe by name
+        host_name: null  # Optional: host header to send to backend. Cannot be set if pick_host_name_from_backend_address is true
+        pick_host_name_from_backend_address: true  # Pick host header from backend address. Default: false
+
+    # Health probes configuration
+    health_probes:
+      http-probe:
+        name: http-probe
+        protocol: Http  # Options: Http, Https
+        path: /health
+        host: null  # Optional: hostname for probe. Cannot be set if pick_host_name_from_backend_http_settings is true
+        interval: 30  # Seconds between probes (1-86400)
+        timeout: 30  # Probe timeout in seconds (1-86400)
+        unhealthy_threshold: 3  # Number of failed probes before marking unhealthy (1-20)
+        pick_host_name_from_backend_http_settings: true  # Pick hostname from backend HTTP settings. Default: false
+        minimum_servers: 0  # Minimum servers always marked healthy. Default: 0
+        port: 80  # Optional: custom port for probing (1-65535). Defaults to 80 for Http, 443 for Https.
+        # match: null  # Optional: match block for custom response validation
+
+    # HTTP listeners
+    http_listeners:
+      http-listener:
+        name: http-listener
+        frontend_ip_configuration_name: frontend-ip-internal
+        frontend_port_name: http_port
+        protocol: Http
+      https-listener:
+        name: https-listener
+        frontend_ip_configuration_name: frontend-ip-internal
+        frontend_port_name: https_port
+        protocol: Https
+        ssl_certificate_name: test-migration-cert  # Certificate name - module will auto-create temp cert if not in Key Vault
+        host_name: test-migration.internal.dteenergy.com  # Optional: host name for listener
+
+    # Redirect configurations (optional - e.g., for HTTP to HTTPS redirect)
+    redirect_configurations:
+      http-to-https:
+        name: http-to-https-redirect
+        redirect_type: Permanent  # Options: Permanent, Temporary, Found, SeeOther
+        target_listener_name: https-listener  # Redirect to HTTPS listener
+        include_path: true  # Preserve URL path
+        include_query_string: true  # Preserve query string
+
+    # Request routing rules
+    # rule_type can be "Basic" (routes all traffic) or "PathBasedRouting" (uses url_path_map_name)
+    request_routing_rules:
+      http-rule:
+        name: http-rule
+        rule_type: Basic
+        http_listener_name: http-listener
+        redirect_configuration_name: http-to-https-redirect  # Redirect HTTP to HTTPS
+        priority: 100  # Required for v2 SKUs
+      https-rule:
+        name: https-rule
+        rule_type: Basic  # Use "PathBasedRouting" for path-based routing (requires url_path_map_name)
+        http_listener_name: https-listener
+        backend_address_pool_name: backend-pool
+        backend_http_settings_name: http-settings
+        # url_path_map_name: "main-path-map"  # Required when rule_type is "PathBasedRouting"
+        priority: 200
+
+    # WAF (Web Application Firewall) Configuration
+    # Required when SKU tier is WAF or WAF_v2
+    enable_waf: true  # Set to true for WAF_v2 SKU
+    waf_configuration:  # Required when enable_waf is true
+      firewall_mode: Prevention  # Options: Detection, Prevention
+      rule_set_type: OWASP  # Options: OWASP, Microsoft_BotManagerRuleSet, Microsoft_DefaultRuleSet
+      rule_set_version: "3.2"  # Options: 0.1, 1.0, 1.1, 2.1, 2.2.9, 3.0, 3.1, 3.2
+      file_upload_limit_mb: 100  # 1-750 MB for WAF_v2, 1-500 MB for other SKUs
+      request_body_check: true
+      max_request_body_size_kb: 128  # 1-128 KB
+      disabled_rule_group: []  # Optional: list of rule groups to disable
+      exclusion: []  # Optional: list of exclusions
+
+    # List of VM target_vm_names to associate with this Application Gateway
+    # Used when backend_address_pools is not specified (creates default pool)
+    # When backend_address_pools is specified, use vm_names within each pool instead
+    vm_names:
+      - vmcuwinwebd01
+
+    # Optional: Application Gateway-specific tags (will merge with global_tags)
+    tags:
+      Application: "WebTier"
+      # Any tags not specified here will use global_tags values

@@ -1,0 +1,15 @@
+---
+# Default variables for terraform role
+
+# Available terraform actions
+terraform_actions:
+  - generate
+
+# Default terraform action
+terraform_action: generate
+
+# Default output directory
+terraform_output_dir: "output"
+
+# Default dry run mode
+dry_run: false

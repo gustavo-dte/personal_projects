@@ -1,0 +1,97 @@
+---
+# Orchestrator for cutover action
+# Handles execution, result collection, and summary display
+
+- name: Include cutover tasks
+  ansible.builtin.include_tasks: cutover.yml
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
+    azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
+    target_vm_name: "{{ vm_spec.target_vm_name | default('') }}"
+    shutdown_source_vm: "{{ vm_spec.shutdown_source_vm | default(manifest_data.shutdown_source_vm | default(false)) }}"
+    dry_run: "{{ dry_run | default(false) }}"
+
+- name: Collect cutover results
+  ansible.builtin.set_fact:
+    all_cutover_results: "{{ all_cutover_results | default([]) + [vm_result] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: >-
+        {{
+          'success' if (all_cutover_outputs[vm_item.name].cutover_result.Success | default(false) and all_cutover_outputs[vm_item.name].cutover_result.Status in ['Initiated', 'AlreadyCompleted'])
+          else (
+            'skipped' if (all_cutover_outputs[vm_item.name].cutover_result.Status in ['Skipped', 'AlreadyCompleted', 'NotReady', 'NotFound'] | default(false))
+            else 'failed'
+          )
+        }}
+      changed: "{{ all_cutover_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_cutover_outputs[vm_item.name].stderr | default(all_cutover_outputs[vm_item.name].cutover_result.Error | default('')) }}"
+      output: "{{ all_cutover_outputs[vm_item.name].stdout | default('') }}"
+      cutover_status: "{{ all_cutover_outputs[vm_item.name].cutover_result.Status | default('Unknown') }}"
+      target_vm_name: "{{ all_cutover_outputs[vm_item.name].cutover_result.TargetVMName | default('') }}"
+      job_id: "{{ all_cutover_outputs[vm_item.name].cutover_result.JobId | default('') }}"
+  when: all_cutover_outputs is defined
+
+- name: Build cutover summary details
+  ansible.builtin.set_fact:
+    cutover_summary_details: "{{ cutover_summary_details | default([]) + [result.vm_name + ': ' + result.status + ' (' + result.cutover_status + ')'] }}"
+  loop: "{{ all_cutover_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: all_cutover_results is defined and all_cutover_results | length > 0
+
+- name: Display cutover summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration cutover summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_cutover_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Skipped: {{ all_cutover_results | default([]) | selectattr('status', 'equalto', 'skipped') | list | length }}"
+      - "Failed: {{ all_cutover_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ cutover_summary_details | default([]) | join('\n  ') }}"
+  when: all_cutover_results is defined
+
+# ── Post-cutover: enable patching for every successfully migrated VM ─────────
+# Runs only when a patching_schedules_file variable is provided AND
+# the individual VM cutover status is 'success' (Initiated or AlreadyCompleted).
+
+- name: "Post-cutover patching | Enable patching for migrated VMs"
+  ansible.builtin.include_role:
+    name: azure_update_manager
+    tasks_from: enable_patching_post_cutover
+  loop: "{{ all_cutover_results | default([]) | selectattr('status', 'in', ['success']) | list }}"
+  loop_control:
+    loop_var: patching_vm_result
+    label: "{{ patching_vm_result.vm_name }}"
+  vars:
+    vm_name: "{{ patching_vm_result.vm_name }}"
+    target_resource_group: >-
+      {{
+        (manifest_data.vms | selectattr('name', 'equalto', patching_vm_result.vm_name) | list | first).target_resource_group
+        | default(manifest_data.target_resource_group)
+      }}
+    target_subscription_id: >-
+      {{
+        (manifest_data.vms | selectattr('name', 'equalto', patching_vm_result.vm_name) | list | first).target_subscription_id
+        | default(manifest_data.target_subscription_id)
+      }}
+    dry_run: "{{ dry_run | default(false) }}"
+  when:
+    - all_cutover_results is defined
+    - patching_schedules_file is defined
+    - patching_schedules_file | length > 0

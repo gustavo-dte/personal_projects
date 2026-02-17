@@ -1,0 +1,128 @@
+---
+# TODO: This role has not been tested yet. Testing is pending due to Windows/Ansible compatibility issues locally.
+# The code will be validated when run in GitHub Actions (Linux environment where Ansible is fully supported).
+# Main entry point for win-domain-join role
+
+- name: Load manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+
+- name: Assert required variables
+  ansible.builtin.assert:
+    that:
+      - (manifest_data.domainNameSetup | default({})) | length > 0
+      - (manifest_data.domainNameSetup.domain | default('')) | length > 0
+      - (manifest_data.domainNameSetup.domain_admin_username | default('')) | length > 0
+      - (manifest_data.domainNameSetup.domain_admin_password | default('')) | length > 0
+    fail_msg: "❌ Required domain join variables missing in manifest. Need: domainNameSetup.domain, domainNameSetup.domain_admin_username, domainNameSetup.domain_admin_password"
+
+- name: Set domain configuration facts
+  ansible.builtin.set_fact:
+    domain_name: "{{ manifest_data.domainNameSetup.domain }}"
+    domain_admin_username: "{{ manifest_data.domainNameSetup.domain_admin_username }}"
+    domain_admin_password: "{{ manifest_data.domainNameSetup.domain_admin_password }}"
+    domain_ou_path: "{{ manifest_data.domainNameSetup.domain_ou_path | default('') }}"
+    target_computer_name: "{{ inventory_hostname }}"
+    dry_run: "{{ dry_run | default(false) }}"
+    restart_on_success: "{{ restart_on_success | default(true) }}"
+    wait_for_reboot: "{{ wait_for_reboot | default(true) }}"
+
+- name: Check current domain membership
+  ansible.windows.win_domain_computer:
+    name: "{{ target_computer_name }}"
+    domain: "{{ domain_name }}"
+    state: query
+  register: current_domain_status
+  changed_when: false
+  failed_when: false
+
+- name: Display current domain status
+  ansible.builtin.debug:
+    msg: |
+      Current domain status for {{ inventory_hostname }}:
+      - Domain: {{ current_domain_status.domain | default('WORKGROUP') }}
+      - Already in domain: {{ (current_domain_status.domain | default('')) == domain_name }}
+
+- name: Skip domain join if already in target domain
+  ansible.builtin.debug:
+    msg: "✅ Server {{ inventory_hostname }} is already a member of domain {{ domain_name }}. Skipping domain join."
+  when: (current_domain_status.domain | default('')) == domain_name
+
+- name: Join Windows server to domain
+  block:
+    - name: Join server to domain
+      ansible.windows.win_domain_computer:
+        name: "{{ target_computer_name }}"
+        domain: "{{ domain_name }}"
+        domain_username: "{{ domain_admin_username }}"
+        domain_password: "{{ domain_admin_password }}"
+        ou: "{{ domain_ou_path | default(omit) }}"
+        state: present
+      register: domain_join_result
+      when: not dry_run | bool
+
+    - name: Display domain join result
+      ansible.builtin.debug:
+        msg: |
+          Domain join result:
+          - Domain: {{ domain_join_result.domain | default('N/A') }}
+          - Changed: {{ domain_join_result.changed | default(false) }}
+
+    - name: Restart server after domain join
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 30
+        post_reboot_delay: 30
+      when:
+        - not dry_run | bool
+        - domain_join_result.changed | default(false)
+        - restart_on_success | bool
+        - wait_for_reboot | bool
+
+    - name: Wait for server to come back online after reboot
+      ansible.builtin.wait_for:
+        port: 5986
+        host: "{{ inventory_hostname }}"
+        delay: 60
+        timeout: 600
+      when:
+        - not dry_run | bool
+        - domain_join_result.changed | default(false)
+        - restart_on_success | bool
+        - wait_for_reboot | bool
+
+    - name: Verify domain membership after reboot
+      ansible.windows.win_domain_computer:
+        name: "{{ target_computer_name }}"
+        domain: "{{ domain_name }}"
+        state: query
+      register: post_reboot_domain_status
+      when:
+        - not dry_run | bool
+        - domain_join_result.changed | default(false)
+        - wait_for_reboot | bool
+
+    - name: Display final domain status
+      ansible.builtin.debug:
+        msg: |
+          ✅ Domain join completed successfully!
+          Final domain status:
+          - Domain: {{ post_reboot_domain_status.domain | default(domain_join_result.domain) | default('N/A') }}
+          - Computer Name: {{ target_computer_name }}
+      when:
+        - not dry_run | bool
+        - domain_join_result.changed | default(false)
+
+  when: (current_domain_status.domain | default('')) != domain_name
+
+- name: Dry run mode - would join domain
+  ansible.builtin.debug:
+    msg: |
+      [DRY RUN] Would join {{ inventory_hostname }} to domain {{ domain_name }}
+      - Computer Name: {{ target_computer_name }}
+      - Domain OU: {{ domain_ou_path | default('Default OU') }}
+      - Restart: {{ restart_on_success | bool }}
+  when: dry_run | bool

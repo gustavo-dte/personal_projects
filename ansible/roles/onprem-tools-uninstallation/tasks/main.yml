@@ -1,0 +1,20 @@
+---
+# Main entry for Azure Update Manager role
+
+- name: Load manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+
+- name: Assert required variables
+  ansible.builtin.assert:
+    that:
+      - (manifest_data.vms | default([])) | length > 0
+    fail_msg: "❌ Required manifest variables missing."
+
+- name: Run uninstall tasks for this host
+  ansible.builtin.include_tasks: uninstall_tools_windows.yml
+  vars:
+    dry_run: "{{ dry_run | default(true) }}"

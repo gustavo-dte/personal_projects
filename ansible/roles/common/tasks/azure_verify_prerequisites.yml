@@ -1,0 +1,116 @@
+---
+# Common Azure prerequisite verification task
+
+- name: Assert required variables for Azure verification
+  ansible.builtin.assert:
+    that:
+      # Always require resource group
+      - (target_resource_group | default('')) | length > 0
+    fail_msg: >-
+      Required variable missing: target_resource_group is always required.
+
+- name: Validate Azure subscription ID format (when provided)
+  ansible.builtin.assert:
+    that:
+      # Azure subscription ID should be a valid GUID format (8-4-4-4-12 characters)
+      - target_subscription_id | regex_search('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+    fail_msg: >-
+      Invalid Azure subscription ID format: "{{ target_subscription_id | default('') }}".
+      Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (GUID format)
+  when: target_subscription_id is defined and (target_subscription_id | default('')) | length > 0
+
+- name: Verify Azure subscription exists (when subscription ID is provided)
+  block:
+    - name: Check if target subscription exists
+      azure.azcollection.azure_rm_subscription_info:
+        subscription_id: "{{ target_subscription_id }}"
+      register: subscription_info
+      when: not (dry_run | default(false))
+      no_log: true
+
+    - name: Mock subscription verification for dry run
+      ansible.builtin.set_fact:
+        subscription_info:
+          subscriptions:
+            - display_name: "{{ target_subscription_id }}"
+              state: "Enabled"
+      when: dry_run | default(false)
+      no_log: true
+
+    - name: Display subscription verification success
+      ansible.builtin.debug:
+        msg: "✓ Subscription verified: {{ subscription_info.subscriptions[0].display_name | default(target_subscription_id) }}"
+
+  rescue:
+    - name: Handle subscription verification failure
+      ansible.builtin.fail:
+        msg: >-
+          Failed to verify subscription "{{ target_subscription_id }}":
+          {{ ansible_failed_result.msg | default('Subscription not found or inaccessible') }}
+
+  when: target_subscription_id is defined and (target_subscription_id | default('')) | length > 0
+
+- name: Verify Azure resource group exists
+  block:
+    - name: Check if target resource group exists
+      azure.azcollection.azure_rm_resourcegroup_info:
+        name: "{{ target_resource_group }}"
+        subscription_id: "{{ target_subscription_id | default(omit) }}"
+      register: resource_group_info
+      when: not (dry_run | default(false))
+      no_log: true
+
+    - name: Mock resource group verification for dry run
+      ansible.builtin.set_fact:
+        resource_group_info:
+          resourcegroups:
+            - name: "{{ target_resource_group }}"
+              location: "eastus"
+      when: dry_run | default(false)
+
+    - name: Display resource group verification success
+      ansible.builtin.debug:
+        msg: "✓ Resource group verified: {{ resource_group_info.resourcegroups[0].name }}"
+      when: resource_group_info.resourcegroups | length > 0
+
+    - name: Fail if resource group not found
+      ansible.builtin.fail:
+        msg: >-
+          Resource group not found: {{ target_resource_group }}
+      when: resource_group_info.resourcegroups | length == 0
+
+  rescue:
+    - name: Handle resource group verification failure
+      ansible.builtin.fail:
+        msg: >-
+          Failed to verify resource group '{{ target_resource_group }}':
+          {{ ansible_failed_result.msg | default('Resource group not found or inaccessible') }}
+
+- name: Verify Azure Migrate project resource group exists (optional)
+  block:
+    - name: Check if Azure Migrate project resource group exists
+      azure.azcollection.azure_rm_resourcegroup_info:
+        name: "{{ azure_migrate_project_resource_group }}"
+        subscription_id: "{{ azure_migrate_subscription_id | default(omit) }}"
+      register: migrate_rg_info
+      when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
+      no_log: true
+
+    - name: Mock Azure Migrate project RG verification for dry run
+      ansible.builtin.set_fact:
+        migrate_rg_info:
+          resourcegroups:
+            - name: "{{ azure_migrate_project_resource_group }}"
+              location: "eastus"
+      when: (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
+
+    - name: Display Azure Migrate project RG verification success
+      ansible.builtin.debug:
+        msg: "✓ Azure Migrate project resource group verified: {{ migrate_rg_info.resourcegroups[0].name }}"
+      when: (azure_migrate_project_resource_group | default('')) | length > 0 and (migrate_rg_info.resourcegroups | length > 0)
+
+    - name: Fail if Azure Migrate project RG not found
+      ansible.builtin.fail:
+        msg: >-
+          Azure Migrate project resource group not found: {{ azure_migrate_project_resource_group }}
+      when: (azure_migrate_project_resource_group | default('')) | length > 0 and (migrate_rg_info.resourcegroups | length == 0)

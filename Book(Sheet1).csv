@@ -1,7 +1,0 @@
-S.No,Source VM Name,app_name,environment,BusinessCriticality,Portfolio,Project,target_vm_size,target_disk_type,target_license_type,target_subscription_Name,target_subscription_id,target_resource_group,target_network_id,target_subnet_name,Load Balancer,DataClassification
-1,dca-tst5470,Power BI,Dev,Tier 4,CorpApps,Storm Resiliency,Standard_D4as_v5,Standard_LRS,WindowsServer,sub-corpapps-dev,6796a2fb-2928-4ec6-96da-962d3b0001b7,rg-cu-corpapps-Powerbi-dev,3febe9b9-1f80-412a-950b-b3b2f12482ae,powerbi-app,No,Internal
-2,dca-tst7027,Power BI,Dev,Tier 4,CorpApps,Storm Resiliency,Standard_D4as_v5,Standard_LRS,WindowsServer,sub-corpapps-dev,6796a2fb-2928-4ec6-96da-962d3b0001b7,rg-cu-corpapps-Powerbi-dev,3febe9b9-1f80-412a-950b-b3b2f12482ae,powerbi-app,No,Internal
-3,dca-prod5469,Power BI,Prod,Tier 4,CorpApps,Storm Resiliency,Standard_D8s_v5,Premium SSD v2_LRS,WindowsServer,sub-corpapps-prod, ,rg-cu-corpapps-Powerbi-prod, ,powerbi-app,No,Internal
-4,dca-prod7070,Power BI,Prod,Tier 4,CorpApps,Storm Resiliency,Standard_D8s_v5,Premium SSD v2_LRS,WindowsServer,sub-corpapps-prod, ,rg-cu-corpapps-Powerbi-prod, ,powerbi-app,No,Internal
-5,dca-dev5623,RightFax,Dev,Tier 4,CorpApps,Storm Resiliency,Standard_D4as_v5,Standard_LRS,WindowsServer,sub-corpapps-dev,6796a2fb-2928-4ec6-96da-962d3b0001b7,rg-cu-corpapps-RightFax-dev,3febe9b9-1f80-412a-950b-b3b2f12482ae,right-fax-app,No,Internal
-6,dca-pro5622,RightFax,Prod,Tier 4,CorpApps,Storm Resiliency,Standard_D4as_v5,Premium SSD v2_LRS,WindowsServer,sub-corpapps-prod, ,rg-cu-corpapps-RightFax-prod, ,right-fax-app,No,Internal

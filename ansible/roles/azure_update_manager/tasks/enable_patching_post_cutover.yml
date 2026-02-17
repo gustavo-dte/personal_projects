@@ -1,0 +1,190 @@
+---
+# enable_patching_post_cutover.yml
+#
+# Enables Azure Update Manager patching for a VM that has just been migrated.
+# Called from the cutover orchestrator for every VM whose status is
+# "Initiated" or "AlreadyCompleted" (i.e. successfully migrated).
+#
+# Expected vars (passed by the caller):
+#   vm_name                 - Name of the target VM in Azure
+#   target_resource_group   - Resource group where the VM lives
+#   target_subscription_id  - Subscription that owns the VM
+#   patching_schedules_file - Absolute path to vm_patching_schedules.json
+#   dry_run                 - Boolean; when true only print what would happen
+
+# ── 1. Load patching schedule for this VM ───────────────────────────────────
+
+- name: "Patching | Load patching schedules JSON"
+  ansible.builtin.set_fact:
+    all_patching_schedules: "{{ lookup('file', patching_schedules_file) | from_json }}"
+
+- name: "Patching | Resolve schedule for VM '{{ vm_name }}'"
+  ansible.builtin.set_fact:
+    vm_patch_schedule: "{{ all_patching_schedules[vm_name | lower] | default({}) }}"
+
+- name: "Patching | Skip VM with no schedule defined"
+  ansible.builtin.debug:
+    msg: >-
+      No patching schedule found for '{{ vm_name }}' in {{ patching_schedules_file }}.
+      Skipping patching configuration.
+  when: vm_patch_schedule | length == 0
+
+- name: "Patching | End post-cutover patching for this VM (no schedule)"
+  ansible.builtin.meta: end_host
+  when: vm_patch_schedule | length == 0
+
+# ── 2. Derive maintenance window parameters ─────────────────────────────────
+
+- name: "Patching | Build maintenance window start date-time"
+  ansible.builtin.set_fact:
+    # Use today + time_of_day as the first occurrence.
+    # Format required by az maintenance: "YYYY-MM-DD HH:MM"
+    maint_window_start: "{{ '%Y-%m-%d' | strftime }} {{ vm_patch_schedule.time_of_day | default('02:00') }}"
+    maint_config_name: "{{ vm_patch_schedule.maintenance_configuration | default('patch-' ~ vm_name | lower) }}"
+    maint_duration: "{{ vm_patch_schedule.duration | default('03:00') }}"
+    maint_reboot: "{{ vm_patch_schedule.reboot_setting | default('IfRequired') }}"
+    maint_recur_every: >-
+      {{
+        'Week ' ~ vm_patch_schedule.day_of_week
+        if vm_patch_schedule.frequency | default('Weekly') == 'Weekly'
+        else vm_patch_schedule.frequency | default('Weekly')
+      }}
+    maint_description: "{{ vm_patch_schedule.description | default('Patching schedule for ' ~ vm_name) }}"
+
+- name: "Patching | Show resolved schedule"
+  ansible.builtin.debug:
+    msg:
+      - "VM              : {{ vm_name }}"
+      - "Config name     : {{ maint_config_name }}"
+      - "Recur every     : {{ maint_recur_every }}"
+      - "Start time      : {{ maint_window_start }}"
+      - "Duration        : {{ maint_duration }}"
+      - "Reboot setting  : {{ maint_reboot }}"
+      - "Description     : {{ maint_description }}"
+      - "Dry run         : {{ dry_run | default(false) }}"
+
+# ── 3. Enable AutomaticByPlatform patch mode on the VM ──────────────────────
+
+- name: "Patching | Enable AutomaticByPlatform patch mode (dry-run)"
+  ansible.builtin.debug:
+    msg: >-
+      [DRY RUN] Would run:
+      az vm update
+        --resource-group {{ target_resource_group }}
+        --name {{ vm_name }}
+        --subscription {{ target_subscription_id }}
+        --set osProfile.windowsConfiguration.patchSettings.patchMode=AutomaticByPlatform
+  when: dry_run | default(false) | bool
+
+- name: "Patching | Enable AutomaticByPlatform patch mode on VM"
+  ansible.builtin.command: >-
+    az vm update
+    --resource-group "{{ target_resource_group }}"
+    --name "{{ vm_name }}"
+    --subscription "{{ target_subscription_id }}"
+    --set osProfile.windowsConfiguration.patchSettings.patchMode=AutomaticByPlatform
+  register: patching_mode_result
+  changed_when: patching_mode_result.rc == 0
+  when: not dry_run | default(false) | bool
+
+- name: "Patching | Show patch mode result"
+  ansible.builtin.debug:
+    msg: "Patch mode set to AutomaticByPlatform for '{{ vm_name }}'"
+  when: not dry_run | default(false) | bool and patching_mode_result.rc == 0
+
+# ── 4. Create (or update) the maintenance configuration ─────────────────────
+
+- name: "Patching | Create maintenance configuration (dry-run)"
+  ansible.builtin.debug:
+    msg: >-
+      [DRY RUN] Would run:
+      az maintenance configuration create
+        --resource-group {{ target_resource_group }}
+        --resource-name {{ maint_config_name }}
+        --maintenance-scope InGuestPatch
+        --location {{ maintenance_location | default('eastus') }}
+        --maintenance-window-duration {{ maint_duration }}
+        --maintenance-window-recur-every "{{ maint_recur_every }}"
+        --maintenance-window-start-date-time "{{ maint_window_start }}"
+        --maintenance-window-time-zone "UTC"
+        --install-patches-windows-parameters classifications-to-include="Critical,Security"
+        --reboot-setting "{{ maint_reboot }}"
+        --extension-properties InGuestPatchMode="User"
+  when: dry_run | default(false) | bool
+
+- name: "Patching | Create maintenance configuration"
+  ansible.builtin.command: >-
+    az maintenance configuration create
+    --resource-group "{{ target_resource_group }}"
+    --resource-name "{{ maint_config_name }}"
+    --maintenance-scope InGuestPatch
+    --location "{{ maintenance_location | default('eastus') }}"
+    --maintenance-window-duration "{{ maint_duration }}"
+    --maintenance-window-recur-every "{{ maint_recur_every }}"
+    --maintenance-window-start-date-time "{{ maint_window_start }}"
+    --maintenance-window-time-zone "UTC"
+    --install-patches-windows-parameters classifications-to-include="Critical,Security" kb-numbers-to-exclude="" kb-numbers-to-include=""
+    --reboot-setting "{{ maint_reboot }}"
+    --extension-properties InGuestPatchMode="User"
+    --subscription "{{ target_subscription_id }}"
+  register: maint_config_result
+  changed_when: maint_config_result.rc == 0
+  # az maintenance configuration create is idempotent-ish; re-running overwrites.
+  # If you want strict idempotency add a prior `az maintenance configuration show` check.
+  when: not dry_run | default(false) | bool
+
+- name: "Patching | Show maintenance configuration result"
+  ansible.builtin.debug:
+    msg: "Maintenance configuration '{{ maint_config_name }}' created/updated."
+  when: not dry_run | default(false) | bool and maint_config_result.rc == 0
+
+# ── 5. Assign the maintenance configuration to the VM ───────────────────────
+
+- name: "Patching | Assign maintenance configuration to VM (dry-run)"
+  ansible.builtin.debug:
+    msg: >-
+      [DRY RUN] Would run:
+      az maintenance assignment create
+        --resource-group {{ target_resource_group }}
+        --resource-name {{ vm_name }}
+        --resource-type virtualMachines
+        --provider-name Microsoft.Compute
+        --configuration-assignment-name "assign-{{ maint_config_name }}-{{ vm_name }}"
+        --maintenance-configuration-id /subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}
+        --location {{ maintenance_location | default('eastus') }}
+  when: dry_run | default(false) | bool
+
+- name: "Patching | Assign maintenance configuration to VM"
+  ansible.builtin.command: >-
+    az maintenance assignment create
+    --resource-group "{{ target_resource_group }}"
+    --resource-name "{{ vm_name }}"
+    --resource-type virtualMachines
+    --provider-name Microsoft.Compute
+    --configuration-assignment-name "assign-{{ maint_config_name }}-{{ vm_name }}"
+    --maintenance-configuration-id "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}"
+    --location "{{ maintenance_location | default('eastus') }}"
+    --subscription "{{ target_subscription_id }}"
+  register: maint_assign_result
+  changed_when: maint_assign_result.rc == 0
+  when: not dry_run | default(false) | bool
+
+- name: "Patching | Show maintenance assignment result"
+  ansible.builtin.debug:
+    msg: "Maintenance configuration '{{ maint_config_name }}' assigned to VM '{{ vm_name }}'."
+  when: not dry_run | default(false) | bool and maint_assign_result.rc == 0
+
+# ── 6. Final summary for this VM ────────────────────────────────────────────
+
+- name: "Patching | Post-cutover patching setup summary"
+  ansible.builtin.debug:
+    msg:
+      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      - "Post-cutover patching configured for: {{ vm_name }}"
+      - "  Patch mode    : AutomaticByPlatform"
+      - "  Schedule      : {{ maint_recur_every }} at {{ vm_patch_schedule.time_of_day | default('02:00') }}"
+      - "  Duration      : {{ maint_duration }}"
+      - "  Reboot policy : {{ maint_reboot }}"
+      - "  Config name   : {{ maint_config_name }}"
+      - "  Dry run       : {{ dry_run | default(false) }}"
+      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
