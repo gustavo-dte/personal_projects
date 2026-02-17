@@ -1,12 +1,18 @@
-Run echo "Preparing Ansible extra vars..."
-Preparing Ansible extra vars...
-Checking for patching schedules file: /opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/vm_patching_schedules/testing_vm_patching_schedules.json
-❌ Warning: Patching schedules file not found: /opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/vm_patching_schedules/testing_vm_patching_schedules.json
-Patching configuration will be skipped
-
-Extra vars file created:
-{
-  "manifest": "test_vm_migraiton",
-  "shutdown_source_vm": false,
-  "dry_run": false
-}
+Run # Set patching status based on validation
+  # Set patching status based on validation
+  if [ "true" = "true" ]; then
+    echo "patching_configured=true" >> $GITHUB_OUTPUT
+    echo "✅ Patching configuration was included in workflow"
+  else
+    echo "patching_configured=false" >> $GITHUB_OUTPUT
+    if [ -n "patching_schedules/testing_vm_patching_schedules.json" ]; then
+      echo "⚠️ Patching file provided but not found - skipped"
+    else
+      echo "ℹ️ Patching not configured (no schedules file provided)"
+    fi
+  fi
+  shell: /bin/bash -e {0}
+  env:
+    ANSIBLE_ROLES_PATH: ansible/roles
+    ANSIBLE_CONFIG: ansible/ansible.cfg
+✅ Patching configuration was included in workflow
