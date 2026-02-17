@@ -125,6 +125,11 @@ jobs:
           echo "  Manifest: ${{ inputs.manifest }}"
           echo "  Dry run: ${{ inputs.dry_run }}"
           echo "  Shutdown source VM: ${{ inputs.shutdown_source_vm }}"
+          if [ -n "${{ inputs.patching_schedules_file }}" ]; then
+            echo "  Patching schedules: ${{ inputs.patching_schedules_file }}"
+          else
+            echo "  Patching schedules: Not provided"
+          fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "  Mode: DRY RUN - no actual changes will be made"
           else
@@ -137,33 +142,43 @@ jobs:
           fi
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+      - name: Validate patching schedules file exists (if provided)
+        id: validate_patching
+        run: |
+          if [ -n "${{ inputs.patching_schedules_file }}" ]; then
+            PATCHING_FILE="${{ inputs.patching_schedules_file }}"
+            echo "Validating patching schedules file: $PATCHING_FILE"
+            
+            if [ -f "$PATCHING_FILE" ]; then
+              echo "file_exists=true" >> $GITHUB_OUTPUT
+              echo "✅ Patching schedules file found: $PATCHING_FILE"
+              
+              # Get absolute path for display
+              PATCHING_ABSOLUTE=$(readlink -f "$PATCHING_FILE")
+              echo "   Absolute path: $PATCHING_ABSOLUTE"
+            else
+              echo "file_exists=false" >> $GITHUB_OUTPUT
+              echo "❌ Warning: Patching schedules file not found: $PATCHING_FILE"
+              echo "   Current directory: $(pwd)"
+              echo "   Files in patching_schedules/:"
+              ls -la patching_schedules/ 2>/dev/null || echo "   Directory does not exist"
+            fi
+          else
+            echo "file_exists=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  No patching schedules file provided"
+          fi
+
       - name: Prepare cutover extra vars
         run: |
           echo "Preparing Ansible extra vars..."
           
-          # Check if patching file was provided and exists
-          PATCHING_FILE_PROVIDED=false
-          PATCHING_ABSOLUTE=""
-          
-          if [ -n "${{ inputs.patching_schedules_file }}" ]; then
-            # Resolve to absolute path
-            PATCHING_ABSOLUTE="${GITHUB_WORKSPACE}/${{ inputs.patching_schedules_file }}"
-            echo "Checking for patching schedules file: $PATCHING_ABSOLUTE"
+          # Create JSON file - use relative path as provided (Ansible will resolve it)
+          if [ "${{ steps.validate_patching.outputs.file_exists }}" = "true" ]; then
+            # Convert to absolute path that will work from ansible playbook directory
+            cd ansible
+            PATCHING_ABSOLUTE=$(readlink -f "../${{ inputs.patching_schedules_file }}")
+            cd ..
             
-            if [ -f "$PATCHING_ABSOLUTE" ]; then
-              PATCHING_FILE_PROVIDED=true
-              echo "✅ Patching schedules file found: $PATCHING_ABSOLUTE"
-            else
-              echo "❌ Warning: Patching schedules file not found: $PATCHING_ABSOLUTE"
-              echo "Patching configuration will be skipped"
-            fi
-          else
-            echo "ℹ️  No patching schedules file provided"
-            echo "Patching configuration will be skipped"
-          fi
-          
-          # Create JSON file based on whether patching file exists
-          if [ "$PATCHING_FILE_PROVIDED" = "true" ]; then
             cat > ansible_extra_vars.json <<JSON
           {
             "manifest": "${{ inputs.manifest }}",
@@ -172,6 +187,7 @@ jobs:
             "dry_run": ${{ inputs.dry_run }}
           }
           JSON
+            echo "✅ Created extra vars with patching file: $PATCHING_ABSOLUTE"
           else
             cat > ansible_extra_vars.json <<JSON
           {
@@ -180,6 +196,7 @@ jobs:
             "dry_run": ${{ inputs.dry_run }}
           }
           JSON
+            echo "ℹ️  Created extra vars without patching file"
           fi
           
           echo ""
@@ -220,19 +237,17 @@ jobs:
       - name: Set patching configuration status
         id: patching
         run: |
-          # Set patching status based on input
-          if [ -n "${{ inputs.patching_schedules_file }}" ]; then
-            PATCHING_ABSOLUTE="${GITHUB_WORKSPACE}/${{ inputs.patching_schedules_file }}"
-            if [ -f "$PATCHING_ABSOLUTE" ]; then
-              echo "patching_configured=true" >> $GITHUB_OUTPUT
-              echo "✅ Patching configuration was included in workflow"
-            else
-              echo "patching_configured=false" >> $GITHUB_OUTPUT
-              echo "⚠️ Patching file provided but not found - skipped"
-            fi
+          # Set patching status based on validation
+          if [ "${{ steps.validate_patching.outputs.file_exists }}" = "true" ]; then
+            echo "patching_configured=true" >> $GITHUB_OUTPUT
+            echo "✅ Patching configuration was included in workflow"
           else
             echo "patching_configured=false" >> $GITHUB_OUTPUT
-            echo "ℹ️ Patching not configured (no schedules file provided)"
+            if [ -n "${{ inputs.patching_schedules_file }}" ]; then
+              echo "⚠️ Patching file provided but not found - skipped"
+            else
+              echo "ℹ️ Patching not configured (no schedules file provided)"
+            fi
           fi
 
       # ── STEP 3: Summary and Outputs ───────────────────────────────────────
@@ -249,6 +264,11 @@ jobs:
           
           if [ -n "${{ inputs.patching_schedules_file }}" ]; then
             echo "- **Patching Schedules**: \`${{ inputs.patching_schedules_file }}\`" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.validate_patching.outputs.file_exists }}" = "true" ]; then
+              echo "  - ✅ File validated successfully" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "  - ❌ File not found" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "- **Patching Schedules**: Not configured" >> $GITHUB_STEP_SUMMARY
           fi
@@ -271,7 +291,7 @@ jobs:
             if [ "$PATCHING_STATUS" = "true" ]; then
               echo "- ✅ **Patching**: Configured successfully" >> $GITHUB_STEP_SUMMARY
             else
-              echo "- ℹ️ **Patching**: Not configured (no schedules file provided)" >> $GITHUB_STEP_SUMMARY
+              echo "- ℹ️ **Patching**: Not configured" >> $GITHUB_STEP_SUMMARY
             fi
           else
             echo "- ❌ **Cutover Workflow**: Failed or not performed" >> $GITHUB_STEP_SUMMARY
@@ -289,7 +309,7 @@ jobs:
             echo "6. ⚠️ Manually shutdown source VMs (not done automatically)" >> $GITHUB_STEP_SUMMARY
           fi
           
-          if [ -n "${{ inputs.patching_schedules_file }}" ]; then
+          if [ -n "${{ inputs.patching_schedules_file }}" ] && [ "${{ steps.validate_patching.outputs.file_exists }}" = "true" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## Patching Configuration" >> $GITHUB_STEP_SUMMARY
             echo "Patching schedules configured from: \`${{ inputs.patching_schedules_file }}\`" >> $GITHUB_STEP_SUMMARY
