@@ -1,4 +1,16 @@
 Run # Set patching status based on validation
+  Run echo "Preparing Ansible extra vars..."
+Preparing Ansible extra vars...
+✅ Created extra vars with patching file: /opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/patching_schedules/testing_vm_patching_schedules.json
+
+Extra vars file created:
+{
+  "manifest": "test_vm_migraiton",
+  "patching_schedules_file": "/opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/patching_schedules/testing_vm_patching_schedules.json",
+  "shutdown_source_vm": false,
+  "dry_run": false
+}
+  
   # Set patching status based on validation
   if [ "true" = "true" ]; then
     echo "patching_configured=true" >> $GITHUB_OUTPUT
