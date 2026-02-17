@@ -1,0 +1,186 @@
+---
+# Playbook to enable Azure Update Manager patching for already-migrated VMs
+#
+# This playbook is designed to be run AFTER migration cutover has completed.
+# It checks the migration status of each VM and enables patching only for
+# VMs that have been successfully migrated (status = "Migrated").
+#
+# Required extra-vars:
+#   manifest                - path to the manifest YAML for this migration batch
+#   patching_schedules_file - absolute path to vm_patching_schedules.json
+#
+# Optional extra-vars:
+#   dry_run                 - true/false (default false)
+#
+# Example:
+#   ansible-playbook playbooks/enable-patching-post-migration.yml \
+#     -e "manifest=vars/Testing/manifest.yml" \
+#     -e "patching_schedules_file=/path/to/vm_patching_schedules.json"
+
+- name: Enable patching for migrated VMs
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  pre_tasks:
+    - name: Show Azure account
+      block:
+        - name: Run 'az account show'
+          ansible.builtin.command: az account show -o table
+          changed_when: false
+      rescue:
+        - name: Exit playbook when 'az account show' fails
+          ansible.builtin.fail:
+            msg: "az account show failed; exiting"
+
+    - name: Validate patching_schedules_file exists
+      ansible.builtin.stat:
+        path: "{{ patching_schedules_file }}"
+      register: patching_file_stat
+
+    - name: Fail if patching_schedules_file not found
+      ansible.builtin.fail:
+        msg: >-
+          patching_schedules_file '{{ patching_schedules_file }}' does not exist.
+          Please provide a valid path to vm_patching_schedules.json
+      when: not patching_file_stat.stat.exists
+
+    - name: Load manifest
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: load_manifest
+      vars:
+        manifest: "{{ manifest }}"
+
+  tasks:
+    # ── Check migration status for all VMs ─────────────────────────────────
+    
+    - name: Check replication status for each VM
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        ansible/roles/azure_migrate/files/get_replication_status.ps1
+        -ProjectName {{ manifest_data.azure_migrate_project_name }}
+        -ProjectResourceGroup {{ manifest_data.azure_migrate_project_resource_group }}
+        -VMNamesJson '["{{ vm_spec.name }}"]'
+        -SubscriptionId {{ manifest_data.azure_migrate_subscription_id | default(manifest_data.target_subscription_id | default('')) }}
+      register: replication_status_check
+      changed_when: false
+      loop: "{{ manifest_data.vms | default([]) }}"
+      loop_control:
+        loop_var: vm_spec
+        label: "{{ vm_spec.name }}"
+
+    - name: Read and parse replication status for each VM
+      block:
+        - name: Read JSON results file
+          ansible.builtin.slurp:
+            src: get_replication_status_result.json
+          register: json_file_content
+          failed_when: false
+
+        - name: Parse replication status
+          ansible.builtin.set_fact:
+            vm_replication_statuses: "{{ vm_replication_statuses | default({}) | combine({item.vm_spec.name: repl_data}) }}"
+          vars:
+            repl_data: "{{ json_file_content.content | b64decode | from_json }}"
+          loop: "{{ replication_status_check.results }}"
+          loop_control:
+            label: "{{ item.vm_spec.name }}"
+          when: json_file_content.content is defined
+      when: replication_status_check.results is defined
+
+    - name: Build list of migrated VMs eligible for patching
+      ansible.builtin.set_fact:
+        migrated_vms: "{{ migrated_vms | default([]) + [item.key] }}"
+      loop: "{{ vm_replication_statuses | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when:
+        - vm_replication_statuses is defined
+        - item.value.MigrationState is defined
+        - item.value.MigrationState == 'MigrationSucceeded'
+        - item.value.MigrationStateDescription == 'Migrated'
+
+    - name: Display migration status summary
+      ansible.builtin.debug:
+        msg:
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "Migration Status Check Summary"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "Total VMs in manifest: {{ manifest_data.vms | default([]) | length }}"
+          - "Successfully migrated: {{ migrated_vms | default([]) | length }}"
+          - "Not yet migrated: {{ (manifest_data.vms | default([]) | length) - (migrated_vms | default([]) | length) }}"
+          - ""
+          - "Migrated VMs eligible for patching:"
+          - "{{ migrated_vms | default(['None']) | join(', ') }}"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    - name: Display detailed status for each VM
+      ansible.builtin.debug:
+        msg:
+          - "VM: {{ item.key }}"
+          - "  Migration State: {{ item.value.MigrationState | default('Unknown') }}"
+          - "  Migration Description: {{ item.value.MigrationStateDescription | default('Unknown') }}"
+          - "  Replication Status: {{ item.value.ReplicationStatus | default('Unknown') }}"
+          - "  Target VM Name: {{ item.value.TargetVMName | default('N/A') }}"
+          - "  Eligible for patching: {{ 'Yes' if (item.value.MigrationState == 'MigrationSucceeded' and item.value.MigrationStateDescription == 'Migrated') else 'No' }}"
+      loop: "{{ vm_replication_statuses | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: vm_replication_statuses is defined
+
+    - name: Skip patching when no migrated VMs found
+      ansible.builtin.meta: end_play
+      when: migrated_vms | default([]) | length == 0
+
+    # ── Enable patching for migrated VMs ───────────────────────────────────
+
+    - name: Enable patching for each migrated VM
+      ansible.builtin.include_role:
+        name: azure_update_manager
+        tasks_from: enable_patching_post_cutover
+      loop: "{{ migrated_vms | default([]) }}"
+      loop_control:
+        loop_var: patching_vm_name
+        label: "{{ patching_vm_name }}"
+      vars:
+        vm_name: "{{ patching_vm_name }}"
+        target_resource_group: >-
+          {{
+            (manifest_data.vms | selectattr('name', 'equalto', patching_vm_name) | list | first).target_resource_group
+            | default(manifest_data.target_resource_group)
+          }}
+        target_subscription_id: >-
+          {{
+            (manifest_data.vms | selectattr('name', 'equalto', patching_vm_name) | list | first).target_subscription_id
+            | default(manifest_data.target_subscription_id)
+          }}
+        dry_run: "{{ dry_run | default(false) }}"
+      register: patching_results
+
+  post_tasks:
+    - name: Build patching results summary
+      ansible.builtin.set_fact:
+        patching_summary: "{{ patching_summary | default([]) + [summary_item] }}"
+      vars:
+        summary_item:
+          vm_name: "{{ patching_vm_name }}"
+          status: "{{ 'configured' if not (dry_run | default(false)) else 'dry-run' }}"
+      loop: "{{ migrated_vms | default([]) }}"
+      loop_control:
+        loop_var: patching_vm_name
+        label: "{{ patching_vm_name }}"
+
+    - name: Display final patching summary
+      ansible.builtin.debug:
+        msg:
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "Patching Configuration Summary"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "Total VMs processed: {{ migrated_vms | default([]) | length }}"
+          - "Patching configured for:"
+          - "{{ patching_summary | default([]) | map(attribute='vm_name') | join(', ') if patching_summary | default([]) | length > 0 else 'None' }}"
+          - ""
+          - "Configuration source: {{ patching_schedules_file }}"
+          - "Dry run mode: {{ dry_run | default(false) }}"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
