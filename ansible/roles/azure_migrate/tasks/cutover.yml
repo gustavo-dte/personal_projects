@@ -217,6 +217,10 @@
               JobId: null
               StartTime: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%SZ') }}"
 
+        - name: Register cutover output for orchestrator (skipped path)
+          ansible.builtin.set_fact:
+            all_cutover_outputs: "{{ all_cutover_outputs | default({}) | combine({vm_name: {'cutover_result': cutover_result, 'changed': false, 'stdout': '', 'stderr': ''}}) }}"
+
         - name: End host processing if cutover skipped
           ansible.builtin.meta: end_host
       when: skip_cutover | bool
