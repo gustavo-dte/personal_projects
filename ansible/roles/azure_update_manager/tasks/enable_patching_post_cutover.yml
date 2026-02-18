@@ -85,12 +85,19 @@
     --set osProfile.windowsConfiguration.patchSettings.patchMode=AutomaticByPlatform
   register: patching_mode_result
   changed_when: patching_mode_result.rc == 0
+  failed_when: false
   when: not dry_run | default(false) | bool
 
 - name: "Patching | Show patch mode result"
   ansible.builtin.debug:
-    msg: "Patch mode set to AutomaticByPlatform for '{{ vm_name }}'"
-  when: not dry_run | default(false) | bool and patching_mode_result.rc == 0
+    msg: |
+      {% if patching_mode_result.rc == 0 -%}
+      ✅ Patch mode set to AutomaticByPlatform for '{{ vm_name }}'
+      {%- else -%}
+      ⚠️  Note: Could not set patch mode via osProfile (VM may be Azure Migrate VM)
+      Patch mode will be managed through maintenance configuration assignment
+      {%- endif %}
+  when: not dry_run | default(false) | bool
 
 # ── 4. Create (or update) the maintenance configuration ─────────────────────
 
