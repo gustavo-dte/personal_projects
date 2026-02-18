@@ -105,39 +105,43 @@
   ansible.builtin.debug:
     msg: >-
       [DRY RUN] Would run:
-      az maintenance configuration create
-        --resource-group {{ target_resource_group }}
-        --resource-name {{ maint_config_name }}
-        --maintenance-scope InGuestPatch
-        --location {{ maintenance_location | default('eastus') }}
-        --maintenance-window-duration {{ maint_duration }}
-        --maintenance-window-recur-every "{{ maint_recur_every }}"
-        --maintenance-window-start-date-time "{{ maint_window_start }}"
-        --maintenance-window-time-zone "UTC"
-        --install-patches-windows-parameters classifications-to-include="Critical,Security"
-        --reboot-setting "{{ maint_reboot }}"
-        --extension-properties InGuestPatchMode="User"
+      az maintenance configuration create with JSON parameters
   when: dry_run | default(false) | bool
 
-- name: "Patching | Create maintenance configuration"
+- name: "Patching | Get Azure region from resource group"
   ansible.builtin.command: >-
-    az maintenance configuration create
-    --resource-group "{{ target_resource_group }}"
-    --resource-name "{{ maint_config_name }}"
-    --maintenance-scope InGuestPatch
-    --location "{{ maintenance_location | default('eastus') }}"
-    --maintenance-window-duration "{{ maint_duration }}"
-    --maintenance-window-recur-every "{{ maint_recur_every }}"
-    --maintenance-window-start-date-time "{{ maint_window_start }}"
-    --maintenance-window-time-zone "UTC"
-    --install-patches-windows-parameters classifications-to-include="Critical,Security" kb-numbers-to-exclude="" kb-numbers-to-include=""
-    --reboot-setting "{{ maint_reboot }}"
-    --extension-properties InGuestPatchMode="User"
+    az group show
+    --name "{{ target_resource_group }}"
     --subscription "{{ target_subscription_id }}"
+    --query location
+    --output tsv
+  register: rg_location
+  changed_when: false
+  when: not dry_run | default(false) | bool
+
+- name: "Patching | Set maintenance location"
+  ansible.builtin.set_fact:
+    maintenance_location: "{{ rg_location.stdout | trim }}"
+  when: not dry_run | default(false) | bool and rg_location.stdout is defined
+
+- name: "Patching | Create maintenance configuration"
+  ansible.builtin.shell: |
+    az maintenance configuration create \
+      --resource-group "{{ target_resource_group }}" \
+      --resource-name "{{ maint_config_name }}" \
+      --maintenance-scope InGuestPatch \
+      --location "{{ maintenance_location }}" \
+      --maintenance-window-duration "{{ maint_duration }}" \
+      --maintenance-window-recur-every "{{ maint_recur_every }}" \
+      --maintenance-window-start-date-time "{{ maint_window_start }}" \
+      --maintenance-window-time-zone "UTC" \
+      --subscription "{{ target_subscription_id }}" \
+      --extension-properties '{"InGuestPatchMode":"User"}' \
+      --install-patches-windows-parameters '{"classificationsToInclude":["Critical","Security"],"rebootSetting":"{{ maint_reboot }}"}'
+  args:
+    executable: /bin/bash
   register: maint_config_result
   changed_when: maint_config_result.rc == 0
-  # az maintenance configuration create is idempotent-ish; re-running overwrites.
-  # If you want strict idempotency add a prior `az maintenance configuration show` check.
   when: not dry_run | default(false) | bool
 
 - name: "Patching | Show maintenance configuration result"
