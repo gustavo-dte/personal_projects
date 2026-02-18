@@ -20,7 +20,7 @@
 - name: Enable patching for migrated VMs
   hosts: localhost
   connection: local
-  gather_facts: no
+  gather_facts: false
 
   pre_tasks:
     - name: Show Azure account
@@ -54,7 +54,7 @@
 
   tasks:
     # ── Check migration status for all VMs ─────────────────────────────────
-    
+
     - name: Check replication status for each VM
       ansible.builtin.command: >-
         pwsh -NoLogo -NoProfile -NonInteractive -File

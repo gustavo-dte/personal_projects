@@ -9,7 +9,7 @@
 #   target_subscription_id  - Subscription that owns the VM (from manifest)
 #   patching_schedules_file - Absolute path to vm_patching_schedules.json
 #   dry_run                 - Boolean; when true only print what would happen
-#   
+#
 #   Optional vars from manifest:
 #   tags                    - Dictionary of tags to apply to maintenance configuration
 
@@ -28,255 +28,271 @@
     msg: "No patching schedule found for '{{ vm_name }}' in {{ patching_schedules_file }}. Skipping patching configuration."
   when: vm_patch_schedule | length == 0
 
-- name: "Patching | End post-cutover patching for this VM (no schedule)"
-  ansible.builtin.meta: end_host
-  when: vm_patch_schedule | length == 0
-
 # ── 2. Build schedule parameters from JSON ──────────────────────────────────
+# All subsequent tasks are wrapped in a conditional block to skip gracefully
+# when no schedule exists, allowing the loop to continue with other VMs
 
-- name: "Patching | Build maintenance window parameters"
-  ansible.builtin.set_fact:
-    maint_config_name: "{{ vm_patch_schedule.maintenance_configuration | default('patch-' ~ vm_name | lower) }}"
-    maint_duration: "{{ vm_patch_schedule.duration | default('03:00') }}"
-    maint_reboot: "{{ vm_patch_schedule.reboot_setting | default('IfRequired') }}"
-    schedule_day: "{{ vm_patch_schedule.day_of_week | default('Saturday') }}"
-    schedule_time: "{{ vm_patch_schedule.time_of_day | default('02:00') }}"
-    maint_description: "{{ vm_patch_schedule.description | default('Patching schedule for ' ~ vm_name) }}"
-    maint_time_zone: "{{ vm_patch_schedule.time_zone | default('Central Standard Time') }}"
-    patch_classifications: "{{ vm_patch_schedule.classifications | default(['Critical', 'Security']) }}"
-    frequency: "{{ vm_patch_schedule.frequency | default('Weekly') }}"
+- name: "Patching | Configure patching when schedule exists"
+  block:
+    - name: "Patching | Build maintenance window parameters"
+      ansible.builtin.set_fact:
+        maint_config_name: "{{ vm_patch_schedule.maintenance_configuration | default('patch-' ~ vm_name | lower) }}"
+        maint_duration: "{{ vm_patch_schedule.duration | default('03:00') }}"
+        maint_reboot: "{{ vm_patch_schedule.reboot_setting | default('IfRequired') }}"
+        schedule_day: "{{ vm_patch_schedule.day_of_week | default('Saturday') }}"
+        schedule_time: "{{ vm_patch_schedule.time_of_day | default('02:00') }}"
+        maint_description: "{{ vm_patch_schedule.description | default('Patching schedule for ' ~ vm_name) }}"
+        maint_time_zone: "{{ vm_patch_schedule.time_zone | default('Central Standard Time') }}"
+        patch_classifications: "{{ vm_patch_schedule.classifications | default(['Critical', 'Security']) }}"
+        frequency: "{{ vm_patch_schedule.frequency | default('Weekly') }}"
 
-- name: "Patching | Show resolved schedule"
-  ansible.builtin.debug:
-    msg:
-      - "VM: {{ vm_name }}"
-      - "Config: {{ maint_config_name }}"
-      - "Schedule: {{ frequency }} {{ schedule_day }} at {{ schedule_time }}"
-      - "Duration: {{ maint_duration }}, Reboot: {{ maint_reboot }}"
-      - "Time Zone: {{ maint_time_zone }}"
-      - "Classifications: {{ patch_classifications | join(', ') }}"
+    - name: "Patching | Show resolved schedule"
+      ansible.builtin.debug:
+        msg:
+          - "VM: {{ vm_name }}"
+          - "Config: {{ maint_config_name }}"
+          - "Schedule: {{ frequency }} {{ schedule_day }} at {{ schedule_time }}"
+          - "Duration: {{ maint_duration }}, Reboot: {{ maint_reboot }}"
+          - "Time Zone: {{ maint_time_zone }}"
+          - "Classifications: {{ patch_classifications | join(', ') }}"
 
-# ── 3. Get VM details ───────────────────────────────────────────────────────
+    # ── 3. Get VM details ───────────────────────────────────────────────────────
 
-- name: "Patching | Get VM resource ID and location"
-  ansible.builtin.command: >-
-    az vm show
-    --resource-group "{{ target_resource_group }}"
-    --name "{{ vm_name }}"
-    --subscription "{{ target_subscription_id }}"
-    --query "{id:id, location:location}"
-    --output json
-  register: vm_details
-  changed_when: false
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Get VM resource ID and location"
+      ansible.builtin.command: >-
+        az vm show
+        --resource-group "{{ target_resource_group }}"
+        --name "{{ vm_name }}"
+        --subscription "{{ target_subscription_id }}"
+        --query "{id:id, location:location}"
+        --output json
+      register: vm_details
+      changed_when: false
+      when: not dry_run | default(false) | bool
 
-- name: "Patching | Parse VM details"
-  ansible.builtin.set_fact:
-    vm_resource_id: "{{ (vm_details.stdout | from_json).id }}"
-    vm_location: "{{ (vm_details.stdout | from_json).location }}"
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Parse VM details"
+      ansible.builtin.set_fact:
+        vm_resource_id: "{{ (vm_details.stdout | from_json).id }}"
+        vm_location: "{{ (vm_details.stdout | from_json).location }}"
+      when: not dry_run | default(false) | bool
 
-# ── 4. Build tags from manifest (if provided) ───────────────────────────────
+    # ── 4. Build tags from manifest (if provided) ───────────────────────────────
 
-- name: "Patching | Build maintenance configuration tags"
-  ansible.builtin.set_fact:
-    maint_config_tags: |
-      {
-        "Application": "{{ tags.Application | default('CorpApps') }}",
-        "BillTo": "{{ tags.BillTo | default('100000069697') }}",
-        "BusinessCriticality": "{{ tags.BusinessCriticality | default('Tier 4') }}",
-        "CreatedBy": "{{ tags.CreatedBy | default('Cloud Platform Team') }}",
-        "DataClassification": "{{ tags.DataClassification | default('Internal') }}",
-        "Description": "{{ maint_description }}",
-        "Environment": "{{ tags.Environment | default('Development') }}",
-        "ItAppOwnerEmail": "{{ tags.ItAppOwnerEmail | default('cloudplatform@dteenergy.com') }}",
-        "Portfolio": "{{ tags.Portfolio | default('CCOE') }}",
-        "Purpose": "VM Patching"
-      }
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Build maintenance configuration tags"
+      ansible.builtin.set_fact:
+        maint_config_tags: |
+          {
+            "Application": "{{ tags.Application | default('CorpApps') }}",
+            "BillTo": "{{ tags.BillTo | default('100000069697') }}",
+            "BusinessCriticality": "{{ tags.BusinessCriticality | default('Tier 4') }}",
+            "CreatedBy": "{{ tags.CreatedBy | default('Cloud Platform Team') }}",
+            "DataClassification": "{{ tags.DataClassification | default('Internal') }}",
+            "Description": "{{ maint_description }}",
+            "Environment": "{{ tags.Environment | default('Development') }}",
+            "ItAppOwnerEmail": "{{ tags.ItAppOwnerEmail | default('cloudplatform@dteenergy.com') }}",
+            "Portfolio": "{{ tags.Portfolio | default('CCOE') }}",
+            "Purpose": "VM Patching"
+          }
+      when: not dry_run | default(false) | bool
 
-- name: "Patching | Parse tags JSON"
-  ansible.builtin.set_fact:
-    maint_tags: "{{ maint_config_tags | from_json }}"
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Parse tags JSON"
+      ansible.builtin.set_fact:
+        maint_tags: "{{ maint_config_tags | from_json }}"
+      when: not dry_run | default(false) | bool
 
-# ── 5. Set patch mode using values from JSON ────────────────────────────────
+    # ── 5. Set patch mode using values from JSON ────────────────────────────────
 
-- name: "Patching | Determine bypass platform safety checks setting"
-  ansible.builtin.set_fact:
-    bypass_safety_checks: "{{ vm_patch_schedule.bypass_platform_safety_checks | default(true) }}"
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Determine bypass platform safety checks setting"
+      ansible.builtin.set_fact:
+        bypass_safety_checks: "{{ vm_patch_schedule.bypass_platform_safety_checks | default(true) }}"
+      when: not dry_run | default(false) | bool
 
-- name: "Patching | Set patch mode to AutomaticByPlatform using REST API"
-  ansible.builtin.shell: |
-    az rest \
-      --method PATCH \
-      --url "{{ vm_resource_id }}?api-version=2024-07-01" \
-      --body '{
-        "properties": {
-          "osProfile": {
-            "windowsConfiguration": {
-              "patchSettings": {
-                "patchMode": "AutomaticByPlatform",
-                "automaticByPlatformSettings": {
-                  "bypassPlatformSafetyChecksOnUserSchedule": {{ bypass_safety_checks | lower }}
+    - name: "Patching | Set patch mode to AutomaticByPlatform using REST API"
+      ansible.builtin.shell: |
+        az rest \
+          --method PATCH \
+          --url "{{ vm_resource_id }}?api-version=2024-07-01" \
+          --body '{
+            "properties": {
+              "osProfile": {
+                "windowsConfiguration": {
+                  "patchSettings": {
+                    "patchMode": "AutomaticByPlatform",
+                    "automaticByPlatformSettings": {
+                      "bypassPlatformSafetyChecksOnUserSchedule": {{ bypass_safety_checks | lower }}
+                    }
+                  }
                 }
               }
             }
-          }
-        }
-      }'
-  args:
-    executable: /bin/bash
-  register: patch_mode_result
-  changed_when: patch_mode_result.rc == 0
-  failed_when: false
-  when: not dry_run | default(false) | bool
+          }'
+      args:
+        executable: /bin/bash
+      register: patch_mode_result
+      changed_when: patch_mode_result.rc == 0
+      ignore_errors: true
+      when: not dry_run | default(false) | bool
 
-- name: "Patching | Show patch mode result"
-  ansible.builtin.debug:
-    msg: |
-      {% if patch_mode_result.rc == 0 -%}
-      ✅ Patch mode: AutomaticByPlatform, Bypass safety checks: {{ bypass_safety_checks }}
-      {%- else -%}
-      ⚠️  Could not set patch mode (continuing anyway): {{ patch_mode_result.stderr | default('Unknown error') }}
-      {%- endif %}
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Show patch mode result"
+      ansible.builtin.debug:
+        msg: |
+          {% if patch_mode_result.rc == 0 -%}
+          ✅ Patch mode: AutomaticByPlatform, Bypass safety checks: {{ bypass_safety_checks }}
+          {%- else -%}
+          ⚠️  Could not set patch mode (continuing anyway): {{ patch_mode_result.stderr | default('Unknown error') }}
+          {%- endif %}
+      when: not dry_run | default(false) | bool
 
-# ── 6. Build recurrence string ──────────────────────────────────────────────
+    # ── 6. Build recurrence string ──────────────────────────────────────────────
 
-- name: "Patching | Build recurrence string"
-  ansible.builtin.set_fact:
-    recur_every: "{{ frequency }} {{ schedule_day }}"
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Build recurrence string"
+      ansible.builtin.set_fact:
+        recur_every: "{{ frequency }} {{ schedule_day }}"
+      when: not dry_run | default(false) | bool
 
-# ── 7. Create maintenance configuration with values from JSON ───────────────
+    # ── 7. Create maintenance configuration with values from JSON ───────────────
 
-- name: "Patching | Create/Update maintenance configuration"
-  ansible.builtin.shell: |
-    az rest \
-      --method PUT \
-      --url "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}?api-version=2022-11-01-preview" \
-      --body '{
-        "location": "{{ vm_location }}",
-        "tags": {{ maint_tags | to_json }},
-        "properties": {
-          "namespace": "Microsoft.Maintenance",
-          "extensionProperties": {
-            "InGuestPatchMode": "User"
-          },
-          "maintenanceScope": "InGuestPatch",
-          "maintenanceWindow": {
-            "startDateTime": "2026-01-01 {{ schedule_time }}",
-            "duration": "{{ maint_duration }}",
-            "timeZone": "{{ maint_time_zone }}",
-            "recurEvery": "{{ recur_every }}"
-          },
-          "visibility": "Custom",
-          "installPatches": {
-            "rebootSetting": "{{ maint_reboot }}",
-            "windowsParameters": {
-              "kbNumbersToExclude": {{ vm_patch_schedule.kb_numbers_to_exclude | default([]) | to_json }},
-              "kbNumbersToInclude": {{ vm_patch_schedule.kb_numbers_to_include | default([]) | to_json }},
-              "classificationsToInclude": {{ patch_classifications | to_json }}
+    - name: "Patching | Create/Update maintenance configuration"
+      ansible.builtin.shell: |
+        az rest \
+          --method PUT \
+          --url "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}?api-version=2022-11-01-preview" \
+          --body '{
+            "location": "{{ vm_location }}",
+            "tags": {{ maint_tags | to_json }},
+            "properties": {
+              "namespace": "Microsoft.Maintenance",
+              "extensionProperties": {
+                "InGuestPatchMode": "User"
+              },
+              "maintenanceScope": "InGuestPatch",
+              "maintenanceWindow": {
+                "startDateTime": "2026-01-01 {{ schedule_time }}",
+                "duration": "{{ maint_duration }}",
+                "timeZone": "{{ maint_time_zone }}",
+                "recurEvery": "{{ recur_every }}"
+              },
+              "visibility": "Custom",
+              "installPatches": {
+                "rebootSetting": "{{ maint_reboot }}",
+                "windowsParameters": {
+                  "kbNumbersToExclude": {{ vm_patch_schedule.kb_numbers_to_exclude | default([]) | to_json }},
+                  "kbNumbersToInclude": {{ vm_patch_schedule.kb_numbers_to_include | default([]) | to_json }},
+                  "classificationsToInclude": {{ patch_classifications | to_json }}
+                }
+              },
+              "configurationType": "Regular"
             }
-          },
-          "configurationType": "Regular"
-        }
-      }'
-  args:
-    executable: /bin/bash
-  register: config_result
-  changed_when: config_result.rc == 0
-  failed_when: false
-  when: not dry_run | default(false) | bool
+          }'
+      args:
+        executable: /bin/bash
+      register: config_result
+      changed_when: config_result.rc == 0
+      when: not dry_run | default(false) | bool
 
-- name: "Patching | Show configuration result"
-  ansible.builtin.debug:
-    msg: |
-      {% if config_result.rc == 0 -%}
-      ✅ Maintenance configuration '{{ maint_config_name }}' created/updated
-      {%- else -%}
-      ❌ Failed to create configuration: {{ config_result.stderr }}
-      {%- endif %}
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Show configuration result"
+      ansible.builtin.debug:
+        msg: |
+          {% if config_result.rc == 0 -%}
+          ✅ Maintenance configuration '{{ maint_config_name }}' created/updated
+          {%- else -%}
+          ❌ Failed to create configuration: {{ config_result.stderr }}
+          {%- endif %}
+      when: not dry_run | default(false) | bool
 
-# ── 8. Assign configuration to VM ───────────────────────────────────────────
+    # ── 8. Assign configuration to VM ───────────────────────────────────────────
 
-- name: "Patching | Assign maintenance configuration to VM"
-  ansible.builtin.shell: |
-    az rest \
-      --method PUT \
-      --url "{{ vm_resource_id }}/providers/Microsoft.Maintenance/configurationAssignments/{{ maint_config_name }}-assignment?api-version=2022-11-01-preview" \
-      --body '{
-        "location": "{{ vm_location }}",
-        "properties": {
-          "maintenanceConfigurationId": "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}"
-        }
-      }'
-  args:
-    executable: /bin/bash
-  register: assign_result
-  changed_when: assign_result.rc == 0
-  failed_when: false
-  when: not dry_run | default(false) | bool and config_result.rc == 0
+    - name: "Patching | Assign maintenance configuration to VM"
+      ansible.builtin.shell: |
+        az rest \
+          --method PUT \
+          --url "{{ vm_resource_id }}/providers/Microsoft.Maintenance/configurationAssignments/{{ maint_config_name }}-assignment?api-version=2022-11-01-preview" \
+          --body '{
+            "location": "{{ vm_location }}",
+            "properties": {
+              "maintenanceConfigurationId": "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}"
+            }
+          }'
+      args:
+        executable: /bin/bash
+      register: assign_result
+      changed_when: assign_result.rc == 0
+      when: not dry_run | default(false) | bool and config_result.rc == 0
 
-- name: "Patching | Show assignment result"
-  ansible.builtin.debug:
-    msg: |
-      {% if assign_result.rc == 0 -%}
-      ✅ Maintenance configuration assigned to VM '{{ vm_name }}'
-      {%- else -%}
-      ❌ Assignment failed: {{ assign_result.stderr }}
-      {%- endif %}
-  when: not dry_run | default(false) | bool and config_result.rc == 0
+    - name: "Patching | Show assignment result"
+      ansible.builtin.debug:
+        msg: |
+          {% if assign_result.rc == 0 -%}
+          ✅ Maintenance configuration assigned to VM '{{ vm_name }}'
+          {%- else -%}
+          ❌ Assignment failed: {{ assign_result.stderr }}
+          {%- endif %}
+      when: not dry_run | default(false) | bool and config_result.rc == 0
 
-# ── 9. Verify assignment ────────────────────────────────────────────────────
+    # ── 9. Verify assignment ────────────────────────────────────────────────────
 
-- name: "Patching | Verify maintenance assignment"
-  ansible.builtin.command: >-
-    az maintenance assignment list
-    --provider-name Microsoft.Compute
-    --resource-group "{{ target_resource_group }}"
-    --resource-name "{{ vm_name }}"
-    --resource-type virtualMachines
-    --subscription "{{ target_subscription_id }}"
-    --output json
-  register: verify_assignment
-  changed_when: false
-  failed_when: false
-  when: not dry_run | default(false) | bool
+    - name: "Patching | Verify maintenance assignment"
+      ansible.builtin.command: >-
+        az maintenance assignment list
+        --provider-name Microsoft.Compute
+        --resource-group "{{ target_resource_group }}"
+        --resource-name "{{ vm_name }}"
+        --resource-type virtualMachines
+        --subscription "{{ target_subscription_id }}"
+        --output json
+      register: verify_assignment
+      changed_when: false
+      failed_when: false
+      when: not dry_run | default(false) | bool
 
-- name: "Patching | Parse verification result"
-  ansible.builtin.set_fact:
-    assignment_verified: "{{ (verify_assignment.stdout | from_json | length > 0) if verify_assignment.stdout else false }}"
-  when: not dry_run | default(false) | bool and verify_assignment.rc == 0
+    - name: "Patching | Parse verification result"
+      ansible.builtin.set_fact:
+        assignment_verified: "{{ (verify_assignment.stdout | from_json | length > 0) if verify_assignment.stdout else false }}"
+      when: not dry_run | default(false) | bool and verify_assignment.rc == 0
 
-# ── 10. Final summary ───────────────────────────────────────────────────────
+    # ── 10. Final summary ───────────────────────────────────────────────────────
 
-- name: "Patching | Post-cutover patching setup summary"
-  ansible.builtin.debug:
-    msg:
-      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      - "{% if patch_mode_result.rc == 0 and config_result.rc == 0 and assign_result.rc == 0 %}✅{% else %}⚠️{% endif %} Patching Setup for: {{ vm_name }}"
-      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      - "  Configuration : {{ maint_config_name }}"
-      - "  Schedule      : {{ frequency }} {{ schedule_day }} at {{ schedule_time }}"
-      - "  Duration      : {{ maint_duration }}"
-      - "  Reboot        : {{ maint_reboot }}"
-      - "  Location      : {{ vm_location | default('N/A') }}"
-      - "  Time Zone     : {{ maint_time_zone }}"
-      - "  Classifications: {{ patch_classifications | join(', ') }}"
-      - "  Bypass Safety : {{ bypass_safety_checks | default(true) }}"
-      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      - "  Status:"
-      - "    Patch Mode   : {% if patch_mode_result.rc == 0 %}✅ Set{% else %}⚠️ Warning{% endif %}"
-      - "    Configuration: {% if config_result.rc == 0 %}✅ Created{% else %}❌ Failed{% endif %}"
-      - "    Assignment   : {% if assign_result.rc == 0 %}✅ Assigned{% else %}❌ Failed{% endif %}"
-      - "    Verification : {% if assignment_verified | default(false) %}✅ Verified{% else %}⚠️ Pending{% endif %}"
-      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      - ""
-      - "Verify in Azure Portal:"
-      - "  • Azure Update Manager → Machines → {{ vm_name }}"
-      - "  • Maintenance Configurations → {{ maint_config_name }}"
-      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    - name: "Patching | Post-cutover patching setup summary"
+      ansible.builtin.debug:
+        msg:
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "{% if patch_mode_result.rc == 0 and config_result.rc == 0 and assign_result.rc == 0 %}✅{% else %}⚠️{% endif %} Patching Setup for: {{ vm_name }}"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "  Configuration : {{ maint_config_name }}"
+          - "  Schedule      : {{ frequency }} {{ schedule_day }} at {{ schedule_time }}"
+          - "  Duration      : {{ maint_duration }}"
+          - "  Reboot        : {{ maint_reboot }}"
+          - "  Location      : {{ vm_location | default('N/A') }}"
+          - "  Time Zone     : {{ maint_time_zone }}"
+          - "  Classifications: {{ patch_classifications | join(', ') }}"
+          - "  Bypass Safety : {{ bypass_safety_checks | default(true) }}"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "  Status:"
+          - "    Patch Mode   : {% if patch_mode_result.rc == 0 %}✅ Set{% else %}⚠️ Warning{% endif %}"
+          - "    Configuration: {% if config_result.rc == 0 %}✅ Created{% else %}❌ Failed{% endif %}"
+          - "    Assignment   : {% if assign_result.rc == 0 %}✅ Assigned{% else %}❌ Failed{% endif %}"
+          - "    Verification : {% if assignment_verified | default(false) %}✅ Verified{% else %}⚠️ Pending{% endif %}"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - ""
+          - "Verify in Azure Portal:"
+          - "  • Azure Update Manager → Machines → {{ vm_name }}"
+          - "  • Maintenance Configurations → {{ maint_config_name }}"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # ── 11. Assert critical operations succeeded ────────────────────────────────
+
+    - name: "Patching | Fail if critical operations did not succeed"
+      ansible.builtin.fail:
+        msg: |
+          ❌ Critical patching operations failed for VM '{{ vm_name }}':
+          {% if config_result.rc != 0 %}
+            • Configuration creation failed: {{ config_result.stderr | default('Unknown error') }}
+          {% endif %}
+          {% if config_result.rc == 0 and assign_result.rc != 0 %}
+            • Configuration assignment failed: {{ assign_result.stderr | default('Unknown error') }}
+          {% endif %}
+      when:
+        - not dry_run | default(false) | bool
+        - config_result.rc != 0 or (config_result.rc == 0 and assign_result.rc != 0)
+
+  when: vm_patch_schedule | length > 0
