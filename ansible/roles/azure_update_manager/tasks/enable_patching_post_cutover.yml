@@ -1,17 +1,11 @@
 ---
 # enable_patching_post_cutover.yml
-#
-# Enables Azure Update Manager patching for a VM that has just been migrated.
-# Uses Azure Update Manager scheduled patching approach for VMs without osProfile.
+# Azure Update Manager patching setup using correct Azure API format
 
 # Expected vars:
-#   vm_name                 - Name of the target VM in Azure
-#   target_resource_group   - Resource group where the VM lives
-#   target_subscription_id  - Subscription that owns the VM
-#   patching_schedules_file - Absolute path to vm_patching_schedules.json
-#   dry_run                 - Boolean; when true only print what would happen
+#   vm_name, target_resource_group, target_subscription_id, patching_schedules_file
 
-# ── 1. Load patching schedule for this VM ───────────────────────────────────
+# ── 1. Load patching schedule ───────────────────────────────────────────────
 
 - name: "Patching | Load patching schedules JSON"
   ansible.builtin.set_fact:
@@ -23,46 +17,35 @@
 
 - name: "Patching | Skip VM with no schedule defined"
   ansible.builtin.debug:
-    msg: >-
-      No patching schedule found for '{{ vm_name }}' in {{ patching_schedules_file }}.
-      Skipping patching configuration.
+    msg: "No patching schedule found for '{{ vm_name }}'. Skipping."
   when: vm_patch_schedule | length == 0
 
 - name: "Patching | End post-cutover patching for this VM (no schedule)"
   ansible.builtin.meta: end_host
   when: vm_patch_schedule | length == 0
 
-# ── 2. Derive maintenance window parameters ─────────────────────────────────
+# ── 2. Build schedule parameters ────────────────────────────────────────────
 
-- name: "Patching | Build maintenance window start date-time"
+- name: "Patching | Build maintenance window parameters"
   ansible.builtin.set_fact:
-    maint_window_start: "{{ '%Y-%m-%d' | strftime }} {{ vm_patch_schedule.time_of_day | default('02:00') }}"
     maint_config_name: "{{ vm_patch_schedule.maintenance_configuration | default('patch-' ~ vm_name | lower) }}"
     maint_duration: "{{ vm_patch_schedule.duration | default('03:00') }}"
     maint_reboot: "{{ vm_patch_schedule.reboot_setting | default('IfRequired') }}"
-    maint_recur_every: >-
-      {{
-        'Week ' ~ vm_patch_schedule.day_of_week
-        if vm_patch_schedule.frequency | default('Weekly') == 'Weekly'
-        else vm_patch_schedule.frequency | default('Weekly')
-      }}
+    schedule_day: "{{ vm_patch_schedule.day_of_week | default('Saturday') }}"
+    schedule_time: "{{ vm_patch_schedule.time_of_day | default('02:00') }}"
     maint_description: "{{ vm_patch_schedule.description | default('Patching schedule for ' ~ vm_name) }}"
 
 - name: "Patching | Show resolved schedule"
   ansible.builtin.debug:
     msg:
-      - "VM              : {{ vm_name }}"
-      - "Config name     : {{ maint_config_name }}"
-      - "Recur every     : {{ maint_recur_every }}"
-      - "Start time      : {{ maint_window_start }}"
-      - "Duration        : {{ maint_duration }}"
-      - "Reboot setting  : {{ maint_reboot }}"
-      - "Description     : {{ maint_description }}"
-      - "Dry run         : {{ dry_run | default(false) }}"
+      - "VM: {{ vm_name }}"
+      - "Config: {{ maint_config_name }}"
+      - "Schedule: Weekly {{ schedule_day }} at {{ schedule_time }}"
+      - "Duration: {{ maint_duration }}, Reboot: {{ maint_reboot }}"
 
-# ── 3. Get VM Resource ID ───────────────────────────────────────────────────
+# ── 3. Get VM details ───────────────────────────────────────────────────────
 
-- name: "Patching | Get VM details"
+- name: "Patching | Get VM resource ID and location"
   ansible.builtin.command: >-
     az vm show
     --resource-group "{{ target_resource_group }}"
@@ -70,84 +53,113 @@
     --subscription "{{ target_subscription_id }}"
     --query "{id:id, location:location}"
     --output json
-  register: vm_details_result
+  register: vm_details
   changed_when: false
   when: not dry_run | default(false) | bool
 
 - name: "Patching | Parse VM details"
   ansible.builtin.set_fact:
-    vm_resource_id: "{{ (vm_details_result.stdout | from_json).id }}"
-    vm_location: "{{ (vm_details_result.stdout | from_json).location }}"
-  when: not dry_run | default(false) | bool and vm_details_result.rc == 0
+    vm_resource_id: "{{ (vm_details.stdout | from_json).id }}"
+    vm_location: "{{ (vm_details.stdout | from_json).location }}"
+  when: not dry_run | default(false) | bool
 
-# ── 4. Schedule updates using Azure Update Manager ──────────────────────────
+# ── 4. Create maintenance configuration using correct Azure format ──────────
 
-- name: "Patching | Create scheduled patch configuration using Azure Update Manager"
+- name: "Patching | Create/Update maintenance configuration"
   ansible.builtin.shell: |
-    az maintenance configuration create \
-      --resource-group "{{ target_resource_group }}" \
-      --resource-name "{{ maint_config_name }}" \
-      --location "{{ vm_location }}" \
-      --maintenance-scope InGuestPatch \
-      --subscription "{{ target_subscription_id }}" 2>&1 || echo "Config may already exist"
-    
-    # Update the configuration with schedule details
-    az maintenance configuration update \
-      --resource-group "{{ target_resource_group }}" \
-      --resource-name "{{ maint_config_name }}" \
-      --maintenance-window-duration "{{ maint_duration }}" \
-      --maintenance-window-recur-every "{{ maint_recur_every }}" \
-      --maintenance-window-start-date-time "{{ maint_window_start }}" \
-      --maintenance-window-time-zone UTC \
-      --subscription "{{ target_subscription_id }}"
+    az rest \
+      --method PUT \
+      --url "https://management.azure.com/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}?api-version=2022-11-01-preview" \
+      --body '{
+        "location": "{{ vm_location }}",
+        "tags": {
+          "Application": "CorpApps",
+          "BillTo": "100000069697",
+          "BusinessCriticality": "Tier 4",
+          "CreatedBy": "Cloud Platform Team",
+          "DataClassification": "Internal",
+          "Description": "{{ maint_description }}",
+          "Environment": "Development",
+          "ItAppOwnerEmail": "cloudplatform@dteenergy.com",
+          "Portfolio": "CCOE",
+          "Purpose": "VM Patching"
+        },
+        "properties": {
+          "namespace": "Microsoft.Maintenance",
+          "extensionProperties": {
+            "InGuestPatchMode": "User"
+          },
+          "maintenanceScope": "InGuestPatch",
+          "maintenanceWindow": {
+            "startDateTime": "2026-01-01 {{ schedule_time }}",
+            "duration": "{{ maint_duration }}",
+            "timeZone": "Central Standard Time",
+            "recurEvery": "Week {{ schedule_day }}"
+          },
+          "visibility": "Custom",
+          "installPatches": {
+            "rebootSetting": "{{ maint_reboot }}",
+            "windowsParameters": {
+              "kbNumbersToExclude": [],
+              "kbNumbersToInclude": [],
+              "classificationsToInclude": [
+                "Critical",
+                "Security"
+              ]
+            }
+          },
+          "configurationType": "Regular"
+        }
+      }'
   args:
     executable: /bin/bash
-  register: maint_config_result
-  changed_when: "'Succeeded' in maint_config_result.stdout or 'succeeded' in maint_config_result.stdout"
+  register: config_result
+  changed_when: config_result.rc == 0
   failed_when: false
   when: not dry_run | default(false) | bool
 
-- name: "Patching | Show maintenance configuration result"
+- name: "Patching | Show configuration result"
   ansible.builtin.debug:
     msg: |
-      {% if maint_config_result.rc == 0 -%}
+      {% if config_result.rc == 0 -%}
       ✅ Maintenance configuration '{{ maint_config_name }}' created/updated successfully
       {%- else -%}
-      ⚠️  Issue with maintenance configuration: {{ maint_config_result.stderr | default('Unknown error') }}
+      ❌ Failed to create configuration
+      Error: {{ config_result.stderr }}
       {%- endif %}
   when: not dry_run | default(false) | bool
 
-# ── 5. Assign maintenance configuration to VM ───────────────────────────────
+# ── 5. Assign configuration to VM ───────────────────────────────────────────
 
 - name: "Patching | Assign maintenance configuration to VM"
-  ansible.builtin.command: >-
-    az maintenance assignment create
-    --resource-group "{{ target_resource_group }}"
-    --location "{{ vm_location }}"
-    --resource-name "{{ vm_name }}"
-    --resource-type virtualMachines
-    --provider-name Microsoft.Compute
-    --configuration-assignment-name "{{ maint_config_name }}-assignment"
-    --maintenance-configuration-id "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}"
-    --subscription "{{ target_subscription_id }}"
-  register: assignment_result
-  changed_when: assignment_result.rc == 0
+  ansible.builtin.shell: |
+    az rest \
+      --method PUT \
+      --url "{{ vm_resource_id }}/providers/Microsoft.Maintenance/configurationAssignments/{{ maint_config_name }}-assignment?api-version=2022-11-01-preview" \
+      --body '{
+        "location": "{{ vm_location }}",
+        "properties": {
+          "maintenanceConfigurationId": "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}"
+        }
+      }'
+  args:
+    executable: /bin/bash
+  register: assign_result
+  changed_when: assign_result.rc == 0
   failed_when: false
-  when: not dry_run | default(false) | bool and maint_config_result.rc == 0
+  when: not dry_run | default(false) | bool and config_result.rc == 0
 
 - name: "Patching | Show assignment result"
   ansible.builtin.debug:
     msg: |
-      {% if assignment_result.rc == 0 -%}
+      {% if assign_result.rc == 0 -%}
       ✅ Maintenance configuration assigned to VM '{{ vm_name }}'
-      {%- elif 'already exists' in (assignment_result.stderr | default('')) | lower -%}
-      ℹ️  Assignment already exists for VM '{{ vm_name }}'
       {%- else -%}
-      ⚠️  Could not assign configuration: {{ assignment_result.stderr | default('Unknown error') }}
+      ❌ Assignment failed: {{ assign_result.stderr }}
       {%- endif %}
-  when: not dry_run | default(false) | bool and maint_config_result.rc == 0
+  when: not dry_run | default(false) | bool and config_result.rc == 0
 
-# ── 6. Verify the assignment ────────────────────────────────────────────────
+# ── 6. Verify assignment ────────────────────────────────────────────────────
 
 - name: "Patching | Verify maintenance assignment"
   ansible.builtin.command: >-
@@ -157,22 +169,15 @@
     --resource-name "{{ vm_name }}"
     --resource-type virtualMachines
     --subscription "{{ target_subscription_id }}"
-    --query "[?name=='{{ maint_config_name }}-assignment'].{name:name, status:properties.maintenanceConfigurationId}"
     --output json
   register: verify_assignment
   changed_when: false
   failed_when: false
   when: not dry_run | default(false) | bool
 
-- name: "Patching | Display verification result"
-  ansible.builtin.debug:
-    msg: |
-      {% if verify_assignment.stdout and verify_assignment.stdout != '[]' -%}
-      ✅ VERIFIED: Maintenance assignment is active for VM '{{ vm_name }}'
-      Assignment details: {{ verify_assignment.stdout }}
-      {%- else -%}
-      ⚠️  Could not verify assignment - please check Azure Portal
-      {%- endif %}
+- name: "Patching | Parse verification result"
+  ansible.builtin.set_fact:
+    assignment_verified: "{{ (verify_assignment.stdout | from_json | length > 0) if verify_assignment.stdout else false }}"
   when: not dry_run | default(false) | bool and verify_assignment.rc == 0
 
 # ── 7. Final summary ────────────────────────────────────────────────────────
@@ -181,16 +186,22 @@
   ansible.builtin.debug:
     msg:
       - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      - "✅ Post-cutover patching configured for: {{ vm_name }}"
+      - "{% if config_result.rc == 0 and assign_result.rc == 0 %}✅{% else %}⚠️{% endif %} Patching Setup for: {{ vm_name }}"
       - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       - "  Configuration : {{ maint_config_name }}"
-      - "  Schedule      : {{ maint_recur_every }} at {{ vm_patch_schedule.time_of_day | default('02:00') }}"
+      - "  Schedule      : Weekly {{ schedule_day }} at {{ schedule_time }}"
       - "  Duration      : {{ maint_duration }}"
       - "  Reboot        : {{ maint_reboot }}"
       - "  Location      : {{ vm_location | default('N/A') }}"
+      - "  Time Zone     : Central Standard Time"
+      - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      - "  Status:"
+      - "    Configuration: {% if config_result.rc == 0 %}✅ Created{% else %}❌ Failed{% endif %}"
+      - "    Assignment   : {% if assign_result.rc == 0 %}✅ Assigned{% else %}❌ Failed{% endif %}"
+      - "    Verification : {% if assignment_verified | default(false) %}✅ Verified{% else %}⚠️ Pending{% endif %}"
       - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       - ""
-      - "📋 Verify in Azure Portal:"
-      - "   1. Azure Update Manager → Machines → {{ vm_name }}"
-      - "   2. Maintenance Configurations → {{ maint_config_name }}"
+      - "Verify in Azure Portal:"
+      - "  • Azure Update Manager → Machines → {{ vm_name }}"
+      - "  • Maintenance Configurations → {{ maint_config_name }}"
       - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
