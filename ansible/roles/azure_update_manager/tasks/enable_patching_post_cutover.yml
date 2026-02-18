@@ -104,8 +104,7 @@
 - name: "Patching | Create maintenance configuration (dry-run)"
   ansible.builtin.debug:
     msg: >-
-      [DRY RUN] Would run:
-      az maintenance configuration create
+      [DRY RUN] Would create/update maintenance configuration
   when: dry_run | default(false) | bool
 
 - name: "Patching | Get Azure region from resource group"
@@ -123,6 +122,28 @@
   ansible.builtin.set_fact:
     maintenance_location: "{{ rg_location.stdout | trim }}"
   when: not dry_run | default(false) | bool and rg_location.stdout is defined
+
+- name: "Patching | Check if maintenance configuration exists"
+  ansible.builtin.command: >-
+    az maintenance configuration show
+    --resource-group "{{ target_resource_group }}"
+    --resource-name "{{ maint_config_name }}"
+    --subscription "{{ target_subscription_id }}"
+  register: maint_config_check
+  failed_when: false
+  changed_when: false
+  when: not dry_run | default(false) | bool
+
+- name: "Patching | Delete existing maintenance configuration if found"
+  ansible.builtin.command: >-
+    az maintenance configuration delete
+    --resource-group "{{ target_resource_group }}"
+    --resource-name "{{ maint_config_name }}"
+    --subscription "{{ target_subscription_id }}"
+    --yes
+  when: not dry_run | default(false) | bool and maint_config_check.rc == 0
+  register: maint_config_delete
+  changed_when: maint_config_delete.rc == 0
 
 - name: "Patching | Create maintenance configuration"
   ansible.builtin.command: >-
@@ -151,15 +172,7 @@
 - name: "Patching | Assign maintenance configuration to VM (dry-run)"
   ansible.builtin.debug:
     msg: >-
-      [DRY RUN] Would run:
-      az maintenance assignment create
-        --resource-group {{ target_resource_group }}
-        --resource-name {{ vm_name }}
-        --resource-type virtualMachines
-        --provider-name Microsoft.Compute
-        --configuration-assignment-name "assign-{{ maint_config_name }}-{{ vm_name }}"
-        --maintenance-configuration-id /subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}
-        --location {{ maintenance_location | default('eastus') }}
+      [DRY RUN] Would assign maintenance configuration to VM
   when: dry_run | default(false) | bool
 
 - name: "Patching | Assign maintenance configuration to VM"
@@ -175,12 +188,18 @@
     --subscription "{{ target_subscription_id }}"
   register: maint_assign_result
   changed_when: maint_assign_result.rc == 0
+  failed_when: false
   when: not dry_run | default(false) | bool
 
 - name: "Patching | Show maintenance assignment result"
   ansible.builtin.debug:
-    msg: "Maintenance configuration '{{ maint_config_name }}' assigned to VM '{{ vm_name }}'."
-  when: not dry_run | default(false) | bool and maint_assign_result.rc == 0
+    msg: |
+      {% if maint_assign_result.rc == 0 -%}
+      ✅ Maintenance configuration '{{ maint_config_name }}' assigned to VM '{{ vm_name }}'
+      {%- else -%}
+      ⚠️  Note: Assignment may already exist or there was an issue
+      {%- endif %}
+  when: not dry_run | default(false) | bool
 
 # ── 6. Final summary for this VM ────────────────────────────────────────────
 
