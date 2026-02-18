@@ -136,7 +136,7 @@
       --maintenance-window-start-date-time "{{ maint_window_start }}" \
       --maintenance-window-time-zone "UTC" \
       --subscription "{{ target_subscription_id }}" \
-      --extension-properties '{"InGuestPatchMode":"User"}' \
+      --extension-properties InGuestPatchMode=User \
       --install-patches-windows-parameters '{"classificationsToInclude":["Critical","Security"],"rebootSetting":"{{ maint_reboot }}"}'
   args:
     executable: /bin/bash
