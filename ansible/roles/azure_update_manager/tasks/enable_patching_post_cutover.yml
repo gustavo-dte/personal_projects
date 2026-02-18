@@ -170,7 +170,7 @@
     --provider-name Microsoft.Compute
     --configuration-assignment-name "assign-{{ maint_config_name }}-{{ vm_name }}"
     --maintenance-configuration-id "/subscriptions/{{ target_subscription_id }}/resourceGroups/{{ target_resource_group }}/providers/Microsoft.Maintenance/maintenanceConfigurations/{{ maint_config_name }}"
-    --location "{{ maintenance_location | default('eastus') }}"
+    --location "{{ maintenance_location }}"
     --subscription "{{ target_subscription_id }}"
   register: maint_assign_result
   changed_when: maint_assign_result.rc == 0
