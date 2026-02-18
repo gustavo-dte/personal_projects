@@ -1,60 +1,128 @@
-Run # Set patching status based on validation
-  Run echo "Preparing Ansible extra vars..."
-Preparing Ansible extra vars...
-✅ Created extra vars with patching file: /opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/patching_schedules/testing_vm_patching_schedules.json
-
-Extra vars file created:
 {
-  "manifest": "test_vm_migraiton",
-  "patching_schedules_file": "/opt/github/actions-runner/_work/cloud-platform-vm-migration/cloud-platform-vm-migration/patching_schedules/testing_vm_patching_schedules.json",
-  "shutdown_source_vm": false,
-  "dry_run": false
+    "apiVersion": "2025-04-01",
+    "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01",
+    "name": "vmcuwinwebd01",
+    "type": "microsoft.compute/virtualmachines",
+    "location": "centralus",
+    "tags": {
+        "Application": "CorpApps",
+        "BillTo": "100000069697",
+        "BusinessCriticality": "Tier 4",
+        "CreatedBy": "Cloud Platform Team",
+        "DataClassification": "Internal",
+        "Environment": "Development",
+        "ItAppOwnerEmail": "cloudplatform@dteenergy.com",
+        "Portfolio": "CCOE"
+    },
+    "properties": {
+        "hardwareProfile": {
+            "vmSize": "Standard_D2s_v5"
+        },
+        "provisioningState": "Succeeded",
+        "vmId": "8d821b70-45d6-400e-8de1-2b9edfb9112b",
+        "virtualMachineScaleSet": {
+            "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-vmcuwinwebd01"
+        },
+        "storageProfile": {
+            "osDisk": {
+                "osType": "Windows",
+                "name": "vmcuwinwebd01-OSdisk-00",
+                "createOption": "Attach",
+                "caching": "ReadWrite",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS",
+                    "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/disks/vmcuwinwebd01-OSdisk-00"
+                },
+                "deleteOption": "Detach",
+                "diskSizeGB": 100
+            },
+            "dataDisks": [
+                {
+                    "lun": 0,
+                    "name": "vmcuwinwebd01-datadisk-01",
+                    "createOption": "Attach",
+                    "caching": "None",
+                    "managedDisk": {
+                        "storageAccountType": "Standard_LRS",
+                        "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/disks/vmcuwinwebd01-datadisk-01"
+                    },
+                    "deleteOption": "Detach",
+                    "diskSizeGB": 50,
+                    "toBeDetached": false
+                }
+            ]
+        },
+        "networkProfile": {
+            "networkInterfaces": [
+                {
+                    "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Network/networkInterfaces/nic-vmcuwinwebd01-00",
+                    "properties": {
+                        "primary": true
+                    }
+                }
+            ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true
+            }
+        },
+        "licenseType": "Windows_Server",
+        "timeCreated": "2026-02-04T20:35:49.833Z"
+    },
+    "resources": [
+        {
+            "name": "AzureMonitorWindowsAgent",
+            "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01/extensions/AzureMonitorWindowsAgent",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "location": "centralus",
+            "tags": {},
+            "properties": {
+                "autoUpgradeMinorVersion": true,
+                "provisioningState": "Succeeded",
+                "enableAutomaticUpgrade": false,
+                "suppressFailures": false,
+                "publisher": "Microsoft.Azure.Monitor",
+                "type": "AzureMonitorWindowsAgent",
+                "typeHandlerVersion": "1.0"
+            }
+        },
+        {
+            "name": "DependencyAgentWindows",
+            "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01/extensions/DependencyAgentWindows",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "location": "centralus",
+            "tags": {},
+            "properties": {
+                "autoUpgradeMinorVersion": true,
+                "provisioningState": "Succeeded",
+                "enableAutomaticUpgrade": false,
+                "suppressFailures": false,
+                "publisher": "Microsoft.Azure.Monitoring.DependencyAgent",
+                "type": "DependencyAgentWindows",
+                "typeHandlerVersion": "9.10"
+            }
+        },
+        {
+            "name": "MDE.Windows",
+            "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01/extensions/MDE.Windows",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "location": "centralus",
+            "properties": {
+                "autoUpgradeMinorVersion": true,
+                "forceUpdateTag": "06f93fe7-9517-4a5f-a568-bc06c1a20a10",
+                "provisioningState": "Succeeded",
+                "publisher": "Microsoft.Azure.AzureDefenderForServers",
+                "type": "MDE.Windows",
+                "typeHandlerVersion": "1.0",
+                "settings": {
+                    "azureResourceId": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/RG-CU-CORPAPPS-MIGRATIONTEST-DEV/providers/Microsoft.Compute/virtualMachines/vmcuwinwebd01",
+                    "forceReOnboarding": false,
+                    "vNextEnabled": true,
+                    "autoUpdate": true
+                }
+            }
+        }
+    ],
+    "etag": "\"13\""
 }
-  
-  # Set patching status based on validation
-  if [ "true" = "true" ]; then
-    echo "patching_configured=true" >> $GITHUB_OUTPUT
-    echo "✅ Patching configuration was included in workflow"
-  else
-    echo "patching_configured=false" >> $GITHUB_OUTPUT
-    if [ -n "patching_schedules/testing_vm_patching_schedules.json" ]; then
-      echo "⚠️ Patching file provided but not found - skipped"
-    else
-      echo "ℹ️ Patching not configured (no schedules file provided)"
-    fi
-  fi
-  shell: /bin/bash -e {0}
-  env:
-    ANSIBLE_ROLES_PATH: ansible/roles
-    ANSIBLE_CONFIG: ansible/ansible.cfg
-✅ Patching configuration was included in workflow
-
-Run echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "✅ Workflow completed successfully!"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo ""
-  echo "🔍 Intelligent Processing Summary:"
-  echo "   The workflow automatically determined which VMs needed cutover"
-  echo "   and which were already migrated, then configured patching for all."
-  echo ""
-  echo "📊 View detailed output in the workflow console logs above"
-  echo ""
-  echo "Next: Verify VMs and patching configuration in Azure portal"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  shell: /bin/bash -e {0}
-  env:
-    ANSIBLE_ROLES_PATH: ansible/roles
-    ANSIBLE_CONFIG: ansible/ansible.cfg
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Workflow completed successfully!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🔍 Intelligent Processing Summary:
-   The workflow automatically determined which VMs needed cutover
-   and which were already migrated, then configured patching for all.
-
-📊 View detailed output in the workflow console logs above
-
-Next: Verify VMs and patching configuration in Azure portal
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
