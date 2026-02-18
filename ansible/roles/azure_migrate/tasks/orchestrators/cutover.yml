@@ -31,9 +31,9 @@
       vm_name: "{{ vm_item.name }}"
       status: >-
         {{
-          'success' if (all_cutover_outputs[vm_item.name].cutover_result.Success | default(false) and all_cutover_outputs[vm_item.name].cutover_result.Status in ['Initiated', 'AlreadyCompleted'])
+          'success' if (all_cutover_outputs[vm_item.name].cutover_result.Success | default(false) and all_cutover_outputs[vm_item.name].cutover_result.Status | trim in ['Initiated', 'AlreadyCompleted'])
           else (
-            'skipped' if (all_cutover_outputs[vm_item.name].cutover_result.Status in ['Skipped', 'AlreadyCompleted', 'NotReady', 'NotFound'] | default(false))
+            'skipped' if (all_cutover_outputs[vm_item.name].cutover_result.Status | trim in ['Skipped', 'NotReady', 'NotFound'] | default(false))
             else 'failed'
           )
         }}

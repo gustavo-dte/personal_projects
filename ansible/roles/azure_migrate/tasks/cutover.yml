@@ -76,7 +76,7 @@
           - Migration State: '{{ replication_json.MigrationState | default('N/A') }}'
           - Migration Description: '{{ replication_json.MigrationStateDescription | default('N/A') }}'
           - VM Name: '{{ replication_json.VMName | default('N/A') }}'
-          - Target VM Name: '{{ replication_json.TargetVMName | default('N/A') }}'
+          - Target VM Name: '{{ target_vm_name | default(replication_json.TargetVMName | default(vm_name)) }}'
           - Replication Status: '{{ replication_json.ReplicationStatus | default('N/A') }}'
           - Current Job: '{{ replication_json.CurrentJobName | default('N/A') }}'
           - Allowed Operations: {{ replication_json.AllowedOperationStrings | default([]) | join(', ') if replication_json.AllowedOperationStrings | default([]) | length > 0 else 'None' }}
@@ -397,42 +397,36 @@
 
 - name: Show cutover operation summary
   ansible.builtin.debug:
-    msg:
-      - >-
-        {% if cutover_result is defined and cutover_result.get('Status') == 'Initiated' -%}
-        ✅ Cutover operation initiated for '{{ vm_name }}'
-        {%- elif cutover_result is defined and cutover_result.get('Status') == 'Skipped' -%}
-        ⚠️ Cutover operation skipped for '{{ vm_name }}'
-        {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted' -%}
-        ℹ️ Migration already completed for '{{ vm_name }}'
-        {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress' -%}
-        🔄 Migration already in progress for '{{ vm_name }}'
-        {%- elif cutover_result is defined and cutover_result.get('Status') == 'Failed' -%}
-        ❌ Cutover operation failed for '{{ vm_name }}'
-        {%- elif cutover_result is defined -%}
-        Cutover operation completed for '{{ vm_name }}'
-        {%- else -%}
-        ⚠️ Cutover result not available for '{{ vm_name }}'
-        {%- endif %}
-      - "Status: {{ cutover_result.get('Status', 'Unknown') if cutover_result is defined else 'Not Available' }}"
-      - >-
-        {% if cutover_result is defined and cutover_result.get('JobId') and cutover_result.get('Status') == 'Initiated' -%}
-        Monitor job: {{ cutover_result.get('JobId') }}
-        {%- endif %}
-      - >-
-        {% if cutover_result is defined and cutover_result.get('CurrentJobName') and cutover_result.get('Status') == 'AlreadyInProgress' -%}
-        Monitor existing job: {{ cutover_result.get('CurrentJobName') }}
-        {%- endif %}
-      - >-
-        {% if not (shutdown_source_vm | default(false)) and cutover_result is defined and cutover_result.get('Status') == 'Initiated' -%}
-        Manual shutdown may be required for source VM
-        {%- endif %}
-      - >-
-        {% if cutover_result is defined and cutover_result.get('Message') and cutover_result.get('Status') in ['AlreadyCompleted', 'Skipped', 'AlreadyInProgress', 'Failed'] -%}
-        {% if cutover_result.get('Status') == 'AlreadyCompleted' -%}✅ {%- endif -%}
-        {% if cutover_result.get('Status') == 'Skipped' -%}⚠️ {%- endif -%}
-        {% if cutover_result.get('Status') == 'AlreadyInProgress' -%}🔄 {%- endif -%}
-        {% if cutover_result.get('Status') == 'Failed' -%}❌ {%- endif -%}
-        {{ cutover_result.get('Message') }}
-        {%- endif %}
-      - "{{ '❌ ' ~ cutover_result.get('Message', 'No details available') if cutover_result is defined and cutover_result.get('Status') == 'Failed' else '' }}"
+    msg: |
+      {% if cutover_result is defined and cutover_result.get('Status') == 'Initiated' -%}
+      ✅ Cutover operation initiated for '{{ vm_name }}'
+      {%- elif cutover_result is defined and cutover_result.get('Status') == 'Skipped' -%}
+      ⚠️ Cutover operation skipped for '{{ vm_name }}'
+      {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted' -%}
+      ℹ️ Migration already completed for '{{ vm_name }}'
+      {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress' -%}
+      🔄 Migration already in progress for '{{ vm_name }}'
+      {%- elif cutover_result is defined and cutover_result.get('Status') == 'Failed' -%}
+      ❌ Cutover operation failed for '{{ vm_name }}'
+      {%- elif cutover_result is defined -%}
+      Cutover operation completed for '{{ vm_name }}'
+      {%- else -%}
+      ⚠️ Cutover result not available for '{{ vm_name }}'
+      {%- endif %}
+      Status: {{ cutover_result.get('Status', 'Unknown') | trim if cutover_result is defined else 'Not Available' }}
+      {% if cutover_result is defined and cutover_result.get('JobId') and cutover_result.get('Status') | trim == 'Initiated' -%}
+      Monitor job: {{ cutover_result.get('JobId') }}
+      {%- endif %}
+      {% if cutover_result is defined and cutover_result.get('CurrentJobName') and cutover_result.get('Status') | trim == 'AlreadyInProgress' -%}
+      Monitor existing job: {{ cutover_result.get('CurrentJobName') }}
+      {%- endif %}
+      {% if not (shutdown_source_vm | default(false)) and cutover_result is defined and cutover_result.get('Status') | trim == 'Initiated' -%}
+      Manual shutdown may be required for source VM
+      {%- endif %}
+      {% if cutover_result is defined and cutover_result.get('Message') and cutover_result.get('Status') | trim in ['AlreadyCompleted', 'Skipped', 'AlreadyInProgress', 'Failed'] -%}
+      {% if cutover_result.get('Status') | trim == 'AlreadyCompleted' -%}✅ {%- endif -%}
+      {% if cutover_result.get('Status') | trim == 'Skipped' -%}⚠️ {%- endif -%}
+      {% if cutover_result.get('Status') | trim == 'AlreadyInProgress' -%}🔄 {%- endif -%}
+      {% if cutover_result.get('Status') | trim == 'Failed' -%}❌ {%- endif -%}
+      {{ cutover_result.get('Message') | trim }}
+      {%- endif %}
