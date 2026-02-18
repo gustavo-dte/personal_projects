@@ -199,7 +199,7 @@
               MigrationState: "{{ replication_json.get('MigrationState', 'Unknown') }}"
               MigrationStateDescription: "{{ replication_json.get('MigrationStateDescription', 'Unknown') }}"
               ReplicationStatus: "{{ replication_json.get('ReplicationStatus', 'Unknown') }}"
-              TargetVMName: "{{ replication_json.get('TargetVMName', 'Unknown') }}"
+              TargetVMName: "{{ target_vm_name | default(replication_json.get('TargetVMName', vm_name)) }}"
               CurrentJobName: "{{ replication_json.get('CurrentJobName', '') }}"
               AllowedOperations: "{{ replication_json.get('AllowedOperationStrings', []) | join(', ') }}"
               Message: >-
