@@ -288,7 +288,7 @@
       Migration Description: {{ current_migration_description }}
       Replication Status: {{ current_replication_status }}
       Proceeding with cutover operation...
-  when: (vm_ready_for_cutover or force_cutover_enabled) and not (skip_cutover | default(false) | bool)
+  when: (vm_ready_for_cutover or force_cutover_enabled | default(false)) and not (skip_cutover | default(false) | bool)
 
 - name: Perform cutover operation
   block:
