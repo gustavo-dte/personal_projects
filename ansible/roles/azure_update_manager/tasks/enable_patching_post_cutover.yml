@@ -1,6 +1,6 @@
 ---
 # enable_patching_post_cutover.yml
-# Azure Update Manager patching setup using correct Azure API format
+# Complete Azure Update Manager patching setup with patch mode fix for Azure Migrate VMs
 
 # Expected vars:
 #   vm_name, target_resource_group, target_subscription_id, patching_schedules_file
@@ -63,7 +63,45 @@
     vm_location: "{{ (vm_details.stdout | from_json).location }}"
   when: not dry_run | default(false) | bool
 
-# ── 4. Create maintenance configuration using correct Azure format ──────────
+# ── 4. Set patch mode using Azure REST API ──────────────────────────────────
+
+- name: "Patching | Set patch mode to AutomaticByPlatform using REST API"
+  ansible.builtin.shell: |
+    az rest \
+      --method PATCH \
+      --url "{{ vm_resource_id }}?api-version=2024-07-01" \
+      --body '{
+        "properties": {
+          "osProfile": {
+            "windowsConfiguration": {
+              "patchSettings": {
+                "patchMode": "AutomaticByPlatform",
+                "automaticByPlatformSettings": {
+                  "bypassPlatformSafetyChecksOnUserSchedule": true
+                }
+              }
+            }
+          }
+        }
+      }'
+  args:
+    executable: /bin/bash
+  register: patch_mode_result
+  changed_when: patch_mode_result.rc == 0
+  failed_when: false
+  when: not dry_run | default(false) | bool
+
+- name: "Patching | Show patch mode result"
+  ansible.builtin.debug:
+    msg: |
+      {% if patch_mode_result.rc == 0 -%}
+      ✅ Patch mode set to AutomaticByPlatform with bypass enabled
+      {%- else -%}
+      ⚠️  Could not set patch mode (continuing anyway): {{ patch_mode_result.stderr | default('Unknown error') }}
+      {%- endif %}
+  when: not dry_run | default(false) | bool
+
+# ── 5. Create maintenance configuration ─────────────────────────────────────
 
 - name: "Patching | Create/Update maintenance configuration"
   ansible.builtin.shell: |
@@ -124,12 +162,11 @@
       {% if config_result.rc == 0 -%}
       ✅ Maintenance configuration '{{ maint_config_name }}' created/updated successfully
       {%- else -%}
-      ❌ Failed to create configuration
-      Error: {{ config_result.stderr }}
+      ❌ Failed to create configuration: {{ config_result.stderr }}
       {%- endif %}
   when: not dry_run | default(false) | bool
 
-# ── 5. Assign configuration to VM ───────────────────────────────────────────
+# ── 6. Assign configuration to VM ───────────────────────────────────────────
 
 - name: "Patching | Assign maintenance configuration to VM"
   ansible.builtin.shell: |
@@ -159,7 +196,7 @@
       {%- endif %}
   when: not dry_run | default(false) | bool and config_result.rc == 0
 
-# ── 6. Verify assignment ────────────────────────────────────────────────────
+# ── 7. Verify assignment ────────────────────────────────────────────────────
 
 - name: "Patching | Verify maintenance assignment"
   ansible.builtin.command: >-
@@ -180,13 +217,13 @@
     assignment_verified: "{{ (verify_assignment.stdout | from_json | length > 0) if verify_assignment.stdout else false }}"
   when: not dry_run | default(false) | bool and verify_assignment.rc == 0
 
-# ── 7. Final summary ────────────────────────────────────────────────────────
+# ── 8. Final summary ────────────────────────────────────────────────────────
 
 - name: "Patching | Post-cutover patching setup summary"
   ansible.builtin.debug:
     msg:
       - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      - "{% if config_result.rc == 0 and assign_result.rc == 0 %}✅{% else %}⚠️{% endif %} Patching Setup for: {{ vm_name }}"
+      - "{% if patch_mode_result.rc == 0 and config_result.rc == 0 and assign_result.rc == 0 %}✅{% else %}⚠️{% endif %} Patching Setup for: {{ vm_name }}"
       - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       - "  Configuration : {{ maint_config_name }}"
       - "  Schedule      : Weekly {{ schedule_day }} at {{ schedule_time }}"
@@ -196,6 +233,7 @@
       - "  Time Zone     : Central Standard Time"
       - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       - "  Status:"
+      - "    Patch Mode   : {% if patch_mode_result.rc == 0 %}✅ Set{% else %}⚠️ Warning{% endif %}"
       - "    Configuration: {% if config_result.rc == 0 %}✅ Created{% else %}❌ Failed{% endif %}"
       - "    Assignment   : {% if assign_result.rc == 0 %}✅ Assigned{% else %}❌ Failed{% endif %}"
       - "    Verification : {% if assignment_verified | default(false) %}✅ Verified{% else %}⚠️ Pending{% endif %}"
