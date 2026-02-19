@@ -55,39 +55,34 @@
   tasks:
     # ── Check migration status for all VMs ─────────────────────────────────
 
-    - name: Check replication status for each VM
-      ansible.builtin.command: >-
-        pwsh -NoLogo -NoProfile -NonInteractive -File
-        ansible/roles/azure_migrate/files/get_replication_status.ps1
-        -ProjectName {{ manifest_data.azure_migrate_project_name }}
-        -ProjectResourceGroup {{ manifest_data.azure_migrate_project_resource_group }}
-        -VMNamesJson '["{{ vm_spec.name }}"]'
-        -SubscriptionId {{ manifest_data.azure_migrate_subscription_id | default(manifest_data.target_subscription_id | default('')) }}
-      register: replication_status_check
-      changed_when: false
-      loop: "{{ manifest_data.vms | default([]) }}"
-      loop_control:
-        loop_var: vm_spec
-        label: "{{ vm_spec.name }}"
-
-    - name: Read and parse replication status for each VM
+    - name: Check replication status and capture result for each VM
       block:
-        - name: Read JSON results file
+        - name: Run replication status check
+          ansible.builtin.command: >-
+            pwsh -NoLogo -NoProfile -NonInteractive -File
+            ansible/roles/azure_migrate/files/get_replication_status.ps1
+            -ProjectName {{ manifest_data.azure_migrate_project_name }}
+            -ProjectResourceGroup {{ manifest_data.azure_migrate_project_resource_group }}
+            -VMNamesJson '["{{ vm_spec.name }}"]'
+            -SubscriptionId {{ manifest_data.azure_migrate_subscription_id | default(manifest_data.target_subscription_id | default('')) }}
+          changed_when: false
+
+        - name: Read JSON results file immediately after execution
           ansible.builtin.slurp:
             src: get_replication_status_result.json
           register: json_file_content
           failed_when: false
 
-        - name: Parse replication status
+        - name: Store replication status for this VM
           ansible.builtin.set_fact:
-            vm_replication_statuses: "{{ vm_replication_statuses | default({}) | combine({item.vm_spec.name: repl_data}) }}"
+            vm_replication_statuses: "{{ vm_replication_statuses | default({}) | combine({vm_spec.name: repl_data}) }}"
           vars:
             repl_data: "{{ json_file_content.content | b64decode | from_json }}"
-          loop: "{{ replication_status_check.results }}"
-          loop_control:
-            label: "{{ item.vm_spec.name }}"
           when: json_file_content.content is defined
-      when: replication_status_check.results is defined
+      loop: "{{ manifest_data.vms | default([]) }}"
+      loop_control:
+        loop_var: vm_spec
+        label: "{{ vm_spec.name }}"
 
     - name: Build list of migrated VMs eligible for patching
       ansible.builtin.set_fact:
