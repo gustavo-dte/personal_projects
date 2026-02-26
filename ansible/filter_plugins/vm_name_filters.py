@@ -31,21 +31,22 @@ def validate_target_vm_name(target_vm_name: str) -> bool:
     - vm: always "vm" (2 chars)
     - region: cu/e2 (Azure region code, 2 chars)
     - os: win/lnx (3 chars)
-    - appname: abbreviated app name (exactly 3 chars)
+    - appname: abbreviated app name (3+ chars, lowercase letters)
     - env: p/d/t (1 char)
     - instance: 00-99 (2 chars)
-    - Total: exactly 13 characters (2+2+3+3+1+2)
+    - Minimum: 13 characters (2+2+3+3+1+2)
 
     Examples:
     - vmcuwinwebp01: CP, Central US, Windows, Web server, Production, 01
     - vme2lnxsqlp02: CP, East US 2, Linux, SQL Server, Production, 02
     - vmcuwinmond03: CP, Central US, Windows, Monitoring, Development, 03
     - vme2lnxfilp01: CP, East US 2, Linux, File server, Production, 01
+    - vmcuwinpowbit01: CP, Central US, Windows, Power BI, Test, 01
     """
 
     # Pattern: vm + region + os + appname + env + instance
-    # vm (2) + region (2) + os (3) + appname (3) + env (1) + instance (2) = 13 chars
-    pattern = r'^vm(cu|e2)(win|lnx)[a-z]{3}[pdt]\d{2}$'
+    # vm (2) + region (2) + os (3) + appname (3+) + env (1) + instance (2) = 13+ chars
+    pattern = r'^vm(cu|e2)(win|lnx)[a-z]{3,}[pdt]\d{2}$'
 
     return bool(re.match(pattern, target_vm_name, re.IGNORECASE))
 
