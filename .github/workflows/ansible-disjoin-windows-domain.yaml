@@ -128,136 +128,15 @@ jobs:
             echo "✅ DELINEA_SECRET_ID already set: ${DELINEA_SECRET_ID}"
             exit 0
           fi
-
-          python3 - <<'PY'
-          import json, os, sys, urllib.parse, urllib.request
-
-          base_url       = (os.getenv('DELINEA_BASE_URL',       '') or '').strip().rstrip('/')
-          username       = (os.getenv('DELINEA_USERNAME',       '') or '').strip()
-          password       =  os.getenv('DELINEA_PASSWORD',       '') or ''
-          search_text    = (os.getenv('DELINEA_SECRET_PATH',    '') or '').strip()
-          machine_filter = (os.getenv('DELINEA_SECRET_MACHINE', '') or '').strip().lower()
-          account_filter = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
-          github_env     =  os.getenv('GITHUB_ENV')
-
-          if not base_url or not username or not password:
-            print('⚠️ Skipping secret ID resolution — missing Delinea credentials.')
-            sys.exit(0)
-          if not search_text and not machine_filter:
-            print('⚠️ Skipping secret ID resolution — no DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE set.')
-            sys.exit(0)
-
-          try:
-            with urllib.request.urlopen(
-              urllib.request.Request(
-                f"{base_url}/oauth2/token",
-                data=urllib.parse.urlencode({'grant_type':'password','username':username,'password':password}).encode(),
-                headers={'Content-Type':'application/x-www-form-urlencoded'},
-                method='POST',
-              ), timeout=30
-            ) as r:
-              token = json.loads(r.read()).get('access_token')
-          except Exception as ex:
-            print(f'⚠️ Could not acquire Delinea token: {ex}')
-            sys.exit(0)
-
-          if not token:
-            print('⚠️ No access token returned — skipping.')
-            sys.exit(0)
-
-          auth = {'Authorization': f'Bearer {token}'}
-          seed = machine_filter or search_text
-
-          try:
-            with urllib.request.urlopen(
-              urllib.request.Request(
-                f"{base_url}/api/v1/secrets?"
-                + urllib.parse.urlencode({'filter.includeRestricted':'true','filter.searchtext':seed}),
-                headers=auth, method='GET',
-              ), timeout=30
-            ) as r:
-              records = json.loads(r.read()).get('records') or []
-          except Exception as ex:
-            print(f'⚠️ Secret search failed: {ex}')
-            sys.exit(0)
-
-          if not records:
-            print(f'⚠️ No secrets found for "{seed}" — falling back to path lookup.')
-            sys.exit(0)
-
-          def item_val(items, *slugs):
-            wanted = {s.lower() for s in slugs}
-            for i in items or []:
-              if str(i.get('slug','')).strip().lower() in wanted:
-                return str(i.get('itemValue','')).strip().lower()
-            return ''
-
-          def fetch_detail(sid):
-            with urllib.request.urlopen(
-              urllib.request.Request(f"{base_url}/api/v1/secrets/{sid}", headers=auth, method='GET'), timeout=30
-            ) as r:
-              return json.loads(r.read())
-
-          if machine_filter:
-            if not account_filter:
-              print('⚠️ DELINEA_SECRET_MACHINE set but DELINEA_SECRET_ACCOUNT is missing.')
-              sys.exit(1)
-            matches = []
-            for rec in records:
-              name = str(rec.get('name','') or '').strip()
-              if '\\' in name:
-                fqdn, acct = name.split('\\', 1)
-                if fqdn.strip().lower() == machine_filter and acct.strip().lower() == account_filter:
-                  matches.append(rec)
-            if not matches:
-              for rec in records:
-                sid = rec.get('id')
-                if not sid:
-                  continue
-                try:
-                  detail = fetch_detail(sid)
-                except Exception:
-                  continue
-                items = detail.get('items') or rec.get('items') or []
-                if (item_val(items,'machine','host','hostname','fqdn','server') == machine_filter
-                    and item_val(items,'username','user','account','login') == account_filter):
-                  matches.append(rec)
-            matches = list({str(m.get('id')): m for m in matches if m.get('id')}.values())
-            if len(matches) == 0:
-              print(f"❌ No secret matched machine='{machine_filter}' account='{account_filter}'.")
-              sys.exit(1)
-            if len(matches) > 1:
-              print(f"❌ Multiple matches (ids: {', '.join(str(m.get('id')) for m in matches)}). Set DELINEA_SECRET_ID explicitly.")
-              sys.exit(1)
-            sid = matches[0].get('id')
-            print(f"✅ Resolved DELINEA_SECRET_ID={sid}")
-            if github_env:
-              open(github_env,'a').write(f"DELINEA_SECRET_ID={sid}\n")
-            sys.exit(0)
-
-          exact = next((r for r in records if str(r.get('name','')).strip().lower() == search_text.lower()), None)
-          if not exact or not exact.get('id'):
-            print(f'⚠️ No exact name match for "{search_text}" — using path lookup.')
-            sys.exit(0)
-          sid = exact['id']
-          print(f"✅ Resolved DELINEA_SECRET_ID={sid} from path '{search_text}'")
-          if github_env:
-            open(github_env,'a').write(f"DELINEA_SECRET_ID={sid}\n")
-          PY
+          python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 
       # ── Extra-vars ───────────────────────────────────────────────────────────
       - name: "🧱 Prepare Ansible extra-vars"
+        env:
+          WORKFLOW_MANIFEST: ${{ inputs.manifest }}
+          WORKFLOW_DRY_RUN:  ${{ inputs.dry_run }}
         run: |
-          python3 - <<'PY'
-          import json
-
-          with open('ansible_extra_vars.json', 'w') as f:
-            json.dump({
-              'manifest':  '${{ inputs.manifest }}',
-              'dry_run':   ${{ inputs.dry_run }},
-            }, f, indent=2)
-          print('✅ ansible_extra_vars.json written.')
-          PY
+          python3 ansible/roles/python_scripts/build_extra_vars_disjoin.py
           chmod 600 ansible_extra_vars.json
           python3 -m json.tool ansible_extra_vars.json > /dev/null \
             && echo "✅ JSON valid" \
