@@ -147,6 +147,8 @@ jobs:
 
       # ── Extra-vars ───────────────────────────────────────────────────────────
       # Secrets are passed via env vars into the script — never shell-interpolated.
+      # WinRM password is fetched from Delinea in the playbook pre_tasks.
+      # Do not pass winrm_password here to avoid overriding Delinea with stale GitHub secrets.
       - name: "🧱 Prepare Ansible extra-vars"
         env:
           WORKFLOW_MANIFEST:            ${{ inputs.manifest }}

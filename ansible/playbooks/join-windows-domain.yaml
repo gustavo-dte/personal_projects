@@ -75,7 +75,7 @@
           Connecting to Delinea at {{ ss_url }} as {{ ss_username }}.
           Secret ref: {{ 'ID=' ~ ss_secret_id if ss_secret_id | length > 0 else 'Path=' ~ ss_secret_path }}
 
-    # ── Step 1: Fetch SE-Admin password from Delinea ───────────────────────────
+    # ── Step 1: Fetch SE-Admin password from Delinea Secret Server ──
     - name: "Step 1: Fetch SE-Admin password from Delinea Secret Server"
       block:
 
