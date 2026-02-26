@@ -1,0 +1,2 @@
+# This file can be safely deleted. It was a temporary backup created during refactoring.
+# The domain re-join logic was merged into the existing ansible-join-windows-domain.yaml workflow.

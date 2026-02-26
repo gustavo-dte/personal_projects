@@ -1,64 +1,142 @@
 ---
-# Playbook to disjoin Windows VMs from domain (move to WORKGROUP) for disjoin-only runs.
-# Targets VMs from the manifest; logic lives in the win-domain-join role.
+# ansible/playbooks/disjoin-windows-domain.yaml
 #
-# Optional: Add domain_admin_username and domain_admin_password for broken secure channel.
-# When unjoin fails with "Access is denied", the DC may need domain creds to authorize.
-# The join workflow passes these; disjoin-only uses WinRM only (works when channel is healthy).
+# Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server
+# Step 2 — Connect to the Azure VM as SE-Admin (WinRM) and disjoin from domain → WORKGROUP
 #
-# Usage:
-#   ansible-playbook playbooks/disjoin-windows-domain.yaml \
-#     -e "manifest=test_vm_migration" \
-#     -e "winrm_password=..." [-e "winrm_username=..."]
+# Required extra-vars:
+#   manifest          Directory name under ansible/vars/ describing the target VMs
 #
-# Requires a manifest with vms (and vm_ip or target_vm_name for Azure lookup).
-# WinRM credentials: per-VM vm_winrm_username/vm_winrm_password in manifest,
-# or playbook-level winrm_username/winrm_password (workflow passes single WINRM_PASSWORD).
+# Optional extra-vars:
+#   dry_run           true → preview only, no changes applied  (default: false)
+#
+# Required environment variables (injected by the workflow):
+#   DELINEA_BASE_URL      Delinea Secret Server base URL
+#   DELINEA_USERNAME      Service account used to authenticate to Delinea
+#   DELINEA_PASSWORD      Password for the Delinea service account
+#   DELINEA_SECRET_ID     Numeric ID of the SE-Admin secret  (preferred)
+#   DELINEA_SECRET_PATH   Name/path search term              (fallback when ID not set)
 
-- name: Disjoin Windows VMs from domain (targets from manifest)
+- name: "Disjoin Windows VMs from domain"
   hosts: localhost
   connection: local
   gather_facts: no
 
-
-
-
   vars:
-    ss_url: "https://dte.delinea.app/view/auth/start"
-    ss_username: "SE-Admin"
-    ss_password: "SuperSecureAPIPassword"
-    ss_secret_id: "DTE-Windows Account-SE-Admin"
+    ss_url_raw:         "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
+    ss_username_raw:    "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
+    ss_password:        "{{ lookup('ansible.builtin.env', 'DELINEA_PASSWORD', default='') }}"
+    ss_secret_id_raw:   "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
+    ss_secret_path_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_PATH', default='') }}"
+    ss_url:         "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
+    ss_username:    "{{ (ss_username_raw | trim) if (ss_username_raw | trim | length > 0) else 'SVC_VM_Migration' }}"
+    ss_secret_id:   "{{ ss_secret_id_raw | replace('\\n', '') | replace('\\r', '') | trim }}"
+    ss_secret_path: "{{ (ss_secret_path_raw | trim) if (ss_secret_path_raw | trim | length > 0) else 'SE-Admin' }}"
 
   pre_tasks:
-    - name: Fetch SE-Admin password from Delinea Secret Server
+
+    - name: "Validate: DELINEA_PASSWORD is set"
+      ansible.builtin.assert:
+        that: ss_password | length > 0
+        fail_msg: "DELINEA_PASSWORD environment variable is missing or empty."
+
+    - name: "Validate: Delinea URL and at least one secret reference are set"
+      ansible.builtin.assert:
+        that:
+          - ss_url | trim | length > 0
+          - (ss_secret_id | length > 0) or (ss_secret_path | trim | length > 0)
+        fail_msg: "DELINEA_BASE_URL is empty, or neither DELINEA_SECRET_ID nor DELINEA_SECRET_PATH is set."
+
+    - name: "Validate: manifest extra-var is provided"
+      ansible.builtin.assert:
+        that: manifest is defined and manifest | length > 0
+        fail_msg: "The 'manifest' extra-var is required."
+
+    - name: "Debug: Delinea connection config (non-sensitive)"
+      ansible.builtin.debug:
+        msg: >-
+          Connecting to Delinea at {{ ss_url }} as {{ ss_username }}.
+          Secret ref: {{ 'ID=' ~ ss_secret_id if ss_secret_id | length > 0 else 'Path=' ~ ss_secret_path }}
+
+    # ── Step 1: Fetch SE-Admin password from Delinea ───────────────────────────
+    - name: "Step 1: Fetch SE-Admin password from Delinea Secret Server"
       block:
-        - name: Attempt to fetch SE-Admin password from Delinea
-          set_fact:
-            winrm_password: "{{ lookup('Secret Server', ss_secret_id, url=ss_url, username=ss_username, password=ss_password, field='password') }}"
+
+        - name: "Step 1a: Fetch secret by numeric ID"
+          ansible.builtin.set_fact:
+            delinea_secret: >-
+              {{ lookup(
+                'delinea.platform_secretserver.tss',
+                ss_secret_id | int,
+                base_url=ss_url,
+                username=ss_username,
+                password=ss_password
+              ) }}
+          when: ss_secret_id | length > 0
           no_log: true
 
-        - name: Audit log (non-sensitive) Delinea fetch event
+        - name: "Step 1b: Fetch secret by path (fallback when DELINEA_SECRET_ID is not set)"
+          ansible.builtin.set_fact:
+            delinea_secret: >-
+              {{ lookup(
+                'delinea.platform_secretserver.tss',
+                0,
+                secret_path=ss_secret_path,
+                base_url=ss_url,
+                username=ss_username,
+                password=ss_password
+              ) }}
+          when: ss_secret_id | length == 0
+          no_log: true
+
+        - name: "Step 1c: Extract SE-Admin password from retrieved secret"
+          ansible.builtin.set_fact:
+            winrm_password: >-
+              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['password'] }}
+          no_log: true
+
+        - name: "Step 1d: Audit log — password retrieved (non-sensitive)"
           ansible.builtin.debug:
-            msg: "[AUDIT] Delinea password fetch attempted for user SE-Admin, secret_id={{ ss_secret_id }}."
-          no_log: false
+            msg: >-
+              [AUDIT] SE-Admin password retrieved from Delinea.
+              ref={{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
+              url={{ ss_url }} user={{ ss_username }}
 
       rescue:
-        - name: Fail with actionable error if Delinea password fetch fails
+        # Catches: server not found, DNS failure, network error,
+        #          bad credentials, secret not found, unexpected API error
+        - name: "Step 1 FAILED: could not retrieve SE-Admin password from Delinea"
           ansible.builtin.fail:
             msg: |
-              ❌ Failed to fetch SE-Admin password from Delinea Secret Server.
-              Please check Delinea connectivity, credentials, and secret configuration.
-              Secret ID: {{ ss_secret_id }}
-              URL: {{ ss_url }}
-              Username: {{ ss_username }}
-          no_log: false
+              ❌ Step 1 failed — could not retrieve SE-Admin password from Delinea Secret Server.
 
+              Common causes:
+                • Server not found / DNS resolution failure  →  {{ ss_url }} unreachable
+                • Network connectivity issue between the runner and Delinea
+                • Invalid service-account credentials  →  check DELINEA_USERNAME / DELINEA_PASSWORD
+                • Secret not found  →  check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
+                • Unexpected Delinea API error  →  review Delinea audit logs
+
+              Configuration:
+                URL       : {{ ss_url }}
+                Auth user : {{ ss_username }}
+                Secret ref: {{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
+
+              Remediation:
+                1. Confirm the runner can reach {{ ss_url }}  (e.g. curl -I {{ ss_url }})
+                2. Confirm DELINEA_USERNAME / DELINEA_PASSWORD are correct in GitHub Secrets
+                3. Confirm the secret exists and the service account has read permission
+                4. Check Delinea audit logs for the failed access attempt
+
+  # Step 2: disjoin each VM — handled by the win-domain-join role
+  # with disjoin_only=true (skips rename and rejoin entirely)
   roles:
     - role: common
+
     - role: win-domain-join
       vars:
-        manifest: "{{ manifest }}"
-        disjoin_only: true
-        dry_run: "{{ dry_run | default(false) }}"
+        manifest:      "{{ manifest }}"
         winrm_username: "SE-Admin"
         winrm_password: "{{ winrm_password }}"
+        disjoin_only:  true
+        dry_run:       "{{ dry_run | default(false) }}"

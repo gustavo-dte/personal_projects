@@ -1,45 +1,86 @@
+---
+# ansible/playbooks/join-windows-domain.yaml
+#
+# Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server
+# Step 2 — Connect to the Azure VM as SE-Admin (WinRM) and disjoin from domain → WORKGROUP
+#           (only when force_rejoin=true; skipped if already in WORKGROUP)
+# Step 3 — Connect to the Azure VM as SE-Admin (WinRM) and rename hostname to target_vm_name
+# Step 4 — Rejoin the VM to the domain using the cpoe-automation domain account
+#
+# Required extra-vars:
+#   manifest              Directory name under ansible/vars/ describing the target VMs
+#   domain_admin_password Password for the cpoe-automation domain account (Step 4)
+#
+# Optional extra-vars:
+#   dry_run               true → preview only, no changes applied  (default: false)
+#   force_rejoin          true → disjoin first even if already in target domain (default: false)
+#
+# Required environment variables (injected by the workflow):
+#   DELINEA_BASE_URL      Delinea Secret Server base URL
+#   DELINEA_USERNAME      Service account used to authenticate to Delinea
+#   DELINEA_PASSWORD      Password for the Delinea service account
+#   DELINEA_SECRET_ID     Numeric ID of the SE-Admin secret  (preferred)
+#   DELINEA_SECRET_PATH   Name/path search term              (fallback when ID not set)
+#
+# Required manifest keys:
+#   vms[*].target_vm_name                   Target hostname for each VM (Step 3)
+#   domainNameSetup.domain                  AD domain FQDN  (e.g. dtenet.com)
+#   domainNameSetup.domain_admin_username   Must be cpoe-automation
+#   domainNameSetup.domain_ou_path          (Optional) OU path for the computer object
 
-- name: Join Windows servers to domain
+- name: "Join Windows VMs to domain (Disjoin → Rename → Rejoin)"
   hosts: localhost
   connection: local
   gather_facts: no
 
   vars:
-    ss_url_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
-    ss_username_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
-    ss_password: "{{ lookup('ansible.builtin.env', 'DELINEA_PASSWORD', default='') }}"
-    ss_secret_id_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
+    ss_url_raw:         "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
+    ss_username_raw:    "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
+    ss_password:        "{{ lookup('ansible.builtin.env', 'DELINEA_PASSWORD', default='') }}"
+    ss_secret_id_raw:   "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
     ss_secret_path_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_PATH', default='') }}"
-    ss_url: "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
-    ss_username: "{{ (ss_username_raw | trim) if (ss_username_raw | trim | length > 0) else 'SVC_VM_Migration' }}"
-    ss_secret_id: "{{ ss_secret_id_raw | replace('\\n', '') | replace('\\r', '') | trim }}"
+    ss_url:         "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
+    ss_username:    "{{ (ss_username_raw | trim) if (ss_username_raw | trim | length > 0) else 'SVC_VM_Migration' }}"
+    ss_secret_id:   "{{ ss_secret_id_raw | replace('\\n', '') | replace('\\r', '') | trim }}"
     ss_secret_path: "{{ (ss_secret_path_raw | trim) if (ss_secret_path_raw | trim | length > 0) else 'SE-Admin' }}"
 
   pre_tasks:
-    - name: Validate Delinea password env var is set
+
+    - name: "Validate: DELINEA_PASSWORD is set"
       ansible.builtin.assert:
-        that:
-          - ss_password | length > 0
+        that: ss_password | length > 0
         fail_msg: "DELINEA_PASSWORD environment variable is missing or empty."
 
-    - name: Validate Delinea URL and secret path are set
+    - name: "Validate: Delinea URL and at least one secret reference are set"
       ansible.builtin.assert:
         that:
           - ss_url | trim | length > 0
           - (ss_secret_id | length > 0) or (ss_secret_path | trim | length > 0)
         fail_msg: "DELINEA_BASE_URL is empty, or neither DELINEA_SECRET_ID nor DELINEA_SECRET_PATH is set."
 
-    - name: Debug Delinea lookup config
+    - name: "Validate: manifest extra-var is provided"
+      ansible.builtin.assert:
+        that: manifest is defined and manifest | length > 0
+        fail_msg: "The 'manifest' extra-var is required."
+
+    - name: "Validate: domain_admin_password is provided"
+      ansible.builtin.assert:
+        that: domain_admin_password is defined and domain_admin_password | length > 0
+        fail_msg: "The 'domain_admin_password' extra-var is required for domain join (Step 4)."
+      no_log: true
+
+    - name: "Debug: Delinea connection config (non-sensitive)"
       ansible.builtin.debug:
         msg: >-
-          Using Delinea Secret Server plugin with
-          {{ 'Secret ID: ' ~ ss_secret_id if (ss_secret_id | length > 0) else 'Secret Path: ' ~ ss_secret_path }}
-      no_log: false
+          Connecting to Delinea at {{ ss_url }} as {{ ss_username }}.
+          Secret ref: {{ 'ID=' ~ ss_secret_id if ss_secret_id | length > 0 else 'Path=' ~ ss_secret_path }}
 
-    - name: Fetch SE-Admin password from Delinea Secret Server
+    # ── Step 1: Fetch SE-Admin password from Delinea ───────────────────────────
+    - name: "Step 1: Fetch SE-Admin password from Delinea Secret Server"
       block:
-        - name: Attempt to fetch SE-Admin secret from Delinea
-          set_fact:
+
+        - name: "Step 1a: Fetch secret by numeric ID"
+          ansible.builtin.set_fact:
             delinea_secret: >-
               {{ lookup(
                 'delinea.platform_secretserver.tss',
@@ -49,9 +90,10 @@
                 password=ss_password
               ) }}
           when: ss_secret_id | length > 0
+          no_log: true
 
-        - name: Attempt to fetch SE-Admin secret from Delinea by path
-          set_fact:
+        - name: "Step 1b: Fetch secret by path (fallback when DELINEA_SECRET_ID is not set)"
+          ansible.builtin.set_fact:
             delinea_secret: >-
               {{ lookup(
                 'delinea.platform_secretserver.tss',
@@ -62,36 +104,69 @@
                 password=ss_password
               ) }}
           when: ss_secret_id | length == 0
+          no_log: true
 
-        - name: Extract password from Delinea secret
-          set_fact:
+        - name: "Step 1c: Extract SE-Admin password from retrieved secret"
+          ansible.builtin.set_fact:
             winrm_password: >-
               {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['password'] }}
+          no_log: true
 
-        - name: Audit log (non-sensitive) Delinea fetch event
+        - name: "Step 1d: Audit log — password retrieved (non-sensitive)"
           ansible.builtin.debug:
             msg: >-
-              [AUDIT] Delinea password fetch attempted for user SE-Admin,
-              {{ 'secret_id=' ~ ss_secret_id if (ss_secret_id | length > 0) else 'secret_path=' ~ ss_secret_path }}.
-          no_log: false
+              [AUDIT] SE-Admin password retrieved from Delinea.
+              ref={{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
+              url={{ ss_url }} user={{ ss_username }}
 
       rescue:
-        - name: Fail with actionable error if Delinea password fetch fails
+        # Catches: server not found, DNS failure, network error,
+        #          bad credentials, secret not found, unexpected API error
+        - name: "Step 1 FAILED: could not retrieve SE-Admin password from Delinea"
           ansible.builtin.fail:
             msg: |
-              ❌ Failed to fetch SE-Admin password from Delinea Secret Server.
-              Please check Delinea connectivity, credentials, and secret configuration.
-              Secret Ref: {{ ss_secret_id if (ss_secret_id | length > 0) else ss_secret_path }}
-              URL: {{ ss_url }}
-              Username: {{ ss_username }}
-          no_log: false
+              ❌ Step 1 failed — could not retrieve SE-Admin password from Delinea Secret Server.
 
+              Common causes:
+                • Server not found / DNS resolution failure  →  {{ ss_url }} unreachable
+                • Network connectivity issue between the runner and Delinea
+                • Invalid service-account credentials  →  check DELINEA_USERNAME / DELINEA_PASSWORD
+                • Secret not found  →  check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
+                • Unexpected Delinea API error  →  review Delinea audit logs
+
+              Configuration:
+                URL       : {{ ss_url }}
+                Auth user : {{ ss_username }}
+                Secret ref: {{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
+
+              Remediation:
+                1. Confirm the runner can reach {{ ss_url }}  (e.g. curl -I {{ ss_url }})
+                2. Confirm DELINEA_USERNAME / DELINEA_PASSWORD are correct in GitHub Secrets
+                3. Confirm the secret exists and the service account has read permission
+                4. Check Delinea audit logs for the failed access attempt
+
+  # Steps 2-4: handled by the win-domain-join role
+  #   disjoin_vm.yaml      → Step 2  SE-Admin via WinRM  (only when force_rejoin=true)
+  #   rename_computer.yaml → Step 3  SE-Admin via WinRM
+  #   join_domain.yaml     → Step 4  cpoe-automation domain account
   roles:
     - role: common
+
     - role: win-domain-join
       vars:
         manifest: "{{ manifest }}"
-        dry_run: "{{ dry_run | default(false) }}"
-        force_rejoin: "{{ force_rejoin | default(false) }}"
+
+        # Steps 2 & 3 — SE-Admin local-admin credentials
+        # Password fetched live from Delinea in Step 1; never stored in extra-vars
         winrm_username: "SE-Admin"
         winrm_password: "{{ winrm_password }}"
+
+        # Step 4 — cpoe-automation domain account
+        # domain_admin_username is read from manifest domainNameSetup.domain_admin_username
+        # domain_admin_password comes from the DOMAIN_ADMIN_PASSWORD GitHub Secret
+        domain_admin_password: "{{ domain_admin_password }}"
+
+        # Behaviour flags
+        disjoin_only:  false
+        dry_run:       "{{ dry_run | default(false) }}"
+        force_rejoin:  "{{ force_rejoin | default(false) }}"
