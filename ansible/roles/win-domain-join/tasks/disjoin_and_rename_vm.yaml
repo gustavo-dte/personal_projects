@@ -1,0 +1,153 @@
+---
+# disjoin_and_rename_vm.yaml
+#
+# Per-VM orchestrator for the disjoin-and-rename path (no domain rejoin).
+# Called from main.yaml when disjoin_and_rename=true.
+#
+# Steps executed for each VM:
+#   1. prepare_winrm   — connect as SE-Admin, read actual hostname from VM,
+#                        read domain membership, set formatted credentials
+#   2. disjoin_domain  — Remove-Computer → WORKGROUP → reboot → wait
+#   3. Re-probe        — re-read actual hostname post-reboot so rename_computer
+#                        authenticates with the correct COMPUTERNAME\SE-Admin
+#   4. rename_computer — compare current hostname to manifest target_vm_name;
+#                        rename via Azure RunCommand (primary) or WinRM (fallback)
+#                        → reboot → verify new name
+#
+# Required vars (set by the loop in main.yaml):
+#   target_vm_name           New hostname from manifest (vms[*].target_vm_name)
+#   target_vm_host           IP or FQDN to connect to
+#   winrm_port               WinRM port (default 5985)
+#   winrm_transport          WinRM transport (default ntlm)
+#   item_winrm_username      SE-Admin (resolved by main.yaml)
+#   item_winrm_password      SE-Admin password from Delinea (resolved by main.yaml)
+#   bootstrap_winrm_username .\SE-Admin or hostname\SE-Admin format
+
+# ── Step 1: Prepare WinRM — read actual hostname and domain status ────────────
+- name: "Prepare WinRM and read current state from VM"
+  ansible.builtin.include_tasks: prepare_winrm.yaml
+
+- name: "Validate: target_vm_name is set in manifest for this VM"
+  ansible.builtin.assert:
+    that:
+      - target_vm_name is defined
+      - target_vm_name | length > 0
+    fail_msg: >-
+      ❌ target_vm_name is missing for VM '{{ item.name }}' in manifest.
+      Every VM entry must have a 'target_vm_name' field specifying the new hostname.
+
+- name: "Display disjoin-and-rename plan for {{ item.name }}"
+  ansible.builtin.debug:
+    msg: |
+      ══════════════════════════════════════════════════════
+        Disjoin-and-rename plan for {{ item.name }}
+      ══════════════════════════════════════════════════════
+        Host             : {{ target_vm_host }}
+        Current hostname : {{ current_hostname_info.old_name | default('unknown') }}
+        Target hostname  : {{ target_vm_name }}
+        Current domain   : {{ current_domain_status.domain | default('WORKGROUP') }}
+        Rename needed    : {{ (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper) }}
+      ══════════════════════════════════════════════════════
+      {% if dry_run | default(false) | bool %}
+      🧪 DRY RUN — no changes will be made.
+      {% endif %}
+
+# ── Step 2: Disjoin from domain ───────────────────────────────────────────────
+# disjoin_domain.yaml handles: pre-check, Remove-Computer, verify, reboot, wait.
+# It is a no-op when the VM is already in WORKGROUP (no domain to leave).
+- name: "Step 2: Disjoin from domain → WORKGROUP"
+  ansible.builtin.include_tasks: disjoin_domain.yaml
+  vars:
+    # disjoin_domain.yaml references domain_name only to decide whether to skip
+    # (already in correct domain). We set it to a sentinel value so the task
+    # always disjoins when in any domain, not just a specific one.
+    domain_name: "{{ current_domain_status.domain | default('WORKGROUP') }}"
+    # Always force disjoin — this path is intentionally destructive
+    force_rejoin: true
+    # Suppress the "needs_disjoin / hostname_differs" intermediary facts
+    # that disjoin_domain.yaml's display task references.
+    needs_disjoin: true
+    hostname_differs_from_target: >-
+      {{ (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper) }}
+
+# ── Step 3: Re-probe hostname after disjoin reboot ────────────────────────────
+# After the reboot the VM is in WORKGROUP. The actual COMPUTERNAME may already
+# be the new name if a prior run renamed it before rebooting, or it may still
+# be the old name. We re-read it so rename_computer.yaml uses the correct
+# COMPUTERNAME\SE-Admin credential format.
+- name: "Step 3: Re-probe actual hostname after disjoin reboot"
+  block:
+    - name: "Re-read hostname via WinRM (post-disjoin reboot)"
+      ansible.windows.win_shell: |
+        $env:COMPUTERNAME
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_winrm_read_timeout: 70
+        # Use .\SE-Admin — after disjoin reboot the hostname may have changed;
+        # dot-backslash always resolves to the local machine regardless of name.
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+      register: post_disjoin_hostname_result
+      retries: 6
+      delay: 30
+      until: post_disjoin_hostname_result is succeeded
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "Update current_hostname_info from post-disjoin probe"
+      ansible.builtin.set_fact:
+        current_hostname_info:
+          old_name: "{{ (post_disjoin_hostname_result.stdout | default('') | trim) if ((post_disjoin_hostname_result.stdout | default('') | trim) | length > 0) else (current_hostname_info.old_name | default(target_vm_name)) }}"
+
+    - name: "Update formatted_winrm_username to reflect post-disjoin hostname"
+      ansible.builtin.set_fact:
+        formatted_winrm_username: "{{ current_hostname_info.old_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+
+    - name: "Display post-disjoin hostname"
+      ansible.builtin.debug:
+        msg: >-
+          Post-disjoin hostname on {{ target_vm_host }}:
+          '{{ current_hostname_info.old_name }}'
+          (target: '{{ target_vm_name }}')
+  when: not (dry_run | default(false) | bool)
+
+# ── Step 4: Rename hostname to target_vm_name ─────────────────────────────────
+# rename_computer.yaml compares current_hostname_info.old_name to target_vm_name.
+# If they already match it skips gracefully.
+# Primary path: Azure RunCommand as SYSTEM.
+# Fallback: WinRM as SE-Admin (.\SE-Admin format).
+- name: "Step 4: Rename hostname to '{{ target_vm_name }}'"
+  ansible.builtin.include_tasks: rename_computer.yaml
+  vars:
+    # Pass restart_on_success=true so rename_computer triggers its own reboot
+    restart_on_success: true
+    # Use Azure RunCommand as the primary rename mechanism
+    use_azure_run_command: true
+    # Azure resource context (needed for az vm run-command and az vm restart)
+    azure_resource_group:   "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
+    azure_vm_name:          "{{ target_vm_name }}"
+    azure_subscription_id:  "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
+
+- name: "✅ Disjoin-and-rename complete for {{ item.name }}"
+  ansible.builtin.debug:
+    msg: >-
+      VM '{{ item.name }}' has been disjoined from domain and renamed to '{{ target_vm_name }}'.
+      The VM is now in WORKGROUP with hostname '{{ target_vm_name }}'.
+      It is ready for the domain-join workflow.
+  when: not (dry_run | default(false) | bool)
+
+- name: "🧪 [DRY RUN] Disjoin-and-rename preview for {{ item.name }}"
+  ansible.builtin.debug:
+    msg: |
+      [DRY RUN] Would execute for {{ item.name }}:
+        Step 2: Disjoin from '{{ current_domain_status.domain | default('WORKGROUP') }}' → WORKGROUP
+        Step 4: Rename '{{ current_hostname_info.old_name | default('unknown') }}' → '{{ target_vm_name }}'
+      No changes were made.
+  when: dry_run | default(false) | bool

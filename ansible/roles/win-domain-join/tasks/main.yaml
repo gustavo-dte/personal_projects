@@ -153,6 +153,47 @@
         - disjoin_results.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
   when: disjoin_only | default(false) | bool
 
+- name: Disjoin and rename path (disjoin → reboot → rename → reboot; no domain rejoin)
+  block:
+    - name: Assert manifest has VMs for disjoin-and-rename
+      ansible.builtin.assert:
+        that:
+          - (manifest_data.vms | default([])) | length > 0
+        fail_msg: "❌ disjoin_and_rename requires manifest with at least one VM in vms."
+
+    - name: Disjoin then rename each Windows server
+      ansible.builtin.include_tasks: disjoin_and_rename_vm.yaml
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        target_vm_name:   "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host:   "{{ (vm_ip_map | default({}))[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        winrm_port:       "{{ item.vm_winrm_port | default(5985) }}"
+        winrm_transport:  "{{ item.vm_winrm_transport | default('ntlm') }}"
+        item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
+        item_winrm_password: "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
+      register: disjoin_and_rename_results
+      no_log: true
+
+    - name: Display disjoin-and-rename summary
+      ansible.builtin.debug:
+        msg: |
+          Disjoin-and-rename results:
+          {% for result in disjoin_and_rename_results.results %}
+          - {{ result.item.name }} → {{ result.item.target_vm_name | default(result.item.name) }}: {{ '✅ SUCCESS' if result is succeeded else '❌ FAILED' }}
+          {% endfor %}
+      when: disjoin_and_rename_results is defined
+
+    - name: Fail if any disjoin-and-rename failed
+      ansible.builtin.fail:
+        msg: "One or more VMs failed during disjoin-and-rename. Check the task output above."
+      when:
+        - disjoin_and_rename_results is defined
+        - disjoin_and_rename_results.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
+  when: disjoin_and_rename | default(false) | bool
+
 - name: Domain join path
   block:
     - name: Assert required variables

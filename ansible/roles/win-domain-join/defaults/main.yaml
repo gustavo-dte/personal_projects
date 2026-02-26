@@ -17,6 +17,9 @@ computer_name: ""  # Optional: Custom computer name (defaults to inventory_hostn
 
 # Behavior flags
 dry_run: false
+# disjoin_and_rename: disjoin from domain → reboot → rename hostname to target_vm_name → reboot
+# Used by the disjoin workflow. Does NOT rejoin the domain.
+disjoin_and_rename: false
 debug_mode: false  # When true, show extra WinRM connection details
 restart_on_success: true  # Whether to restart the server after successful domain join
 wait_for_reboot: true  # Whether to wait for reboot to complete

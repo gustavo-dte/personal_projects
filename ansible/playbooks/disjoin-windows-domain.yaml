@@ -2,7 +2,13 @@
 # ansible/playbooks/disjoin-windows-domain.yaml
 #
 # Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server
-# Step 2 — Connect to the Azure VM as SE-Admin (WinRM) and disjoin from domain → WORKGROUP
+# Step 2 — Connect to the Azure VM as SE-Admin (WinRM), disjoin from domain → WORKGROUP, reboot
+# Step 3 — Re-probe actual hostname after post-disjoin reboot
+# Step 4 — Rename hostname to target_vm_name (from manifest), reboot, verify
+#
+# target_vm_name is read from the manifest (vms[*].target_vm_name).
+# The rename is ALWAYS applied — if the current hostname already matches
+# target_vm_name the rename step skips gracefully with no changes.
 #
 # Required extra-vars:
 #   manifest          Directory name under ansible/vars/ describing the target VMs
@@ -16,8 +22,13 @@
 #   DELINEA_PASSWORD      Password for the Delinea service account
 #   DELINEA_SECRET_ID     Numeric ID of the SE-Admin secret  (preferred)
 #   DELINEA_SECRET_PATH   Name/path search term              (fallback when ID not set)
+#
+# Required manifest keys (per VM):
+#   vms[*].name            Source VM name (used for IP lookup and loop label)
+#   vms[*].target_vm_name  New hostname to apply (naming-convention target)
+#   vms[*].vm_ip           (Optional) Direct IP; if absent Azure API is queried
 
-- name: "Disjoin Windows VMs from domain"
+- name: "Disjoin Windows VMs from domain and rename to target hostname"
   hosts: localhost
   connection: local
   gather_facts: no
@@ -128,15 +139,26 @@
                 3. Confirm the secret exists and the service account has read permission
                 4. Check Delinea audit logs for the failed access attempt
 
-  # Step 2: disjoin each VM — handled by the win-domain-join role
-  # with disjoin_only=true (skips rename and rejoin entirely)
+  # Steps 2-4: handled by the win-domain-join role with disjoin_and_rename=true
+  #
+  #   Per VM the role executes disjoin_and_rename_vm.yaml which calls:
+  #     prepare_winrm.yaml   — connect as SE-Admin, read actual hostname from VM
+  #     disjoin_domain.yaml  — Remove-Computer → WORKGROUP → reboot → wait
+  #     (re-probe)           — re-read hostname post-reboot for correct WinRM auth
+  #     rename_computer.yaml — compare current hostname to manifest target_vm_name;
+  #                            rename (Azure RunCommand primary / WinRM fallback)
+  #                            → reboot → verify
+  #
+  # target_vm_name comes from manifest vms[*].target_vm_name.
+  # SE-Admin password is fetched live in Step 1 above — never stored in extra-vars.
   roles:
     - role: common
 
     - role: win-domain-join
       vars:
-        manifest:      "{{ manifest }}"
-        winrm_username: "SE-Admin"
-        winrm_password: "{{ winrm_password }}"
-        disjoin_only:  true
-        dry_run:       "{{ dry_run | default(false) }}"
+        manifest:           "{{ manifest }}"
+        winrm_username:     "SE-Admin"
+        winrm_password:     "{{ winrm_password }}"
+        disjoin_and_rename: true
+        disjoin_only:       false
+        dry_run:            "{{ dry_run | default(false) }}"
