@@ -1,0 +1,87 @@
+---
+# Playbook to perform migration cutover for VMs using the azure_migrate role
+# Loads VMs from manifest and performs cutover for each VM.
+#
+# After a successful cutover this playbook also enables Azure Update Manager
+# patching with a maintenance window read from a patching-schedules JSON file.
+#
+# Required extra-vars:
+#   manifest                - path to the manifest YAML for this migration batch
+#
+# Optional extra-vars:
+#   dry_run                 - true/false (default false)
+#   patching_schedules_file - absolute path to vm_patching_schedules.json
+#                             When omitted, post-cutover patching is skipped.
+#
+# Example (with patching):
+#   ansible-playbook playbooks/migration-cutover.yml \
+#     -e "manifest=vars/Testing/manifest.yml" \
+#     -e "patching_schedules_file=/path/to/vm_patching_schedules.json"
+
+- name: Perform migration cutover
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  pre_tasks:
+    - name: Show Azure account
+      block:
+        - name: Run 'az account show'
+          ansible.builtin.command: az account show -o table
+          changed_when: false
+      rescue:
+        - name: Exit playbook when 'az account show' fails
+          ansible.builtin.fail:
+            msg: "az account show failed; exiting"
+
+    - name: Validate patching_schedules_file exists (when provided)
+      ansible.builtin.stat:
+        path: "{{ patching_schedules_file }}"
+      register: patching_file_stat
+      when: patching_schedules_file is defined and patching_schedules_file | length > 0
+
+    - name: Warn when patching_schedules_file is not found
+      ansible.builtin.fail:
+        msg: >-
+          patching_schedules_file '{{ patching_schedules_file }}' was specified but
+          does not exist on the controller. Check the path and try again.
+      when:
+        - patching_schedules_file is defined
+        - patching_schedules_file | length > 0
+        - not patching_file_stat.stat.exists
+
+    - name: Inform when no patching schedule file was provided
+      ansible.builtin.debug:
+        msg: >-
+          ℹ️  patching_schedules_file was not provided.
+          Post-cutover patching configuration will be skipped.
+          Pass -e "patching_schedules_file=/path/to/vm_patching_schedules.json" to enable it.
+      when: patching_schedules_file is not defined or patching_schedules_file | length == 0
+
+  vars:
+    migration_action: cutover
+    # patching_schedules_file is intentionally left unset here so callers can
+    # opt-in at runtime without touching this playbook.
+
+  roles:
+    - role: azure_migrate
+
+  post_tasks:
+    - name: Cutover operation summary
+      ansible.builtin.debug:
+        msg:
+          - "Cutover operations completed"
+          - "Check individual VM results above"
+          - "Monitor migration jobs in Azure portal"
+          - ""
+          - "Next steps:"
+          - "1. Monitor migration progress in Azure portal"
+          - "2. Verify target VMs are running"
+          - "3. Test VM functionality"
+          - "4. Shutdown source VMs if needed"
+          - "5. Update DNS and networking"
+          - >-
+            {{
+              '6. Patching scheduled via: ' ~ patching_schedules_file
+              if (patching_schedules_file is defined and patching_schedules_file | length > 0)
+              else '6. Patching not configured (patching_schedules_file not provided)'
+            }}

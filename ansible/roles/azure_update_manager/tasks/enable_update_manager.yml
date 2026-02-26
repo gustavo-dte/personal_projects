@@ -1,0 +1,45 @@
+---
+- name: Check VM health (ping)
+  azure.azcollection.azure_rm_virtualmachine_info:
+    resource_group: "{{ manifest_data.target_resource_group }}"
+    name: "{{ vm_spec.name }}"
+    subscription_id: "{{ manifest_data.target_subscription_id }}"
+  register: vm_info
+  when: not dry_run | bool
+
+- name: Mock VM health for dry run
+  ansible.builtin.set_fact:
+    vm_info:
+      status: "Online"
+  when: dry_run | bool
+
+- name: Assert VM is healthy/online
+  ansible.builtin.assert:
+    that:
+      - vm_info.status == "Online"
+    fail_msg: "VM {{ vm_spec.name }} is not online/healthy."
+  when: not dry_run | bool
+
+# Assess patches on VM
+# Always run/attempt patch assessment and show result (safe read-only operation).
+# If you want to prevent even the assessment during dry-run, set `update_manager.skip_assessment_in_dry_run: true`.
+- name: Assess patches on Windows VM (az cli)
+  ansible.builtin.command: >
+    az vm assess-patches
+    -g {{ manifest_data.target_resource_group }}
+    -n {{ vm_spec.name }}
+    --classifications-to-include-windows Critical
+  register: patch_assessment_result
+  changed_when: false
+  when: not (dry_run | bool) or not (manifest_data.update_manager.skip_assessment_in_dry_run | default(skip_assessment_in_dry_run))
+
+- name: Mock patch assessment for dry run (if skipped)
+  ansible.builtin.set_fact:
+    patch_assessment_result:
+      changed: false
+      stdout: "[DRY RUN] Assessment skipped for {{ vm_spec.name }} (set skip_assessment_in_dry_run=false to run real assessment)"
+  when: dry_run | bool and (skip_assessment_in_dry_run | default(true))
+
+- name: Show patch assessment result
+  ansible.builtin.debug:
+    msg: "{{ patch_assessment_result.stdout | default(patch_assessment_result.msg | default('No assessment output')) }}"

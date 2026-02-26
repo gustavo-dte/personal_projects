@@ -1,0 +1,16 @@
+# tasks/get_policy_definition.yml
+- name: Get Azure built-in policy definition for periodic update assessment
+  block:
+    - name: Lookup built-in policy definition (real)
+      ansible.builtin.command: >
+        az policy definition list
+        --query "[?contains(displayName, 'Configure periodic checking for missing system updates')]|[0].name" -o tsv
+      register: policy_def_name
+      changed_when: false
+      when: not dry_run | bool
+
+    - name: Mock policy definition name (dry-run)
+      ansible.builtin.set_fact:
+        policy_def_name:
+          stdout: "builtin-periodic-missing-updates"
+      when: dry_run | bool

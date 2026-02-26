@@ -1,0 +1,40 @@
+---
+- name: Create Azure AD application for Dynatrace monitoring
+  azure.azcollection.azure_ad_application:
+    display_name: "{{ manifest_data.dynatrace.azure_app_name }}"
+  register: azure_app
+
+- name: Create a secret for the Azure AD application
+  azure.azcollection.azure_ad_app_secret:
+    app_id: "{{ azure_app.app_id }}"
+    years_valid: "{{ manifest_data.dynatrace.azure_secret_duration }}"
+  register: azure_app_secret
+
+- name: Create a service principal for the application
+  azure.azcollection.azure_ad_service_principal:
+    app_id: "{{ azure_app.app_id }}"
+  register: azure_sp
+
+- name: Assign Reader role to the service principal on subscription
+  azure.azcollection.azure_roleassignment:
+    scope: "/subscriptions/{{ manifest_data.dynatrace.azure_subscription_id }}"
+    role_definition_name: "{{ manifest_data.dynatrace.azure_role_name }}"
+    principal_id: "{{ azure_sp.object_id }}"
+  register: azure_role_assign
+
+- name: Show Azure App Credentials
+  debug:
+    msg:
+      appId: "{{ azure_app.app_id | default('UNKNOWN') }}"
+      secret: "{{ (azure_app_secret is defined and azure_app_secret.secret_text is defined) | ternary('*****MASKED*****','UNKNOWN') }}"
+      tenant: "{{ azure_sp.tenant_id | default('UNKNOWN') }}"
+      subscription: "{{ manifest_data.dynatrace.azure_subscription_id | default('UNKNOWN') }}"
+
+- name: Show Azure registered objects (debug)
+  debug:
+    msg:
+      azure_app: "{{ azure_app | default({}) }}"
+      # show azure_app_secret object but mask the actual secret_text
+      azure_app_secret: "{{ (azure_app_secret | default({})) | combine({'secret_text': ((azure_app_secret is defined and azure_app_secret.secret_text is defined) | ternary('*****MASKED*****','UNKNOWN'))}) }}"
+      azure_sp: "{{ azure_sp | default({}) }}"
+      azure_role_assign: "{{ azure_role_assign | default({}) }}"

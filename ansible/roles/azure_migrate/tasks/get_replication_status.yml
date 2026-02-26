@@ -1,0 +1,105 @@
+---
+# Check Azure Migrate replication status for VMs using PowerShell
+
+- name: Prepare VM names list from manifest
+  ansible.builtin.set_fact:
+    vm_names_from_manifest: "{{ manifest_data.vms | map(attribute='name') | list }}"
+
+- name: Check which VMs exist in target resource group
+  block:
+    - name: List VMs in target resource group
+      ansible.builtin.command: >-
+        az vm list --resource-group {{ manifest_data.target_resource_group }} --query "[].name" --output tsv
+      register: existing_vms_output
+      changed_when: false
+      when: not (dry_run | default(false))
+
+    - name: Mock VM list for dry run
+      ansible.builtin.set_fact:
+        existing_vms_output:
+          stdout_lines: "{{ vm_names_from_manifest }}"
+      when: dry_run | default(false)
+
+  rescue:
+    - name: Handle VM list failure
+      ansible.builtin.set_fact:
+        existing_vms_output:
+          stdout_lines: []
+
+    - name: Log VM list error
+      ansible.builtin.debug:
+        msg: "Warning: Could not list VMs in resource group {{ manifest_data.target_resource_group }}. Proceeding with empty VM list."
+
+- name: Set existing VMs list
+  ansible.builtin.set_fact:
+    existing_vms: "{{ existing_vms_output.stdout_lines | default([]) }}"
+
+- name: Filter VMs that exist in both manifest and target resource group
+  ansible.builtin.set_fact:
+    vms_to_check: "{{ vm_names_from_manifest | intersect(existing_vms) }}"
+
+
+- name: Check Azure Migrate replication status using PowerShell
+  block:
+    - name: Run get_replication_status.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/get_replication_status.ps1
+        -ProjectName {{ manifest_data.azure_migrate_project_name }}
+        -ProjectResourceGroup {{ manifest_data.azure_migrate_project_resource_group | default(manifest_data.target_resource_group) }}
+        -VMNamesJson '{{ vms_to_check | to_json }}'
+        -SubscriptionId {{ manifest_data.target_subscription_id | default('') }}
+      register: replication_status_output
+      changed_when: false
+      when: not (dry_run | default(false))
+
+  rescue:
+    - name: Handle replication status check failure
+      ansible.builtin.set_fact:
+        replication_status_results: []
+
+    - name: Build error results for each VM
+      ansible.builtin.set_fact:
+        replication_status_results: "{{ replication_status_results + [error_status] }}"
+      loop: "{{ vms_to_check }}"
+      vars:
+        error_status:
+          VMName: "{{ item }}"
+          ReplicationStatus: "Error"
+          Error: "Failed to retrieve replication status"
+
+    - name: Log replication status check error
+      ansible.builtin.debug:
+        msg: "Replication status check encountered errors. Check the logs above for details."
+- name: Debug stdout content
+  ansible.builtin.debug:
+    var: replication_status_output.stdout
+  when:
+    - replication_status_output is defined
+    - replication_status_output.stdout is defined
+
+- name: Parse replication status results
+  ansible.builtin.set_fact:
+    replication_status_results: "{{ replication_status_output.stdout | from_json }}"
+  when:
+    - replication_status_output is defined
+    - replication_status_output.stdout is defined
+    - not (dry_run | default(false))
+
+- name: Display replication status summary
+  ansible.builtin.debug:
+    msg:
+      - "=== AZURE MIGRATE REPLICATION STATUS RESULTS ==="
+      - "VMs from manifest: {{ vm_names_from_manifest | length }}"
+      - "VMs checked: {{ vms_to_check | length }}"
+      - "Errors: {{ (replication_status_results | default([])) | selectattr('ReplicationStatus', 'equalto', 'Error') | list | length }}"
+
+- name: Show replication status
+  ansible.builtin.debug:
+    msg: |
+      {% for vm in replication_status_results %}
+      VM: {{ vm.VMName }}
+        ReplicationStatus: {{ vm.ReplicationStatus }}
+        Error: {{ vm.Error }}
+      {% endfor %}
+  when: replication_status_output is defined

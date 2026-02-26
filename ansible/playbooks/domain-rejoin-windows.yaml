@@ -1,0 +1,198 @@
+---
+# Playbook: domain-rejoin-windows.yaml
+#
+# Full domain re-join workflow for a single Windows test-server:
+#   Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server
+#   Step 2 — Connect to the Azure VM as SE-Admin and disjoin it from domain (move to WORKGROUP)
+#   Step 3 — Connect to the Azure VM as SE-Admin and rename the hostname to the target name
+#   Step 4 — Rejoin the VM to the domain using the cpoe-automation domain service account
+#
+# Required inputs / environment variables:
+#   manifest                  Manifest name (directory under ansible/vars/)
+#   new_hostname              Target hostname the VM should be renamed to (Step 3)
+#   domain_admin_password     Password for cpoe-automation domain account (Step 4) — passed via GitHub Secret
+#
+# Delinea environment variables (injected by workflow):
+#   DELINEA_BASE_URL          Delinea Secret Server base URL
+#   DELINEA_USERNAME          Service-account username that authenticates to Delinea
+#   DELINEA_PASSWORD          Service-account password that authenticates to Delinea
+#   DELINEA_SECRET_ID         (Optional) Numeric secret ID for SE-Admin secret
+#   DELINEA_SECRET_PATH       (Optional) Path/name search term — used when secret ID not known
+#   DELINEA_SECRET_MACHINE    (Optional) Machine FQDN filter for multi-match disambiguation
+#   DELINEA_SECRET_NAME       (Optional) Secret-name filter for disambiguation
+#   DELINEA_SECRET_ACCOUNT    (Optional) Account-name filter — defaults to SE-Admin
+#
+# Usage (local):
+#   ansible-playbook ansible/playbooks/domain-rejoin-windows.yaml \
+#     -e "manifest=Testing" \
+#     -e "new_hostname=vmcuwinwebd02" \
+#     -e "domain_admin_password=<cpoe-automation-password>"
+
+- name: "Domain Re-Join Workflow: Disjoin → Rename → Rejoin"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  # ─── Delinea connection vars (resolved from environment) ─────────────────────
+  vars:
+    ss_url_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
+    ss_username_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
+    ss_password: "{{ lookup('ansible.builtin.env', 'DELINEA_PASSWORD', default='') }}"
+    ss_secret_id_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
+    ss_secret_path_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_PATH', default='') }}"
+
+    # Apply defaults when environment variables are blank
+    ss_url: "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
+    ss_username: "{{ (ss_username_raw | trim) if (ss_username_raw | trim | length > 0) else 'SVC_VM_Migration' }}"
+    ss_secret_id: "{{ ss_secret_id_raw | replace('\\n', '') | replace('\\r', '') | trim }}"
+    ss_secret_path: "{{ (ss_secret_path_raw | trim) if (ss_secret_path_raw | trim | length > 0) else 'SE-Admin' }}"
+
+    # Domain account used in Step 4 (re-join)
+    domain_join_username: "cpoe-automation"
+
+  # ─── PRE-TASKS ────────────────────────────────────────────────────────────────
+  pre_tasks:
+
+    # ── Guard: ensure required playbook-level variables are present ────────────
+    - name: "Pre-check: Validate required extra-vars are provided"
+      ansible.builtin.assert:
+        that:
+          - manifest is defined and manifest | string | length > 0
+          - new_hostname is defined and new_hostname | string | length > 0
+          - domain_admin_password is defined and domain_admin_password | string | length > 0
+        fail_msg: |
+          ❌ Missing required variables. Please provide:
+            - manifest          (e.g. -e manifest=Testing)
+            - new_hostname      (e.g. -e new_hostname=vmcuwinwebd02)
+            - domain_admin_password  (domain password for cpoe-automation)
+
+    - name: "Pre-check: Validate Delinea authentication environment variables"
+      ansible.builtin.assert:
+        that:
+          - ss_password | length > 0
+          - ss_url | trim | length > 0
+          - (ss_secret_id | length > 0) or (ss_secret_path | trim | length > 0)
+        fail_msg: |
+          ❌ Delinea environment variables are missing or empty:
+            - DELINEA_PASSWORD must be set.
+            - DELINEA_BASE_URL must be set (or the default https://dte.secretservercloud.com will be used).
+            - At least one of DELINEA_SECRET_ID or DELINEA_SECRET_PATH must be set.
+
+    # ── STEP 1: Fetch SE-Admin password from Delinea Secret Server ────────────
+    - name: "Step 1: Fetch SE-Admin password from Delinea Secret Server"
+      block:
+        - name: "Step 1a: Debug Delinea lookup configuration (non-sensitive)"
+          ansible.builtin.debug:
+            msg: >-
+              Connecting to Delinea at {{ ss_url }} as {{ ss_username }}.
+              Secret reference: {{ 'Secret ID: ' ~ ss_secret_id if (ss_secret_id | length > 0) else 'Secret Path: ' ~ ss_secret_path }}
+
+        - name: "Step 1b: Fetch SE-Admin secret from Delinea by numeric ID"
+          ansible.builtin.set_fact:
+            delinea_secret: >-
+              {{ lookup(
+                'delinea.platform_secretserver.tss',
+                ss_secret_id | int,
+                base_url=ss_url,
+                username=ss_username,
+                password=ss_password
+              ) }}
+          when: ss_secret_id | length > 0
+          no_log: true
+
+        - name: "Step 1c: Fetch SE-Admin secret from Delinea by path (when secret ID is not provided)"
+          ansible.builtin.set_fact:
+            delinea_secret: >-
+              {{ lookup(
+                'delinea.platform_secretserver.tss',
+                0,
+                secret_path=ss_secret_path,
+                base_url=ss_url,
+                username=ss_username,
+                password=ss_password
+              ) }}
+          when: ss_secret_id | length == 0
+          no_log: true
+
+        - name: "Step 1d: Extract SE-Admin password field from retrieved secret"
+          ansible.builtin.set_fact:
+            se_admin_winrm_password: >-
+              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['password'] }}
+          no_log: true
+
+        - name: "Step 1e: Audit log — Delinea fetch succeeded (non-sensitive)"
+          ansible.builtin.debug:
+            msg: >-
+              [AUDIT] ✅ SE-Admin password successfully retrieved from Delinea Secret Server.
+              Secret ref: {{ 'ID=' ~ ss_secret_id if (ss_secret_id | length > 0) else 'Path=' ~ ss_secret_path }}
+              Delinea URL: {{ ss_url }}
+              Authenticating service account: {{ ss_username }}
+
+      rescue:
+        # ── Exception handler: catch any Delinea connectivity or lookup failure ──
+        - name: "Step 1 FAILED: Delinea Secret Server unreachable or secret not found"
+          ansible.builtin.fail:
+            msg: |
+              ❌ Step 1 failed — could not retrieve SE-Admin password from Delinea Secret Server.
+
+              Common causes:
+                • Server not found / DNS resolution failure for {{ ss_url }}
+                • Network connectivity issue between the runner and Delinea
+                • Invalid service-account credentials (DELINEA_USERNAME / DELINEA_PASSWORD)
+                • Secret not found — check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
+                • Secret Server returned an unexpected error (check Delinea audit logs)
+
+              Configuration used:
+                Delinea URL   : {{ ss_url }}
+                Auth user     : {{ ss_username }}
+                Secret ref    : {{ 'ID=' ~ ss_secret_id if (ss_secret_id | length > 0) else 'Path=' ~ ss_secret_path }}
+
+              Resolution steps:
+                1. Verify the runner can reach {{ ss_url }} (curl/ping test).
+                2. Confirm DELINEA_USERNAME and DELINEA_PASSWORD are correct GitHub secrets.
+                3. Confirm the secret ID/path exists and the service account has read access.
+                4. Check Delinea Secret Server audit logs for the failed access attempt.
+          no_log: false
+
+  # ─── ROLES ────────────────────────────────────────────────────────────────────
+  # Steps 2–4 are handled by the win-domain-join role.
+  #
+  # Step 2 (disjoin)   — role task: disjoin_vm.yaml   — uses SE-Admin via WinRM
+  # Step 3 (rename)    — role task: rename_computer.yaml — uses SE-Admin via WinRM
+  # Step 4 (rejoin)    — role task: join_domain.yaml   — uses cpoe-automation domain account
+  #
+  # The role reads:
+  #   winrm_username / winrm_password    → SE-Admin local admin (Steps 2 & 3)
+  #   domain_admin_username              → cpoe-automation (from manifest domainNameSetup)
+  #   domain_admin_password              → passed from GitHub Secret / extra-var
+  #   target_vm_name                     → new_hostname extra-var (rename target)
+
+  roles:
+    - role: common
+
+    - role: win-domain-join
+      vars:
+        manifest: "{{ manifest }}"
+
+        # ── Step 2 & 3: SE-Admin local-admin credentials (from Delinea) ─────────
+        winrm_username: "SE-Admin"
+        winrm_password: "{{ se_admin_winrm_password }}"
+
+        # ── Step 3: Rename target hostname ────────────────────────────────────
+        # Overrides target_vm_name for all VMs in the manifest to the new hostname.
+        # For multi-VM manifests, set per-VM target_vm_name in the manifest instead.
+        # target_vm_name is set per-VM in join_vm.yaml from item.target_vm_name;
+        # new_hostname is passed as the canonical rename target here.
+
+        # ── Step 4: Domain re-join using cpoe-automation ──────────────────────
+        # domain_admin_username is read from manifest_data.domainNameSetup.domain_admin_username
+        # (should be set to cpoe-automation in the manifest's domainNameSetup block).
+        domain_admin_password: "{{ domain_admin_password }}"
+
+        # ── Workflow flags ─────────────────────────────────────────────────────
+        # force_rejoin: disjoin and rejoin even when VM is already in target domain.
+        force_rejoin: true
+        dry_run: "{{ dry_run | default(false) }}"
+        restart_on_success: "{{ restart_on_success | default(true) }}"
+        wait_for_reboot: "{{ wait_for_reboot | default(true) }}"
+        use_azure_restart: "{{ use_azure_restart | default(true) }}"

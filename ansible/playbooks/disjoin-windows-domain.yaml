@@ -1,0 +1,64 @@
+---
+# Playbook to disjoin Windows VMs from domain (move to WORKGROUP) for disjoin-only runs.
+# Targets VMs from the manifest; logic lives in the win-domain-join role.
+#
+# Optional: Add domain_admin_username and domain_admin_password for broken secure channel.
+# When unjoin fails with "Access is denied", the DC may need domain creds to authorize.
+# The join workflow passes these; disjoin-only uses WinRM only (works when channel is healthy).
+#
+# Usage:
+#   ansible-playbook playbooks/disjoin-windows-domain.yaml \
+#     -e "manifest=test_vm_migration" \
+#     -e "winrm_password=..." [-e "winrm_username=..."]
+#
+# Requires a manifest with vms (and vm_ip or target_vm_name for Azure lookup).
+# WinRM credentials: per-VM vm_winrm_username/vm_winrm_password in manifest,
+# or playbook-level winrm_username/winrm_password (workflow passes single WINRM_PASSWORD).
+
+- name: Disjoin Windows VMs from domain (targets from manifest)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+
+
+
+  vars:
+    ss_url: "https://dte.delinea.app/view/auth/start"
+    ss_username: "SE-Admin"
+    ss_password: "SuperSecureAPIPassword"
+    ss_secret_id: "DTE-Windows Account-SE-Admin"
+
+  pre_tasks:
+    - name: Fetch SE-Admin password from Delinea Secret Server
+      block:
+        - name: Attempt to fetch SE-Admin password from Delinea
+          set_fact:
+            winrm_password: "{{ lookup('Secret Server', ss_secret_id, url=ss_url, username=ss_username, password=ss_password, field='password') }}"
+          no_log: true
+
+        - name: Audit log (non-sensitive) Delinea fetch event
+          ansible.builtin.debug:
+            msg: "[AUDIT] Delinea password fetch attempted for user SE-Admin, secret_id={{ ss_secret_id }}."
+          no_log: false
+
+      rescue:
+        - name: Fail with actionable error if Delinea password fetch fails
+          ansible.builtin.fail:
+            msg: |
+              ❌ Failed to fetch SE-Admin password from Delinea Secret Server.
+              Please check Delinea connectivity, credentials, and secret configuration.
+              Secret ID: {{ ss_secret_id }}
+              URL: {{ ss_url }}
+              Username: {{ ss_username }}
+          no_log: false
+
+  roles:
+    - role: common
+    - role: win-domain-join
+      vars:
+        manifest: "{{ manifest }}"
+        disjoin_only: true
+        dry_run: "{{ dry_run | default(false) }}"
+        winrm_username: "SE-Admin"
+        winrm_password: "{{ winrm_password }}"

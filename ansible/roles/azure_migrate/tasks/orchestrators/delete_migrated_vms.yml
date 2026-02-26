@@ -1,0 +1,107 @@
+---
+# Orchestrator for delete_migrated_vms action
+# Handles execution, result collection, and summary display
+
+- name: Ensure VM names are provided for delete_migrated_vms
+  ansible.builtin.assert:
+    that:
+      - (vm_names | default('')) | length > 0
+    fail_msg: "❌ No VM names provided. Specify vm_names (comma-delimited) to delete migrated VMs. Each VM must be explicitly specified for safety."
+
+- name: Compute filtered VM list for delete_migrated_vms
+  ansible.builtin.set_fact:
+    delete_vm_specs: "{{ (manifest_data.vms | default([])) | filter_vm_specs_by_names(vm_names | default('')) }}"
+
+- name: Ensure at least one VM found for delete_migrated_vms
+  ansible.builtin.assert:
+    that:
+      - delete_vm_specs | length > 0
+    fail_msg: "❌ No matching VMs found in manifest for the provided vm_names. Verify the VM names match entries in the manifest."
+
+- name: Compute target VM names for delete_migrated_vms
+  ansible.builtin.set_fact:
+    delete_vm_specs_with_target_names: "{{ delete_vm_specs_with_target_names | default([]) + [item | combine({
+      'target_vm_name': (item.target_vm_name | default(''))
+    })] }}"
+  loop: "{{ delete_vm_specs }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item.name }}"
+
+- name: Assert and validate target_vm_name for all VMs in delete_migrated_vms
+  ansible.builtin.assert:
+    that:
+      - item.target_vm_name is defined
+      - (item.target_vm_name | default('')) | length > 0
+      - item.target_vm_name | validate_target_vm_name
+    fail_msg: |
+      ❌ Invalid or missing target_vm_name for VM '{{ item.name }}' in delete_migrated_vms action.
+      target_vm_name is required and must match the required pattern.
+      See validate_target_vm_name function in filter_plugins/vm_name_filters.py for pattern details.
+  loop: "{{ delete_vm_specs_with_target_names | default(delete_vm_specs) }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item.name }}"
+
+- name: Ensure delete_vm_specs_with_target_names is set for delete_migrated_vms
+  ansible.builtin.set_fact:
+    delete_vm_specs_with_target_names: "{{ delete_vm_specs_with_target_names | default(delete_vm_specs) }}"
+
+- name: Include delete migrated VMs tasks
+  ansible.builtin.include_tasks: delete_migrated_vms.yml
+  loop: "{{ delete_vm_specs_with_target_names }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }} -> {{ vm_spec.target_vm_name }}"
+  vars:
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
+    target_vm_name: "{{ vm_spec.target_vm_name }}"
+    dry_run: "{{ dry_run | default(false) }}"
+
+- name: Collect delete VM results
+  ansible.builtin.set_fact:
+    all_delete_vm_results: "{{ all_delete_vm_results | default([]) + [vm_result] }}"
+  loop: "{{ delete_vm_specs_with_target_names }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.target_vm_name }}"
+  vars:
+    vm_result:
+      source_vm_name: "{{ vm_item.name }}"
+      target_vm_name: "{{ vm_item.target_vm_name }}"
+      status: >-
+        {{
+          'skipped' if (all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.Skipped | default(false))
+          else (
+            'success' if (
+              all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.Success | default(false)
+              and all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.VMDeleted | default(false)
+            )
+            else 'failed'
+          )
+        }}
+      changed: "{{ all_delete_vm_outputs[vm_item.target_vm_name].changed | default(false) }}"
+      error: "{{ all_delete_vm_outputs[vm_item.target_vm_name].delete_vm_output.Error | default('') }}"
+  when: all_delete_vm_outputs is defined
+
+- name: Build delete VM summary details
+  ansible.builtin.set_fact:
+    delete_vm_summary_details: "{{ delete_vm_summary_details | default([]) + [result.target_vm_name + ': ' + result.status] }}"
+  loop: "{{ all_delete_vm_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.target_vm_name }}"
+  when: all_delete_vm_results is defined and all_delete_vm_results | length > 0
+
+- name: Display delete migrated VMs summary
+  ansible.builtin.debug:
+    msg:
+      - "Delete migrated VMs summary:"
+      - "Total VMs: {{ delete_vm_specs | default([]) | length }}"
+      - "Successful: {{ all_delete_vm_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Skipped: {{ all_delete_vm_results | default([]) | selectattr('status', 'equalto', 'skipped') | list | length }}"
+      - "Failed: {{ all_delete_vm_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ delete_vm_summary_details | default([]) | join('\n  ') }}"
+  when: all_delete_vm_results is defined

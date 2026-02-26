@@ -1,0 +1,99 @@
+name: Ansible-Disjoin-Windows-Domain
+
+# This workflow disjoins Windows servers from domain (targets from manifest).
+# Logic lives in the win-domain-join role; workflow passes manifest + single winrm_password.
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  disjoin-windows-domain:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        if: ${{ !inputs.dry_run }}
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🚀 Disjoining Windows servers from domain..."
+          fi
+
+      - name: 🧱 Prepare extra vars file (secrets injected)
+        run: |
+          # One global winrm_password; per-VM credentials come from manifest/Vault.
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "disjoin_only": true,
+            "dry_run": ${{ inputs.dry_run }},
+            "winrm_username": "${{ secrets.WINRM_USERNAME || 'SE-Admin' }}",
+            "winrm_password": "${{ secrets.WINRM_PASSWORD || '' }}"
+          }
+          JSON
+          chmod 600 ansible_extra_vars.json
+          python3 -m json.tool ansible_extra_vars.json > /dev/null && echo "✅ JSON is valid" || (echo "❌ JSON validation failed" && exit 1)
+
+      - name: 🎬 Run playbook - disjoin Windows servers from domain
+        run: |
+          mkdir -p ansible/logs
+          ansible-playbook ansible/playbooks/disjoin-windows-domain.yaml \
+            -e @ansible_extra_vars.json 2>&1 | tee ansible/logs/ansible-run.log
+          rc=${PIPESTATUS[0]}
+          rm -f ansible_extra_vars.json
+          exit $rc
+
+      - name: 📤 Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-disjoin-logs
+          path: ansible/logs/
+          if-no-files-found: warn
+          retention-days: 90

@@ -1,0 +1,269 @@
+---
+# Hostname rename logic: set computer name to target before domain join
+# Rename without reboot; hostname is applied by post-join reboot
+
+- name: "Step 2: Rename — skipped (hostname already matches target)"
+  ansible.builtin.debug:
+    msg: "Step 2: Rename — skipped. Hostname is already {{ current_hostname_info.old_name | default('unknown') }} (target: {{ target_vm_name }})."
+  when:
+    - not (dry_run | default(false) | bool)
+    - (current_hostname_info.old_name | default('') | upper) == (target_vm_name | upper)
+
+
+# Always rename without reboot; rely on post-join reboot to apply hostname change
+
+
+# Preferred: try renaming as SYSTEM via Azure RunCommand (avoids WinRM/admin race)
+- name: Rename computer via Azure RunCommand (run as SYSTEM, preferred)
+  ansible.builtin.shell: |
+    script_file="$(mktemp)"
+    cat > "$script_file" <<'PS'
+    $ErrorActionPreference = "Stop"
+    try {
+      Rename-Computer -NewName "{{ target_vm_name }}" -Force -ErrorAction Stop
+    }
+    catch {
+      Write-Output ("RENAME_EXCEPTION:" + $_.Exception.Message)
+      exit 1
+    }
+
+    $pending = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName" -Name ComputerName).ComputerName
+    $active = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName" -Name ComputerName).ComputerName
+
+    if (($pending -ieq "{{ target_vm_name }}") -or ($active -ieq "{{ target_vm_name }}")) {
+      Write-Output ("RENAME_CONFIRMED:pending=" + $pending + ";active=" + $active)
+      exit 0
+    }
+
+    Write-Output ("RENAME_NOT_CONFIRMED:pending=" + $pending + ";active=" + $active)
+    exit 2
+    PS
+
+    az vm run-command invoke \
+      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
+      --name "{{ azure_vm_name | default(target_vm_name) }}" \
+      --command-id RunPowerShellScript \
+      --scripts @"$script_file" \
+      --query "value[0].message" -o tsv \
+      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+    rc=$?
+    rm -f "$script_file"
+    exit $rc
+  delegate_to: localhost
+  register: az_rename_result
+  failed_when: false
+  changed_when: az_rename_result.rc is defined and az_rename_result.rc == 0
+  when:
+    - not (dry_run | default(false) | bool)
+    - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
+    - restart_on_success | bool
+    - use_azure_run_command | default(true) | bool
+
+- name: "Set fact: az_rename_succeeded"
+  ansible.builtin.set_fact:
+    az_rename_succeeded: >-
+      {{
+        (
+          az_rename_result is defined
+          and (az_rename_result.rc is defined and az_rename_result.rc == 0)
+          and ('RENAME_CONFIRMED:' in ((az_rename_result.stdout | default('')) ~ '\n' ~ (az_rename_result.stderr | default(''))))
+        ) | bool
+      }}
+  when:
+    - az_rename_result is defined
+
+# Rename uses SE-Admin (local admin) credentials via WinRM session.
+# Domain credentials (cpoe-automation) are reserved for domain join/disjoin only.
+
+
+# Fallback: WinRM rename using SE-Admin (local admin) session credentials
+- name: "Step 2: Rename hostname to target (no reboot) via WinRM fallback"
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'Stop'
+    Rename-Computer -NewName "{{ target_vm_name }}" -Force -ErrorAction Stop
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+  register: hostname_rename_result
+  ignore_errors: true
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
+    - restart_on_success | bool
+    - not (az_rename_succeeded | default(false))
+
+- name: Populate hostname_rename_result from Azure RunCommand
+  ansible.builtin.set_fact:
+    hostname_rename_result: >-
+      {{ {'rc': az_rename_result.rc | default(-1),
+          'failed': (az_rename_result.rc | default(-1)) != 0,
+          'unreachable': False,
+          'skipped': False,
+          'stdout': (az_rename_result.stdout | default('')),
+          'stderr': (az_rename_result.stderr | default('')) } }}
+  when:
+    - az_rename_succeeded | default(false)
+
+- name: Fail when neither Azure nor WinRM rename path confirmed hostname change
+  ansible.builtin.fail:
+    msg: |
+      ❌ Hostname rename was not confirmed for {{ target_vm_name }} ({{ target_vm_host }}).
+
+      Azure RunCommand did not return a confirmed rename marker, and WinRM fallback failed.
+
+      Azure output:
+      {{ (az_rename_result.stdout | default('') ~ '\n' ~ az_rename_result.stderr | default('')) | trim }}
+
+      WinRM fallback output:
+      {{ (hostname_rename_result.stdout | default('') ~ '\n' ~ hostname_rename_result.stderr | default('') ~ '\n' ~ hostname_rename_result.msg | default('')) | trim }}
+
+      Fix:
+      - Ensure SE-Admin ({{ formatted_winrm_username }}) has local admin rights on {{ target_vm_host }}.
+      - If domain policy blocks local admin from renaming while joined, use force_rejoin=true to disjoin first, or rename manually then rerun.
+  when:
+    - not (dry_run | default(false) | bool)
+    - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
+    - restart_on_success | bool
+    - not (az_rename_succeeded | default(false))
+    - hostname_rename_result is not defined or ((hostname_rename_result.failed | default(false) | bool) or ((hostname_rename_result.rc | default(0) | int) != 0))
+
+- name: Mark that hostname rename requires reboot to take effect
+  ansible.builtin.set_fact:
+    hostname_reboot_required: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_rename_result is defined
+    - not (hostname_rename_result.skipped | default(false) | bool)
+    - not (hostname_rename_result.failed | default(false) | bool)
+    - restart_on_success | bool
+
+# Rename only (no reboot) when restart_on_success is false
+- name: "Step 2: Rename hostname to target name (no reboot)"
+  ansible.windows.win_hostname:
+    name: "{{ target_vm_name }}"
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+  register: hostname_rename_result
+  when:
+    - not (dry_run | default(false) | bool)
+    - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
+    - not (restart_on_success | bool)
+
+- name: Fail when hostname rename failed (before reboot)
+  ansible.builtin.fail:
+    msg: |
+      ❌ Hostname rename failed for {{ target_vm_name }} ({{ target_vm_host }}).
+      Error: {{ hostname_rename_result.msg | default('Unknown') | string }}
+
+      If the error is "Access is denied":
+      - After disjoin, Windows may require a reboot before renaming. Reboot the VM ({{ target_vm_host }}) and re-run this playbook.
+      - Ensure the WinRM user ({{ formatted_winrm_username }}) is in the local Administrators group on the VM.
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_rename_result is defined
+    - not (hostname_rename_result.skipped | default(false) | bool)
+    - hostname_rename_result.failed | default(false) | bool
+    - not (hostname_rename_result.unreachable | default(false) | bool)
+
+- name: Wait for server after rename reboot
+  ansible.builtin.wait_for:
+    port: "{{ winrm_port }}"
+    host: "{{ target_vm_host }}"
+    delay: 60
+    timeout: 600
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_rename_result is defined
+    - not (hostname_rename_result.skipped | default(false) | bool)
+    - restart_on_success | bool
+    - hostname_rename_result.unreachable | default(false) | bool
+
+- name: Pause to let Windows fully settle after rename reboot (prevents credential rejection)
+  ansible.builtin.pause:
+    seconds: "{{ post_rename_reboot_settle_seconds | default(90) | int }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_rename_result is defined
+    - not (hostname_rename_result.skipped | default(false) | bool)
+    - restart_on_success | bool
+    - hostname_rename_result.unreachable | default(false) | bool
+
+# Refuse to continue to Join without reboot when hostname was renamed
+- name: Fail when rename requires reboot but restart was skipped
+  ansible.builtin.fail:
+    msg: |
+      ❌ Hostname was renamed to {{ target_vm_name }} but a reboot is required for the change to take effect.
+      The playbook did not reboot because restart_on_success is false.
+      Joining the domain without rebooting would leave the computer showing the old name ({{ current_hostname_info.old_name | default('unknown') }}).
+      Fix: Set restart_on_success to true and re-run, or reboot the VM ({{ target_vm_host }}) manually and then re-run this playbook to complete the domain join.
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_rename_result is defined
+    - not (hostname_rename_result.skipped | default(false) | bool)
+    - not (hostname_rename_result.failed | default(false) | bool)
+    - not (restart_on_success | bool)
+
+# Use .\username for post-reboot auth - avoids hostname resolution issues when Windows is still settling
+# Retry up to 6 times with 90s delay - Windows may reject auth for several minutes after rename reboot
+- name: Verify hostname after rename reboot
+  ansible.windows.win_shell: |
+    (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+  register: hostname_after_reboot
+  retries: 6
+  delay: 90
+  until: hostname_after_reboot is succeeded
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_rename_result is defined
+    - not (hostname_rename_result.skipped | default(false) | bool)
+    - restart_on_success | bool
+    - hostname_rename_result.unreachable | default(false) | bool
+
+- name: Fail when hostname did not change after rename reboot
+  ansible.builtin.fail:
+    msg: |
+      ❌ Hostname on {{ target_vm_host }} is still "{{ hostname_after_reboot.stdout | default('') | trim }}" after reboot; expected "{{ target_vm_name }}".
+      The rename or reboot may not have taken effect. Reboot the VM manually and re-run, or check WinRM/reboot permissions.
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_after_reboot is defined
+    - not (hostname_after_reboot.skipped | default(false) | bool)
+    - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
+
+- name: Update WinRM username to new hostname for subsequent tasks (after rename reboot)
+  ansible.builtin.set_fact:
+    formatted_winrm_username: "{{ target_vm_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - hostname_after_reboot is defined
+    - not (hostname_after_reboot.skipped | default(false) | bool)
+    - (hostname_after_reboot.stdout | default('') | trim | upper) == (target_vm_name | upper)

@@ -1,0 +1,22 @@
+---
+# Playbook to stop Azure Migrate replication for VMs using the azure_migrate role
+# This playbook loads VMs from the manifest and stops replication for each VM,
+# with idempotent handling to skip VMs that don't have replication enabled
+
+- name: Stop migration replication
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
+    all_stop_replication_outputs: []
+  roles:
+    - role: common
+    - role: azure_migrate
+      vars:
+        migration_action: stop_replication
+        dry_run: "{{ dry_run }}"
+  post_tasks:
+    - name: Stop replication request output
+      ansible.builtin.debug:
+        var: all_stop_replication_outputs

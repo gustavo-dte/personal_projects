@@ -2,11 +2,108 @@
 
 This repository uses several pre-commit hooks to maintain code quality. Pre-commit hooks help maintain code quality by automatically checking and formatting code before commits.
 
-For **Windows** Users, these commands must be executed in [Git Bash](https://git-scm.com/downloads/win)
+For **Windows** Users, these commands must be executed in [Git Bash](https://git-scm.com/downloads/win) or PowerShell
 
 ## 1. Install Required Software
 
-Before contributing to this project, you'll need to install the following tools on your development machine.
+Before contributing to this VM migration project, you'll need to install the following tools on your development machine.
+
+### ansible
+
+Ansible is used for VM migration automation and orchestration.
+
+**macOS:**
+
+```bash
+# Using pip (recommended)
+pip install ansible
+
+# Using Homebrew
+brew install ansible
+
+# Install Azure collection
+ansible-galaxy collection install azure.azcollection
+```
+
+**Windows:**
+
+```powershell
+# Using pip (recommended)
+pip install ansible
+
+# Install Azure collection
+ansible-galaxy collection install azure.azcollection
+```
+
+**Verify installation:**
+
+```bash
+ansible --version
+ansible-galaxy collection list azure.azcollection
+```
+
+### azure-cli
+
+Azure CLI is required for authentication and Azure resource management.
+
+**macOS:**
+
+```bash
+# Using Homebrew (recommended)
+brew install azure-cli
+
+# Using curl
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```
+
+**Windows:**
+
+```powershell
+# Using winget (recommended)
+winget install Microsoft.AzureCLI
+
+# Using MSI installer:
+# Download from https://aka.ms/installazurecliwindows
+```
+
+**Verify installation:**
+
+```bash
+az --version
+az login  # Test authentication
+```
+
+### powershell
+
+PowerShell 7+ is required for Azure Migrate operations.
+
+**macOS:**
+
+```bash
+# Using Homebrew (recommended)
+brew install powershell
+
+# Install Azure PowerShell modules
+pwsh -c "Install-Module -Name Az -Scope CurrentUser -Force"
+```
+
+**Windows:**
+
+```powershell
+# PowerShell 7 is usually pre-installed on Windows 11
+# For Windows 10, download from Microsoft Store or:
+winget install Microsoft.PowerShell
+
+# Install Azure PowerShell modules
+Install-Module -Name Az -Scope CurrentUser -Force
+```
+
+**Verify installation:**
+
+```bash
+pwsh --version
+pwsh -c "Get-Module -ListAvailable Az.Accounts, Az.Migrate"
+```
 
 ### terraform
 

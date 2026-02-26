@@ -1,0 +1,97 @@
+
+- name: Join Windows servers to domain
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    ss_url_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
+    ss_username_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
+    ss_password: "{{ lookup('ansible.builtin.env', 'DELINEA_PASSWORD', default='') }}"
+    ss_secret_id_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
+    ss_secret_path_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_PATH', default='') }}"
+    ss_url: "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
+    ss_username: "{{ (ss_username_raw | trim) if (ss_username_raw | trim | length > 0) else 'SVC_VM_Migration' }}"
+    ss_secret_id: "{{ ss_secret_id_raw | replace('\\n', '') | replace('\\r', '') | trim }}"
+    ss_secret_path: "{{ (ss_secret_path_raw | trim) if (ss_secret_path_raw | trim | length > 0) else 'SE-Admin' }}"
+
+  pre_tasks:
+    - name: Validate Delinea password env var is set
+      ansible.builtin.assert:
+        that:
+          - ss_password | length > 0
+        fail_msg: "DELINEA_PASSWORD environment variable is missing or empty."
+
+    - name: Validate Delinea URL and secret path are set
+      ansible.builtin.assert:
+        that:
+          - ss_url | trim | length > 0
+          - (ss_secret_id | length > 0) or (ss_secret_path | trim | length > 0)
+        fail_msg: "DELINEA_BASE_URL is empty, or neither DELINEA_SECRET_ID nor DELINEA_SECRET_PATH is set."
+
+    - name: Debug Delinea lookup config
+      ansible.builtin.debug:
+        msg: >-
+          Using Delinea Secret Server plugin with
+          {{ 'Secret ID: ' ~ ss_secret_id if (ss_secret_id | length > 0) else 'Secret Path: ' ~ ss_secret_path }}
+      no_log: false
+
+    - name: Fetch SE-Admin password from Delinea Secret Server
+      block:
+        - name: Attempt to fetch SE-Admin secret from Delinea
+          set_fact:
+            delinea_secret: >-
+              {{ lookup(
+                'delinea.platform_secretserver.tss',
+                ss_secret_id | int,
+                base_url=ss_url,
+                username=ss_username,
+                password=ss_password
+              ) }}
+          when: ss_secret_id | length > 0
+
+        - name: Attempt to fetch SE-Admin secret from Delinea by path
+          set_fact:
+            delinea_secret: >-
+              {{ lookup(
+                'delinea.platform_secretserver.tss',
+                0,
+                secret_path=ss_secret_path,
+                base_url=ss_url,
+                username=ss_username,
+                password=ss_password
+              ) }}
+          when: ss_secret_id | length == 0
+
+        - name: Extract password from Delinea secret
+          set_fact:
+            winrm_password: >-
+              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['password'] }}
+
+        - name: Audit log (non-sensitive) Delinea fetch event
+          ansible.builtin.debug:
+            msg: >-
+              [AUDIT] Delinea password fetch attempted for user SE-Admin,
+              {{ 'secret_id=' ~ ss_secret_id if (ss_secret_id | length > 0) else 'secret_path=' ~ ss_secret_path }}.
+          no_log: false
+
+      rescue:
+        - name: Fail with actionable error if Delinea password fetch fails
+          ansible.builtin.fail:
+            msg: |
+              ❌ Failed to fetch SE-Admin password from Delinea Secret Server.
+              Please check Delinea connectivity, credentials, and secret configuration.
+              Secret Ref: {{ ss_secret_id if (ss_secret_id | length > 0) else ss_secret_path }}
+              URL: {{ ss_url }}
+              Username: {{ ss_username }}
+          no_log: false
+
+  roles:
+    - role: common
+    - role: win-domain-join
+      vars:
+        manifest: "{{ manifest }}"
+        dry_run: "{{ dry_run | default(false) }}"
+        force_rejoin: "{{ force_rejoin | default(false) }}"
+        winrm_username: "SE-Admin"
+        winrm_password: "{{ winrm_password }}"

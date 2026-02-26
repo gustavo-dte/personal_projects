@@ -1,0 +1,44 @@
+# Set dry_run: false to actually uninstall; see docs/UNINSTALL_ONPREM_REVIEW.md for GH testing.
+
+- name: Load manifest and prepare for Azure-based uninstall
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    manifest: "{{ manifest }}"
+  tasks:
+    - name: Load manifest via common role
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: load_manifest
+      vars:
+        manifest: "{{ manifest }}"
+
+    - name: Display loaded VMs from manifest
+      ansible.builtin.debug:
+        msg: "VMs to process: {{ manifest_data.vms | map(attribute='name') | list }}"
+
+- name: Uninstall onprem tools via Azure RunCommand (no direct VM connection needed)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  tasks:
+    - name: Load manifest
+      ansible.builtin.include_vars:
+        file: "../vars/{{ manifest }}/manifest.yml"
+        name: manifest_data
+
+    - name: Execute uninstall on each VM via Azure RunCommand
+      ansible.builtin.include_role:
+        name: onprem-tools-uninstallation
+        tasks_from: uninstall_via_azure_runcommand
+      vars:
+        azure_subscription_id: "{{ manifest_data.target_subscription_id }}"
+        azure_resource_group: "{{ manifest_data.target_resource_group }}"
+        vm_name: "{{ item.target_vm_name | default(item.name) }}"
+        uninstall_list: "{{ manifest_data.uninstall_tools_list }}"
+        manifest: "{{ manifest }}"
+        dry_run: "{{ dry_run }}"
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.target_vm_name | default(item.name) }}"

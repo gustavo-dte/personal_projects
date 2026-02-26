@@ -1,0 +1,87 @@
+name: Ansible-Start-Test-Migration
+
+# This workflow starts test migration for VMs
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  start-test-migration:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🧪 Starting test migration..."
+          echo ""
+          echo "Note: Ensure test_network_id is configured in the manifest"
+          echo "Test migration will create test VMs in the specified test network"
+
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "migration_action": "test_migration"
+          }
+          JSON
+
+      - name: 🎬 Run playbook - start test migration
+        run: |
+          ansible-playbook ansible/playbooks/start-test-migration.yml \
+            -e @ansible_extra_vars.json
+
+      - name: 📋 Post-test migration guidance
+        if: success()
+        run: |
+          echo "Test migration workflow completed"
+          echo ""
+          echo "Next steps:"
+          echo "1. Monitor test migration jobs in Azure portal"
+          echo "2. Connect to test VMs via RDP/SSH"
+          echo "3. Verify application functionality"
+          echo "4. Check network connectivity"
+          echo "5. Run validation tests"
+          echo "6. Perform cleanup when done (delete test VMs)"
+          echo ""
+          echo "Note: Test VMs will remain until manually cleaned up"
+          echo "Check workflow run output for detailed results"

@@ -1,0 +1,85 @@
+name: Ansible-Start-Test-Migration-Cleanup
+
+# This workflow starts test migration cleanup for VMs
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  start-test-migration-cleanup:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🧹 Starting test migration cleanup..."
+          echo ""
+          echo "Note: This will clean up test VMs created during test migration"
+          echo "Test migration cleanup removes test VMs and associated resources"
+
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "migration_action": "test_migration_cleanup"
+          }
+          JSON
+
+      - name: 🎬 Run playbook - start test migration cleanup
+        run: |
+          ansible-playbook ansible/playbooks/start-test-migration-cleanup.yml \
+            -e @ansible_extra_vars.json
+
+      - name: 📋 Post-test migration cleanup guidance
+        if: success()
+        run: |
+          echo "Test migration cleanup workflow completed"
+          echo ""
+          echo "Next steps:"
+          echo "1. Monitor cleanup jobs in Azure portal"
+          echo "2. Verify test VMs have been removed"
+          echo "3. Check that test resources are cleaned up"
+          echo "4. Proceed with cutover if validation was successful"
+          echo ""
+          echo "Note: Cleanup removes test VMs and associated resources"
+          echo "Check workflow run output for detailed results"

@@ -1,0 +1,53 @@
+- name: Ensure helper PowerShell script is present
+  ansible.builtin.copy:
+    src: uninstall-tools.ps1
+    dest: C:\Windows\Temp\uninstall-tools.ps1
+    mode: '0644'
+  when: not dry_run | default(false)
+
+- name: Determine uninstall list (manifest overrides defaults)
+  ansible.builtin.set_fact:
+    resolved_uninstall_list: "{{ manifest_data.uninstall_tools_list }}"
+
+- name: Debug resolved uninstall list
+  ansible.builtin.debug:
+    msg: "Resolved uninstall list: {{ resolved_uninstall_list }}"
+
+- name: Notify dry run mode
+  ansible.builtin.debug:
+    msg: "🧪 DRY RUN MODE: No uninstall operations will be performed"
+  when: dry_run | default(false)
+
+- name: Run uninstall PowerShell script
+  ansible.builtin.raw: |
+    powershell.exe -NoProfile -NonInteractive -Command @"
+    `$list = @(
+    {% for i in resolved_uninstall_list %}
+    '{{ i }}',
+    {% endfor %}
+    )
+    `$json = & 'C:\Windows\Temp\uninstall-tools.ps1' -DisplayNames `$list -DryRun:${{ dry_run | default(true) | lower }}
+    Write-Output `$json
+    "@
+  register: ps_output
+  failed_when: false
+  args:
+    executable: cmd.exe
+  when:
+    - not dry_run | default(false)
+    - resolved_uninstall_list is defined
+    - resolved_uninstall_list | length > 0
+
+- name: Parse PS output
+  ansible.builtin.set_fact:
+    uninstall_summary: "{{ ps_output.stdout | from_json | default([]) }}"
+  when: not dry_run | default(false)
+
+- name: Print uninstall summary
+  ansible.builtin.debug:
+    msg: |
+      ===== Uninstall Summary for {{ inventory_hostname }} =====
+      {% for r in uninstall_summary %}
+      {{ r.Name }} → {{ r.Result }}
+      {% endfor %}
+  when: not dry_run | default(false)

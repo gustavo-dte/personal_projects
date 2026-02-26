@@ -1,0 +1,34 @@
+---
+# Install Dynatrace OneAgent on discovered VMs
+- name: "Install Dynatrace OneAgent extension on discovered VMs"
+  azure.azcollection.azure_rm_virtualmachineextension:
+    resource_group: "{{ (item.resourceGroup or item.resource_group) | default(manifest_data.dynatrace.resource_group | default(azure_resource_group)) }}"
+    vm_name: "{{ (item.name or item.properties?.name) }}"
+    name: "DynatraceOneAgent"
+    publisher: "{{ dynatrace_extension_publisher }}"
+    virtual_machine_extension_type: "{{ 'oneagentlinux' if ((item.properties.storageProfile.osDisk.osType | default('Linux')) | lower) == 'linux' else 'oneagentwindows' }}"
+    type_handler_version: "{{ manifest_data.dynatrace.extension_version | default(dynatrace_extension_version) }}"
+    settings: "{{ lookup('template', 'dynatrace_extension_settings.json.j2') | from_json }}"
+    auto_upgrade_minor_version: true
+    state: present
+    async: "{{ 300 if (manifest_data.dynatrace.install_extension_async | default(install_extension_async)) else 0 }}"
+    wait_for_completion: "{{ (manifest_data.dynatrace.install_extension_async | default(install_extension_async)) | bool }}"
+  loop: "{{ dynatrace_target_vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: extension_results
+  ignore_errors: false
+  when: not (dry_run | bool) or not (manifest_data.dynatrace.skip_in_dry_run | default(skip_in_dry_run))
+
+- name: "[DRY RUN] Would install Dynatrace OneAgent extension on discovered VMs"
+  ansible.builtin.debug:
+    msg: "[DRY RUN] Would install DynatraceOneAgent on {{ item.name }} (RG={{ (item.resourceGroup or item.resource_group) | default(manifest_data.dynatrace.resource_group | default(azure_resource_group)) }})"
+  loop: "{{ dynatrace_target_vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (dry_run | bool) and (manifest_data.dynatrace.skip_in_dry_run | default(skip_in_dry_run))
+
+- name: "Report extension result per VM"
+  ansible.builtin.debug:
+    var: extension_results.results
+  when: extension_results is defined

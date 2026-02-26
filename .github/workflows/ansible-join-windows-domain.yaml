@@ -1,0 +1,331 @@
+name: Ansible-Join-Windows-Domain
+
+# This workflow joins Windows servers to an Active Directory domain
+# It uses the manifest to load domain configuration and target VMs
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Manifest name (directory in ansible/vars/)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run"
+        required: false
+        type: boolean
+        default: true
+      force_rejoin:
+        description: "Force disjoin and rejoin even if already in target domain (for testing)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  join-windows-domain:
+    environment: dev
+    runs-on:
+      - self-hosted
+      - linux
+      - non-prod
+      - vm-migrate
+    env:
+      ANSIBLE_ROLES_PATH: ansible/roles
+      ANSIBLE_CONFIG: ansible/ansible.cfg
+      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
+      DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
+      DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
+      DELINEA_SECRET_ID: ${{ vars.DELINEA_SECRET_ID }}
+      DELINEA_SECRET_PATH: ${{ vars.DELINEA_SECRET_PATH != '' && vars.DELINEA_SECRET_PATH || 'SE-Admin' }}
+      DELINEA_SECRET_MACHINE: dca-dev7048.dtenet.com
+      DELINEA_SECRET_NAME: ${{ vars.DELINEA_SECRET_NAME }}
+      DELINEA_SECRET_ACCOUNT: ${{ vars.DELINEA_SECRET_ACCOUNT != '' && vars.DELINEA_SECRET_ACCOUNT || 'SE-Admin' }}
+      WINRM_PASSWORD: ${{ secrets.DCA_DEV7048_ADMIN_PASSWORD }}
+      WINRM_USERNAME: SE-Admin
+    steps:
+      - name: Install Delinea Python SDK
+        run: pip install python-tss-sdk
+        shell: bash
+      - name: Upgrade Ansible to required version
+        run: pip install --upgrade 'ansible>=2.15.0'
+        shell: bash
+      - name: Install Delinea Platform Secret Server Ansible Collection
+        run: ansible-galaxy collection install delinea.platform_secretserver
+        shell: bash
+
+      - name: Verify Delinea lookup plugin is installed
+        run: ansible-doc -t lookup -l | grep tss
+        shell: bash
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: 🔐 Azure Login with user-assigned managed identity
+        if: ${{ !inputs.dry_run }}
+        uses: azure/login@v2
+        with:
+          auth-type: IDENTITY
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: 📊 Display configuration
+        run: |
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          echo "🔄 Force rejoin: ${{ inputs.force_rejoin }}"
+          echo "🔎 Delinea machine filter: ${DELINEA_SECRET_MACHINE:-<not set>}"
+          echo "🏷️ Delinea secret-name filter: ${DELINEA_SECRET_NAME:-<not set>}"
+          echo "👤 Delinea account filter: ${DELINEA_SECRET_ACCOUNT:-<not set>}"
+          echo "🧭 Troubleshooting steps:"
+          echo "1) Connect to Delinea and retrieve the password for test VM user SE-Admin."
+          echo "2) Optional: manually connect to the test VM using SE-Admin and retrieved password to validate login/auth only."
+          echo "   (This does not validate AD rename permissions.)"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🚀 Joining Windows servers to domain..."
+          fi
+
+      - name: 🔎 Resolve Delinea secret ID from secret path (if not provided)
+        shell: bash
+        run: |
+          if [ -n "${DELINEA_SECRET_ID}" ]; then
+            echo "✅ DELINEA_SECRET_ID already provided: ${DELINEA_SECRET_ID}"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          base_url = (os.getenv('DELINEA_BASE_URL', '') or '').strip().rstrip('/')
+          username = (os.getenv('DELINEA_USERNAME', '') or '').strip()
+          password = os.getenv('DELINEA_PASSWORD', '') or ''
+          search_text = (os.getenv('DELINEA_SECRET_PATH', '') or '').strip()
+          machine_filter = (os.getenv('DELINEA_SECRET_MACHINE', '') or '').strip().lower()
+          secret_name_filter = (os.getenv('DELINEA_SECRET_NAME', '') or '').strip().lower()
+          account_filter = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
+          github_env = os.getenv('GITHUB_ENV')
+
+          if not base_url or not username or not password:
+            print('⚠️ Skipping Delinea secret ID resolution (missing base_url/username/password).')
+            sys.exit(0)
+
+          if not search_text and not machine_filter:
+            print('⚠️ Skipping Delinea secret ID resolution (missing both DELINEA_SECRET_PATH and DELINEA_SECRET_MACHINE).')
+            sys.exit(0)
+
+          token_data = urllib.parse.urlencode({
+            'grant_type': 'password',
+            'username': username,
+            'password': password,
+          }).encode('utf-8')
+
+          token_req = urllib.request.Request(
+            f"{base_url}/oauth2/token",
+            data=token_data,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            method='POST',
+          )
+
+          try:
+            with urllib.request.urlopen(token_req, timeout=30) as response:
+              token_payload = json.loads(response.read().decode('utf-8'))
+          except Exception as ex:
+            print(f"⚠️ Failed to acquire Delinea token while resolving secret ID: {ex}")
+            sys.exit(0)
+
+          access_token = token_payload.get('access_token')
+          if not access_token:
+            print('⚠️ No access token returned; skipping secret ID resolution.')
+            sys.exit(0)
+
+          search_seed = machine_filter if machine_filter else search_text
+          query = urllib.parse.urlencode({
+            'filter.includeRestricted': 'true',
+            'filter.searchtext': search_seed,
+          })
+          secrets_req = urllib.request.Request(
+            f"{base_url}/api/v1/secrets?{query}",
+            headers={'Authorization': f'Bearer {access_token}'},
+            method='GET',
+          )
+
+          try:
+            with urllib.request.urlopen(secrets_req, timeout=30) as response:
+              secrets_payload = json.loads(response.read().decode('utf-8'))
+          except Exception as ex:
+            print(f"⚠️ Failed to query Delinea secrets for ID resolution: {ex}")
+            sys.exit(0)
+
+          records = secrets_payload.get('records') or []
+          if not records:
+            print(f"⚠️ No secrets found for search text '{search_seed}'; continuing with path-based lookup.")
+            sys.exit(0)
+
+          def _item_value(items, *slugs):
+            wanted = {slug.lower() for slug in slugs}
+            for item in items or []:
+              slug = str(item.get('slug', '')).strip().lower()
+              if slug in wanted:
+                return str(item.get('itemValue', '')).strip().lower()
+            return ''
+
+          def _fetch_secret_detail(secret_id):
+            detail_req = urllib.request.Request(
+              f"{base_url}/api/v1/secrets/{secret_id}",
+              headers={'Authorization': f'Bearer {access_token}'},
+              method='GET',
+            )
+            with urllib.request.urlopen(detail_req, timeout=30) as response:
+              return json.loads(response.read().decode('utf-8'))
+
+          if machine_filter:
+            if not secret_name_filter and not account_filter:
+              print('⚠️ DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set.')
+              sys.exit(1)
+
+            desired_name = secret_name_filter or account_filter
+            matches = []
+
+            # Strategy 1 (preferred): match Secret Server record name pattern "FQDN\\SecretName"
+            for record in records:
+              record_name = str(record.get('name', '') or '').strip()
+              if '\\' not in record_name:
+                continue
+              fqdn_part, short_part = record_name.split('\\', 1)
+              if fqdn_part.strip().lower() == machine_filter and short_part.strip().lower() == desired_name:
+                matches.append(record)
+
+            # Strategy 2 (fallback): fetch secret detail and match machine + username fields
+            if len(matches) == 0 and account_filter:
+              for record in records:
+                secret_id = record.get('id')
+                if not secret_id:
+                  continue
+                try:
+                  detail = _fetch_secret_detail(secret_id)
+                except Exception:
+                  continue
+
+                items = detail.get('items') or record.get('items') or []
+                machine_value = _item_value(items, 'machine', 'host', 'hostname', 'fqdn', 'server')
+                username_value = _item_value(items, 'username', 'user', 'account', 'login')
+
+                if machine_value == machine_filter and username_value == account_filter:
+                  matches.append(record)
+
+            # De-duplicate by id if a record matched both strategies
+            unique_matches = {}
+            for match in matches:
+              match_id = match.get('id')
+              if match_id is not None:
+                unique_matches[str(match_id)] = match
+            matches = list(unique_matches.values())
+
+            if len(matches) == 0:
+              print(
+                f"❌ No Delinea secret matched machine='{machine_filter}' and name/account='{desired_name}'. "
+                "Provide DELINEA_SECRET_ID explicitly or correct DELINEA_SECRET_MACHINE + DELINEA_SECRET_NAME."
+              )
+              sys.exit(1)
+
+            if len(matches) > 1:
+              match_ids = ', '.join(str(m.get('id')) for m in matches)
+              print(
+                f"❌ Multiple Delinea secrets matched machine='{machine_filter}' and name/account='{desired_name}' "
+                f"(ids: {match_ids}). Set DELINEA_SECRET_ID explicitly."
+              )
+              sys.exit(1)
+
+            chosen = matches[0]
+            secret_id = chosen.get('id')
+            print(
+              f"✅ Resolved DELINEA_SECRET_ID={secret_id} by strict machine+name/account match "
+              f"(machine='{machine_filter}', name/account='{desired_name}')."
+            )
+            if github_env:
+              with open(github_env, 'a', encoding='utf-8') as env_file:
+                env_file.write(f"DELINEA_SECRET_ID={secret_id}\n")
+            sys.exit(0)
+
+          exact = None
+          for record in records:
+            if (str(record.get('name', '')).strip().lower() == search_text.lower()):
+              exact = record
+              break
+
+          if not exact:
+            print(
+              f"⚠️ No exact name match for DELINEA_SECRET_PATH='{search_text}'. "
+              "Not selecting first result automatically; continuing with path-based lookup."
+            )
+            sys.exit(0)
+
+          chosen = exact
+          secret_id = chosen.get('id')
+          if not secret_id:
+            print('⚠️ Secret record has no id field; continuing with path-based lookup.')
+            sys.exit(0)
+
+          print(f"✅ Resolved DELINEA_SECRET_ID={secret_id} from search text '{search_text}'.")
+          if github_env:
+            with open(github_env, 'a', encoding='utf-8') as env_file:
+              env_file.write(f"DELINEA_SECRET_ID={secret_id}\n")
+          PY
+
+      - name: 🧱 Prepare extra vars file to maintain variable types (secrets injected)
+        run: |
+          # Write extra-vars JSON for Ansible.
+          # WinRM password is fetched from Delinea in the playbook pre_tasks.
+          # Do not pass winrm_password here to avoid overriding Delinea with stale GitHub secrets.
+          cat > ansible_extra_vars.json <<'JSON'
+          {
+            "manifest": "${{ inputs.manifest }}",
+            "dry_run": ${{ inputs.dry_run }},
+            "force_rejoin": ${{ inputs.force_rejoin }},
+            "domain_admin_password": "${{ secrets.DOMAIN_ADMIN_PASSWORD }}",
+            "domain_ou_path": "${{ secrets.DOMAIN_OU_PATH }}",
+            "winrm_username": "SE-Admin"
+          }
+          JSON
+          # Restrict permissions on the file so it's not world-readable
+          chmod 600 ansible_extra_vars.json
+          # Verify JSON is valid (without exposing contents on error)
+          python3 -m json.tool ansible_extra_vars.json > /dev/null && echo "✅ JSON is valid" || (echo "❌ JSON validation failed" && exit 1)
+
+      - name: 🎬 Run playbook - join Windows servers to domain
+        run: |
+          mkdir -p ansible/logs
+          ansible-playbook ansible/playbooks/join-windows-domain.yaml \
+            -e @ansible_extra_vars.json 2>&1 | tee ansible/logs/ansible-run.log
+          rc=${PIPESTATUS[0]}
+          rm -f ansible_extra_vars.json
+          exit $rc
+
+      - name: 📤 Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-join-logs
+          path: ansible/logs/
+          if-no-files-found: warn
+          retention-days: 90

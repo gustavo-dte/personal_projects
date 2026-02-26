@@ -1,0 +1,21 @@
+---
+# Playbook to start Azure Migrate test migration for VMs using the azure_migrate role
+# This playbook loads VMs from the manifest and starts test migration for each VM,
+# with prerequisite checking to ensure VMs have active replication
+
+- name: Start test migration
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    verify_azure_account: true
+    all_test_migration_outputs: []
+  roles:
+    - role: common
+    - role: azure_migrate
+      vars:
+        migration_action: test_migration
+  post_tasks:
+    - name: Test migration request output
+      ansible.builtin.debug:
+        var: all_test_migration_outputs

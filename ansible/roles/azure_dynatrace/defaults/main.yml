@@ -1,0 +1,35 @@
+---
+# sensible defaults, override in inventory/group_vars/host_vars or pass extra-vars
+
+azure_resource_group: null     # optional - if null, role will search across subscription
+vm_tag_key: "dynatrace"        # tag key to select VMs
+vm_tag_value: "true"           # tag value to select VMs
+
+# Azure Variables for Dynatrace monitoring integration
+azure_subscription_id: "<subscription_id>"
+azure_app_name: "dynatrace-monitoring"
+azure_role_name: "Reader"
+azure_secret_duration: 2 # years (default secret expiry)
+
+# Dynatrace alerting profile configuration
+dynatrace_alerting_profile_name: "Azure VM Monitoring - Ansible Managed"
+dynatrace_alerting_profile:
+  name: "{{ dynatrace_alerting_profile_name }}"
+  # minimal severityRules and eventFilters - adjust to taste
+  severityRules:
+    - severityLevel: "PERFORMANCE"
+      delayInMinutes: 0
+      tagFilterIncludeMode: "NONE"
+    - severityLevel: "AVAILABILITY"
+      delayInMinutes: 0
+      tagFilterIncludeMode: "NONE"
+  eventFilters: []  # optionally add event filter objects; left empty to rely on default problem types
+
+# VM extension mapping (module options)
+dynatrace_extension_publisher: "dynatrace.ruxit"
+dynatrace_extension_version: "1.*"
+
+# installation behavior
+install_extension_async: false
+# When running playbooks in dry-run mode the role can skip invasive actions when this is true
+skip_in_dry_run: true

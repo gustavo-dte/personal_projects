@@ -1,0 +1,94 @@
+---
+# Manage Dynatrace alerting profile(s) via Settings API (idempotent create/update)
+
+- name: "Find existing alerting profile objects"
+  uri:
+    url: "{{ manifest_data.dynatrace.url }}/api/v2/settings/objects"
+    method: GET
+    headers:
+      Authorization: "Api-Token {{ manifest_data.dynatrace_token }}"
+    params:
+      schemaIds: "builtin:alerting.profile"
+      pageSize: 500
+  register: existing_alerting_profiles
+  failed_when: existing_alerting_profiles.status not in [200, 204, 404]
+
+- name: "Build list of alerting profiles to manage"
+  set_fact:
+    effective_alerting_profiles: >-
+      {{
+        (manifest_data.dynatrace.alerting_profiles | default([]))
+        | default([ manifest_data.dynatrace.alerting_profile | default(dynatrace_alerting_profile) ])
+      }}
+
+- name: "Ensure there is at least one alerting profile to manage"
+  assert:
+    that: effective_alerting_profiles | length > 0
+    fail_msg: "No alerting profile(s) provided via manifest_data.dynatrace.alerting_profiles or alerting_profile/defaults"
+
+- name: "Create or update each alerting profile"
+  vars:
+    effective_dynatrace_url: "{{ manifest_data.dynatrace.url }}"
+    effective_dynatrace_token: "{{ manifest_data.dynatrace_token }}"
+  loop: "{{ effective_alerting_profiles }}"
+  loop_control:
+    label: "{{ (item.name | default(manifest_data.dynatrace.alerting_profile_name | default(dynatrace_alerting_profile_name))) }}"
+  block:
+    - name: "Locate alerting profile by name (if exists)"
+      set_fact:
+        alerting_profile_object: >-
+          {{
+            (existing_alerting_profiles.json.items | default([]))
+            | selectattr('value.name','equalto', (item.name | default(manifest_data.dynatrace.alerting_profile_name | default(dynatrace_alerting_profile_name))))
+            | list
+          }}
+
+    - name: "Create Dynatrace alerting profile (POST) when not present"
+      when: (alerting_profile_object | length) == 0 and ( not (dry_run | bool) or not (manifest_data.dynatrace.skip_in_dry_run | default(skip_in_dry_run)) )
+      uri:
+        url: "{{ effective_dynatrace_url }}/api/v2/settings/objects"
+        method: POST
+        headers:
+          Authorization: "Api-Token {{ effective_dynatrace_token }}"
+          Content-Type: "application/json"
+        body:
+          - schemaId: "builtin:alerting.profile"
+            scope: "environment"
+            value: "{{ item }}"
+        body_format: json
+        status_code: [200,201,202]
+      register: create_alerting_profile_result
+
+    - name: "[DRY RUN] Would create Dynatrace alerting profile"
+      ansible.builtin.debug:
+        msg: "[DRY RUN] Would create alerting profile '{{ (item.name | default(manifest_data.dynatrace.alerting_profile_name | default(dynatrace_alerting_profile_name))) }}'"
+      when: (alerting_profile_object | length) == 0 and (dry_run | bool) and (manifest_data.dynatrace.skip_in_dry_run | default(skip_in_dry_run))
+
+    - name: "Update Dynatrace alerting profile (PUT) when present"
+      when: (alerting_profile_object | length) > 0 and ( not (dry_run | bool) or not (manifest_data.dynatrace.skip_in_dry_run | default(skip_in_dry_run)) )
+      vars:
+        object_id: "{{ (alerting_profile_object[0].objectId) | default(alerting_profile_object[0].id | default('')) }}"
+      uri:
+        url: "{{ effective_dynatrace_url }}/api/v2/settings/objects/{{ object_id }}"
+        method: PUT
+        headers:
+          Authorization: "Api-Token {{ effective_dynatrace_token }}"
+          Content-Type: "application/json"
+        body:
+          schemaId: "builtin:alerting.profile"
+          scope: "environment"
+          value: "{{ item }}"
+        body_format: json
+        status_code: [200,201,202]
+      register: update_alerting_profile_result
+
+    - name: "[DRY RUN] Would update Dynatrace alerting profile"
+      ansible.builtin.debug:
+        msg: "[DRY RUN] Would update alerting profile '{{ (item.name | default(manifest_data.dynatrace.alerting_profile_name | default(dynatrace_alerting_profile_name))) }}' (objectId={{ (alerting_profile_object[0].objectId) | default(alerting_profile_object[0].id | default('')) }})"
+      when: (alerting_profile_object | length) > 0 and (dry_run | bool) and (manifest_data.dynatrace.skip_in_dry_run | default(skip_in_dry_run))
+
+    - name: "Show result of alerting profile create/update"
+      ansible.builtin.debug:
+        msg: >-
+          Created: {{ create_alerting_profile_result is defined and (create_alerting_profile_result.status in [200,201,202]) | ternary('yes','no') }}
+          Updated: {{ update_alerting_profile_result is defined and (update_alerting_profile_result.status in [200,201,202]) | ternary('yes','no') }}

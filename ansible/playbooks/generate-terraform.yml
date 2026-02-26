@@ -1,0 +1,20 @@
+---
+# Playbook to generate Terraform configuration files for imported VMs using the terraform role
+# This playbook loads VMs from the manifest, queries Azure for resource information,
+# and generates complete Terraform configuration files for importing existing VMs
+
+
+- name: Generate Terraform Configuration for Imported VMs
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    verify_azure_account: true
+  roles:
+    - role: common
+    - role: terraform
+      vars:
+        terraform_action: generate
+        manifest: "{{ manifest }}"
+        # Optionally override with -e terraform_output_dir=...</n>

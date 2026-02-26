@@ -1,0 +1,86 @@
+---
+# Main tasks file for terraform role
+# Generates Terraform configuration files for imported VMs
+
+- name: Load migration manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+
+- name: Assert terraform_action is valid
+  ansible.builtin.assert:
+    that:
+      - terraform_action in terraform_actions
+    fail_msg: "❌ terraform_action must be one of: {{ terraform_actions | join(', ') }}"
+
+
+- name: Extract terraform configuration from manifest
+  ansible.builtin.set_fact:
+    app_name: "{{ manifest_data.app_name | default('') }}"
+    target_environment: "{{ manifest_data.environment | default('') }}"
+    target_gh_repo: "{{ manifest_data.target_gh_repo | default('') }}"
+    target_subscription_id: "{{ manifest_data.target_subscription_id | default('') }}"
+    target_resource_group: "{{ manifest_data.target_resource_group | default('') }}"
+    target_network_id: "{{ manifest_data.target_network_id | default('') }}"
+    target_subnet_name: "{{ manifest_data.target_subnet_name | default('') }}"
+    target_vm_size: "{{ manifest_data.target_vm_size | default('') }}"
+    target_license_type: "{{ manifest_data.target_license_type | default('') }}"
+    target_disk_type: "{{ manifest_data.target_disk_type | default('') }}"
+    primary_region: "{{ manifest_data.primary_region | default('') }}"
+    portfolio: "{{ manifest_data.portfolio | default('') }}"
+    bill_to: "{{ manifest_data.bill_to | default('') }}"
+    contact_email: "{{ manifest_data.contact_email | default('') }}"
+    tier: "{{ manifest_data.tier | default('') }}"
+    global_tags: "{{ manifest_data.global_tags | default({}) }}"
+    enable_backup: "{{ manifest_data.enable_backup | default(false) }}"
+    backup_vault_name: "{{ manifest_data.backup_vault_name | default('') }}"
+    backup_vault_resource_group_name: "{{ manifest_data.backup_vault_resource_group_name | default('') }}"
+    backup_vault_policy_name: "{{ manifest_data.backup_vault_policy_name | default('') }}"
+
+- name: Resolve terraform_output_dir to repository root
+  ansible.builtin.set_fact:
+    terraform_output_dir: >-
+      {{
+        (terraform_output_dir | default('output'))
+        if ((terraform_output_dir | default('output')) is match('^/'))
+        else ((playbook_dir | dirname | dirname) ~ '/' ~ (terraform_output_dir | default('output')))
+      }}
+
+# Display loaded facts from above
+- name: Display loaded facts
+  ansible.builtin.debug:
+    msg:
+      - "App name: {{ app_name }}"
+      - "Environment: {{ target_environment }}"
+      - "Target subscription ID: {{ target_subscription_id }}"
+      - "Target resource group: {{ target_resource_group }}"
+      - "Target network ID: {{ target_network_id }}"
+      - "Target subnet name: {{ target_subnet_name }}"
+      - "Target VM size: {{ target_vm_size }}"
+      - "Target license type: {{ target_license_type }}"
+      - "Target disk type: {{ target_disk_type }}"
+      - "Primary region: {{ primary_region }}"
+      - "Portfolio: {{ portfolio }}"
+      - "Bill to: {{ bill_to }}"
+      - "Contact email: {{ contact_email }}"
+      - "Tier: {{ tier }}"
+      - "VMs: {{ manifest_data.vms | default([]) | length }} ({{ manifest_data.vms | default([]) | map(attribute='name') | list | join(', ') }})"
+
+- name: Assert required variables for terraform generation
+  ansible.builtin.assert:
+    that:
+      - (app_name | default('')) | length > 0
+      - (target_environment | default('')) | length > 0
+      - (target_subscription_id | default('')) | length > 0
+      - (target_resource_group | default('')) | length > 0
+      - (target_network_id | default('')) | length > 0
+      - (target_subnet_name | default('')) | length > 0
+      - (manifest_data.vms | default([])) | length > 0
+    fail_msg: "❌ Required variables missing. Provide app_name, environment, target_subscription_id, target_resource_group, target_network_id, target_subnet_name, and vms list in manifest."
+
+- name: Include generate terraform tasks
+  ansible.builtin.include_tasks: generate.yml
+  when: terraform_action == 'generate'
+  # Inherit dry_run from play vars or role defaults

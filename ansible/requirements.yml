@@ -1,0 +1,9 @@
+---
+# Install Azure collection for Ansible
+collections:
+  - name: azure.azcollection
+    version: "1.19.0"
+  - name: microsoft.ad
+    # Domain join modules migrated from ansible.windows to microsoft.ad
+  - name: ansible.windows
+    # Keep for win_reboot and other Windows modules (not domain-related)

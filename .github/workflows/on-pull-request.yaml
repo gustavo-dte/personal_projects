@@ -31,18 +31,6 @@ jobs:
     steps:
       - uses: dteenergy/cloud-platform-github-actions/pre-commit-check-install@main
 
-  comment-on-pr:
-    name: Pull Request Comment for Version Bump
-    runs-on: ubuntu-latest
-    steps:
-      - uses: dteenergy/cloud-platform-github-actions/bump-version/pull-request-comment@main
-
-  check-pr-labels:
-    name: Check Pull Request Labels
-    runs-on: ubuntu-latest
-    steps:
-      - uses: dteenergy/cloud-platform-github-actions/bump-version/check-pr-labels@main
-
   assign-author:
     name: Assign Pull Request to Author
     runs-on: ubuntu-latest

@@ -1,0 +1,500 @@
+---
+# Start migration replication using PowerShell cmdlets
+
+- name: Verify prerequisites for start_replication
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: azure_verify_prerequisites
+
+- name: Assert additional required variables for start_replication
+  ansible.builtin.assert:
+    that:
+      - (azure_migrate_project_name | default('')) | length > 0
+      - (azure_migrate_project_resource_group | default('')) | length > 0
+      - (azure_migrate_subscription_id | default('')) | length > 0
+      - (vm_name | default('')) | length > 0
+      - (target_resource_group | default('')) | length > 0
+      - (target_subscription_id | default('')) | length > 0
+      - (target_network_id | default('')) | length > 0
+      - (target_subnet_name | default('')) | length > 0
+      - (os_disk_scsi_id | default('')) | length > 0
+    fail_msg: |
+      Required variables missing. Please provide:
+      - azure_migrate_project_name: {{ azure_migrate_project_name | default('NOT SET') }}
+      - azure_migrate_project_resource_group: {{ azure_migrate_project_resource_group | default('NOT SET') }}
+      - azure_migrate_subscription_id: {{ azure_migrate_subscription_id | default('NOT SET') }}
+      - vm_name: {{ vm_name | default('NOT SET') }}
+      - target_resource_group: {{ target_resource_group | default('NOT SET') }}
+      - target_subscription_id: {{ target_subscription_id | default('NOT SET') }}
+      - target_network_id: {{ target_network_id | default('NOT SET') }}
+      - target_subnet_name: {{ target_subnet_name | default('NOT SET') }}
+      - os_disk_scsi_id: {{ os_disk_scsi_id | default('NOT SET') }}
+
+- name: Assert target_vm_name is provided
+  ansible.builtin.assert:
+    that:
+      - (target_vm_name | default('')) | length > 0
+    fail_msg: |
+      ❌ target_vm_name is required for VM '{{ vm_name }}'.
+      Please provide target_vm_name in the manifest for this VM.
+
+- name: Validate target VM name format
+  ansible.builtin.assert:
+    that:
+      - target_vm_name | validate_target_vm_name
+    fail_msg: |
+      ❌ Invalid target_vm_name format for VM '{{ vm_name }}'.
+
+      Target VM name '{{ target_vm_name }}' does not match the required pattern.
+      See validate_target_vm_name function in filter_plugins/vm_name_filters.py for pattern details and examples.
+
+- name: Set target VM name
+  ansible.builtin.set_fact:
+    final_target_vm_name: "{{ target_vm_name }}"
+
+- name: Check if target VM already exists
+  block:
+    - name: Check if target VM exists in resource group
+      azure.azcollection.azure_rm_virtualmachine_info:
+        resource_group: "{{ target_resource_group }}"
+        name: "{{ final_target_vm_name }}"
+        subscription_id: "{{ target_subscription_id }}"
+      register: existing_target_vm_check
+      changed_when: false
+      failed_when: false # Used as a boolean to check if the VM exists
+      no_log: true
+      when: not (dry_run | default(false))
+
+    - name: Set target VM existence flag
+      ansible.builtin.set_fact:
+        target_vm_exists: "{{ existing_target_vm_check.ansible_facts.azure_vm is defined }}"
+      when: not (dry_run | default(false))
+
+    - name: Mock target VM check for dry run
+      ansible.builtin.set_fact:
+        target_vm_exists: false
+      when: dry_run | default(false)
+
+  rescue:
+    - name: Handle target VM check failure
+      ansible.builtin.set_fact:
+        target_vm_exists: false
+
+- name: Skip replication if target VM already exists
+  ansible.builtin.debug:
+    msg: |
+      ⚠️  Skipping replication for VM '{{ vm_name }}' (target VM '{{ final_target_vm_name }}' already exists in resource group '{{ target_resource_group }}').
+
+      The target VM already exists. Please choose a different target_vm_name or delete the existing VM first.
+  when: target_vm_exists | default(false)
+
+- name: Merge global tags with VM-specific tags and add onprem_name
+  ansible.builtin.set_fact:
+    final_tags: "{{ global_tags | default({}) | combine(vm_tags | default({}), recursive=True) | combine({'onprem_name': vm_name}, recursive=False) }}"
+
+- name: Debug tag merging
+  ansible.builtin.debug:
+    msg: |
+      Tag Merging for VM '{{ vm_name }}':
+      - Global Tags: {{ global_tags | default({}) }}
+      - VM Tags: {{ vm_tags | default({}) }}
+      - Final Tags: {{ final_tags }}
+
+- name: Check if replication already exists for VM
+  block:
+    - name: Check replication status for single VM
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/get_replication_status.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -VMNamesJson '["{{ vm_name }}"]'
+        -SubscriptionId {{ azure_migrate_subscription_id | default('') }}
+      register: existing_replication_check
+      changed_when: false
+      when: not (target_vm_exists | default(false))
+
+    - name: Debug PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Raw PowerShell output:
+          {{ existing_replication_check.stdout }}
+      when: not (target_vm_exists | default(false))
+
+    - name: Read JSON results from file
+      ansible.builtin.slurp:
+        src: get_replication_status_result.json
+      register: json_file_content
+      when: not (target_vm_exists | default(false))
+
+    - name: Parse JSON content and set replication data
+      ansible.builtin.set_fact:
+        replication_json: "{{ json_file_content.content | b64decode | from_json }}"
+      when: not (target_vm_exists | default(false))
+
+    - name: Debug JSON parsing results
+      ansible.builtin.debug:
+        msg: |
+          JSON Parsing Debug:
+          - Source: {{ 'JSON file' if not (dry_run | default(false)) else 'Mock data' }}
+          - replication_json type: {{ replication_json | type_debug }}
+          - VM Name: {{ replication_json.VMName | default('N/A') }}
+          - Replication Status: {{ replication_json.ReplicationStatus | default('N/A') }}
+          - Error Message: {{ replication_json.Error | default('N/A') }}
+      when: not (target_vm_exists | default(false))
+
+    - name: Set replication status flags
+      ansible.builtin.set_fact:
+        existing_replication_results: "{{ replication_json }}"
+        vm_already_replicating: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus not in ['Not Found', 'Error', 'Paused'] }}"
+        replication_error: "{{ replication_json.ReplicationStatus is defined and replication_json.ReplicationStatus == 'Error' }}"
+        replication_error_message: "{{ replication_json.Error | default('Unknown error') }}"
+        can_resume_replication: "{{ 'ResumeReplication' in (replication_json.AllowedOperationStrings | default([])) }}"
+      when: not (target_vm_exists | default(false))
+
+    - name: Handle "Solution not found" error
+      ansible.builtin.fail:
+        msg: |
+          ❌ Azure Migrate solution not found for VM '{{ vm_name }}'
+
+          This error typically means:
+          1. The Azure Migrate project '{{ azure_migrate_project_name }}' doesn't exist
+          2. The VM '{{ vm_name }}' hasn't been discovered/assessed yet
+          3. The project name or resource group is incorrect
+          4. Insufficient permissions to access the Azure Migrate project
+
+          Troubleshooting steps:
+          - Verify the Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check the project resource group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+          - Verify the Azure Migrate project subscription ID: {{ azure_migrate_subscription_id }}
+          - Verify the target subscription ID: {{ target_subscription_id }}
+          - Ensure the VM has been discovered and assessed in Azure Migrate
+          - Verify you have proper permissions on both Azure Migrate and target subscriptions
+          - Check if the VM name matches exactly (case-sensitive)
+
+          Error details: {{ replication_error_message }}
+      when: not (target_vm_exists | default(false)) and replication_error and "Solution not found" in replication_error_message
+
+  rescue:
+    - name: Fail when replication status check fails
+      ansible.builtin.fail:
+        msg: |
+          Failed to check replication status for VM '{{ vm_name }}'.
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          To prevent duplicate replication, the operation has been stopped.
+
+- name: Replication process is starting
+  ansible.builtin.debug:
+    msg: |
+      ⏳ Starting replication for VM '{{ vm_name }}'...
+
+      Please wait...
+  when: not vm_already_replicating and not (target_vm_exists | default(false)) and not (can_resume_replication | default(false))
+
+- name: Replication process is resuming
+  ansible.builtin.debug:
+    msg: |
+      ⏳ Resuming replication for VM '{{ vm_name }}'...
+
+      Please wait...
+  when: not vm_already_replicating and not (target_vm_exists | default(false)) and (can_resume_replication | default(false))
+
+- name: Resume replication using PowerShell file
+  block:
+    - name: Run resume_replication.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/resume_replication.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+        -MachineName {{ vm_name }}
+        -ReplicationId {{ existing_replication_results.ReplicationId }}
+      register: replication_output
+      changed_when: replication_output.rc == 0
+      when:
+        - not (dry_run | default(false))
+        - can_resume_replication | default(false)
+
+    - name: Read JSON results from resume_replication.ps1
+      ansible.builtin.slurp:
+        src: resume_replication_result.json
+      register: start_replication_json_file
+      when:
+        - not (dry_run | default(false))
+        - can_resume_replication | default(false)
+
+    - name: Debug resume replication PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Resume Replication PowerShell Output:
+          {{ replication_output.stdout | default('') }}
+          {% if replication_output.stderr | default('') | length > 0 %}
+          Stderr:
+          {{ replication_output.stderr }}
+          {% endif %}
+      when:
+        - not (dry_run | default(false))
+        - can_resume_replication | default(false)
+
+    - name: Parse resume replication JSON content
+      ansible.builtin.set_fact:
+        start_replication_json: >-
+          {{
+            (start_replication_json_file.content | b64decode | from_json)
+            if not (dry_run | default(false))
+            else {
+              'VMName': vm_name,
+              'TargetVMName': final_target_vm_name,
+              'Success': true,
+              'Error': None,
+              'ReplicationId': existing_replication_results.ReplicationId | default('mock-replication-id'),
+              'ResumeTime': '2024-01-01 00:00:00'
+            }
+          }}
+      when: can_resume_replication | default(false)
+
+    - name: Mock replication resume for dry run
+      ansible.builtin.set_fact:
+        replication_output:
+          stdout: |
+            INFO: [DRY RUN] Would execute resume_replication.ps1 with parameters:
+            -ProjectName {{ azure_migrate_project_name }}
+            -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+            -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+            -MachineName {{ vm_name }}
+            -ReplicationId {{ existing_replication_results.ReplicationId }}
+          stderr: ""
+          rc: 0
+          changed: true
+        start_replication_json:
+          VMName: "{{ vm_name }}"
+          TargetVMName: "{{ final_target_vm_name }}"
+          Success: true
+          Error: None
+          ReplicationId: "{{ existing_replication_results.ReplicationId | default('mock-replication-id') }}"
+          ResumeTime: "2024-01-01 00:00:00"
+      when:
+        - dry_run | default(false)
+        - can_resume_replication | default(false)
+
+  when: not vm_already_replicating and not (target_vm_exists | default(false)) and (can_resume_replication | default(false))
+  rescue:
+    - name: Replication resume failed
+      ansible.builtin.fail:
+        msg: |
+          ❌ Replication resume failed for VM '{{ vm_name }}'
+          Error: {{ start_replication_json.Error | default('Unknown error occurred') }}
+
+          This could be due to:
+          - Azure Migrate project not accessible or doesn't exist
+          - Insufficient permissions for replication operations
+          - Replication item not found or in invalid state
+          - Network connectivity issues
+
+          Troubleshooting:
+          - Verify Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check permissions on resource group: {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+          - Verify replication ID: {{ existing_replication_results.ReplicationId | default('N/A') }}
+          - Review full output below for specific errors
+
+          Stderr: {{ replication_output.stderr | default('') }}
+
+- name: Start replication using PowerShell file
+  block:
+    - name: Run start_replication.ps1
+      ansible.builtin.command: >-
+        pwsh -NoLogo -NoProfile -NonInteractive -File
+        {{ role_path }}/files/start_replication.ps1
+        -ProjectName {{ azure_migrate_project_name }}
+        -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+        -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+        -MachineName {{ vm_name }}
+        -TargetResourceGroup {{ target_resource_group }}
+        -TargetSubscriptionId {{ target_subscription_id | default('') }}
+        -TargetVMName {{ final_target_vm_name }}
+        -OSDiskScsiId {{ os_disk_scsi_id }}
+        -TargetNetworkId {{ target_network_id }}
+        -TargetSubnetName {{ target_subnet_name }}
+        {{ ('-TargetVMSize ' ~ target_vm_size) if (target_vm_size | default('') | length) > 0 else '' }}
+        {{ ('-LicenseType ' ~ target_license_type) if (target_license_type | default('') | length) > 0 else '' }}
+        {{ ('-TargetDiskType ' ~ target_disk_type) if (target_disk_type | default('') | length) > 0 else '' }}
+        {{ '-SkipOSVersionCheck' if (skip_os_version_check | default(false)) else '' }}
+        {{ ('-MinWindowsBuild ' ~ min_os_versions.windows_server_build) if not (skip_os_version_check | default(false)) else '' }}
+        {{ ('-MinRHELVersion ' ~ min_os_versions.rhel_major) if not (skip_os_version_check | default(false)) else '' }}
+        {{ ('-Tags ' ~ (final_tags | to_json | quote)) if (final_tags | default({}) | length) > 0 else '' }}
+      register: replication_output
+      changed_when: replication_output.rc == 0
+      when: not (dry_run | default(false))
+
+    - name: Read JSON results from start_replication.ps1
+      ansible.builtin.slurp:
+        src: start_replication_result.json
+      register: start_replication_json_file
+      when: not (dry_run | default(false))
+
+    - name: Debug start replication PowerShell output
+      ansible.builtin.debug:
+        msg: |
+          Start Replication PowerShell Output:
+          {{ replication_output.stdout | default('') }}
+          {% if replication_output.stderr | default('') | length > 0 %}
+          Stderr:
+          {{ replication_output.stderr }}
+          {% endif %}
+      when: not (dry_run | default(false))
+
+    - name: Parse start replication JSON content
+      ansible.builtin.set_fact:
+        start_replication_json: >-
+          {{
+            (start_replication_json_file.content | b64decode | from_json)
+            if not (dry_run | default(false))
+            else {
+              'VMName': vm_name,
+              'TargetVMName': final_target_vm_name,
+              'Success': true,
+              'Error': None,
+              'ReplicationId': 'mock-replication-id',
+              'StartTime': '2024-01-01 00:00:00'
+            }
+          }}
+
+    - name: Debug start replication JSON parsing results
+      ansible.builtin.debug:
+        msg: |
+          Start Replication JSON Parsing Debug:
+          - Source: {{ 'JSON file' if not (dry_run | default(false)) else 'Mock data' }}
+          - start_replication_json type: {{ start_replication_json | type_debug }}
+          - VM Name: {{ start_replication_json.VMName | default('N/A') }}
+          - Target VM Name: {{ start_replication_json.TargetVMName | default('N/A') }}
+          - Success: {{ start_replication_json.Success | default('N/A') }}
+          - Error Message: {{ start_replication_json.Error | default('N/A') }}
+          - Replication ID: {{ start_replication_json.ReplicationId | default('N/A') }}
+
+    - name: Mock replication start for dry run
+      ansible.builtin.set_fact:
+        replication_output:
+          stdout: |
+            INFO: [DRY RUN] Would execute start_replication.ps1 with parameters:
+            -ProjectName {{ azure_migrate_project_name }}
+            -ProjectResourceGroup {{ azure_migrate_project_resource_group | default(target_resource_group) }}
+            -ProjectSubscriptionId {{ azure_migrate_subscription_id | default('') }}
+            -MachineName {{ vm_name }}
+            -TargetResourceGroup {{ target_resource_group }}
+            -TargetSubscriptionId {{ target_subscription_id | default('') }}
+            -TargetVMName {{ final_target_vm_name }}
+            -OSDiskScsiId {{ os_disk_scsi_id }}
+            -TargetNetworkId {{ target_network_id }}
+            -TargetSubnetName {{ target_subnet_name }}
+            {{ ('-TargetVMSize ' ~ target_vm_size) if (target_vm_size | default('') | length) > 0 else '' }}
+            {{ ('-LicenseType ' ~ target_license_type) if (target_license_type | default('') | length) > 0 else '' }}
+            {{ ('-TargetDiskType ' ~ target_disk_type) if (target_disk_type | default('') | length) > 0 else '' }}
+            {{ '-SkipOSVersionCheck' if (skip_os_version_check | default(false)) else '' }}
+            {{ ('-MinWindowsBuild ' ~ min_os_versions.windows_server_build) if not (skip_os_version_check | default(false)) else '' }}
+            {{ ('-MinRHELVersion ' ~ min_os_versions.rhel_major) if not (skip_os_version_check | default(false)) else '' }}
+            {{ ('-Tags ' ~ (final_tags | to_json)) if (final_tags | default({}) | length) > 0 else '' }}
+          stderr: ""
+          rc: 0
+          changed: true
+        start_replication_json:
+          VMName: "{{ vm_name }}"
+          TargetVMName: "{{ final_target_vm_name }}"
+          Success: true
+          Error: None
+          ReplicationId: "mock-replication-id"
+          StartTime: "2024-01-01 00:00:00"
+      when: dry_run | default(false)
+
+  when: not vm_already_replicating and not (target_vm_exists | default(false)) and not (can_resume_replication | default(false))
+  rescue:
+    - name: Replication failed
+      ansible.builtin.fail:
+        msg: |
+          ❌ Replication failed for VM '{{ vm_name }}'
+          Error: {{ start_replication_json.Error | default('Unknown error occurred') }}
+
+          This could be due to:
+          - Azure Migrate project not accessible or doesn't exist
+          - Insufficient permissions for replication operations
+          - VM already exists in target resource group
+          - Network connectivity issues
+          - Invalid target configuration parameters
+
+          Troubleshooting:
+          - Verify Azure Migrate project exists: {{ azure_migrate_project_name }}
+          - Check permissions on resource group: {{ target_resource_group }}
+          - Validate target network configuration
+          - Review full output below for specific errors
+
+          Stderr: {{ replication_output.stderr | default('') }}
+
+- name: Set output for VM that already has replication
+  ansible.builtin.set_fact:
+    replication_output:
+      stdout: "INFO: Replication already exists for '{{ vm_name }}'. Status: {{ existing_replication_results.ReplicationStatus | default('Unknown') }}. Skipping replication start."
+      rc: 0
+      changed: false
+    start_replication_json:
+      VMName: "{{ vm_name }}"
+      TargetVMName: "{{ final_target_vm_name }}"
+      Success: true
+      Error: None
+      ReplicationId: "{{ existing_replication_results.ReplicationId | default('existing-replication') }}"
+      StartTime: "{{ existing_replication_results.StartTime | default('N/A') }}"
+  when: vm_already_replicating
+
+- name: Set output for VM where target VM already exists
+  ansible.builtin.set_fact:
+    replication_output:
+      stdout: "INFO: Target VM '{{ final_target_vm_name }}' already exists in resource group '{{ target_resource_group }}'. Skipping replication start for source VM '{{ vm_name }}'."
+      rc: 0
+      changed: false
+    start_replication_json:
+      VMName: "{{ vm_name }}"
+      TargetVMName: "{{ final_target_vm_name }}"
+      Success: false
+      Error: "Target VM already exists"
+      ReplicationId: None
+      StartTime: None
+  when: target_vm_exists | default(false)
+
+
+- name: Display replication result
+  ansible.builtin.debug:
+    msg:
+      - "VM {{ vm_name }}: {{ 'Already configured' if vm_already_replicating else ('Target VM exists - skipped' if (target_vm_exists | default(false)) else ('Replication resumed' if (can_resume_replication | default(false)) else 'Replication started')) }}"
+      - "Changed: {{ replication_output.changed | default(false) }}"
+      - "Success: {{ start_replication_json.Success | default(false) }}"
+      - "Replication ID: {{ start_replication_json.ReplicationId | default('N/A') }}"
+
+- name: Show detailed replication CLI output
+  ansible.builtin.debug:
+    var: replication_output
+  when: ansible_verbosity >= 1
+
+- name: Show detailed replication JSON result
+  ansible.builtin.debug:
+    var: start_replication_json
+  when: ansible_verbosity >= 1
+
+- name: Set replication output for main playbook
+  ansible.builtin.set_fact:
+    replication_output: "{{ replication_output }}"
+    start_replication_json: "{{ start_replication_json }}"
+
+- name: Add replication output to collection
+  ansible.builtin.set_fact:
+    all_replication_outputs: >-
+      {{
+        all_replication_outputs | default({}) | combine({
+          vm_name: {
+            'changed': replication_output.changed | default(false),
+            'rc': replication_output.rc | default(1),
+            'msg': replication_output.msg | default(''),
+            'stdout': replication_output.stdout | default(''),
+            'stderr': replication_output.stderr | default(''),
+            'replication_json': start_replication_json | default({})
+          }
+        })
+      }}

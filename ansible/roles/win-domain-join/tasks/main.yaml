@@ -1,0 +1,251 @@
+---
+# Main entry point for win-domain-join role
+# Joins Windows servers to Active Directory domain with idempotent operations
+# When disjoin_only is true: disjoins VMs from domain (move to WORKGROUP) using manifest targets.
+
+- name: Load manifest
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: load_manifest
+  vars:
+    manifest: "{{ manifest }}"
+
+- name: Prepare VM connectivity (IP and WinRM creds)
+  block:
+    - name: Build VM IP mapping from direct IP
+      ansible.builtin.set_fact:
+        vm_ip_map: "{{ vm_ip_map | default({}) | combine({item.name: item.vm_ip}) }}"
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.vm_ip is defined
+        - item.vm_ip | length > 0
+
+    - name: Get VM IP addresses from Azure (VMs without direct IP)
+      block:
+        - name: Query Azure for VM information
+          azure.azcollection.azure_rm_virtualmachine_info:
+            resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
+            name: "{{ item.target_vm_name }}"
+            subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
+          register: vm_azure_info
+          loop: "{{ manifest_data.vms }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - item.target_vm_name is defined
+            - item.vm_ip is not defined or item.vm_ip | length == 0
+
+        - name: Get network interface information for each VM
+          azure.azcollection.azure_rm_networkinterface_info:
+            resource_group: "{{ item.item.vm_resource_group | default(manifest_data.target_resource_group) }}"
+            name: "{{ item.vms[0].network_interface_names[0] }}"
+            subscription_id: "{{ item.item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
+          register: nic_info
+          loop: "{{ vm_azure_info.results | default([]) | selectattr('vms', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.vms[0].name | default('unknown') }}"
+          when:
+            - item.vms | length > 0
+            - item.vms[0].network_interface_names | length > 0
+
+        - name: Build VM to NIC name mapping
+          ansible.builtin.set_fact:
+            vm_nic_map: "{{ vm_nic_map | default({}) | combine({item.vms[0].name: item.vms[0].network_interface_names[0]}) }}"
+          loop: "{{ vm_azure_info.results | selectattr('vms', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.vms[0].name | default('unknown') }}"
+          when:
+            - item.vms | length > 0
+            - item.vms[0].network_interface_names | length > 0
+
+        - name: Build NIC name to IP mapping
+          ansible.builtin.set_fact:
+            nic_ip_map: "{{ nic_ip_map | default({}) | combine({item.networkinterfaces[0].name: item.networkinterfaces[0].ip_configurations[0].private_ip_address}) }}"
+          loop: "{{ nic_info.results | selectattr('networkinterfaces', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.networkinterfaces[0].name | default('unknown') }}"
+          when:
+            - item.networkinterfaces | length > 0
+            - item.networkinterfaces[0].ip_configurations | length > 0
+
+        - name: Build VM IP address mapping from Azure
+          ansible.builtin.set_fact:
+            vm_ip_map: "{{ vm_ip_map | default({}) | combine({azure_result.item.name: nic_ip_map[vm_nic_map[azure_result.vms[0].name]]}) }}"
+          loop: "{{ vm_azure_info.results | selectattr('vms', 'defined') | list }}"
+          loop_control:
+            loop_var: azure_result
+            label: "{{ azure_result.vms[0].name | default('unknown') }}"
+          when:
+            - azure_result.vms | length > 0
+            - azure_result.vms[0].name is defined
+            - azure_result.vms[0].name in vm_nic_map
+            - vm_nic_map[azure_result.vms[0].name] in nic_ip_map
+            - nic_ip_map[vm_nic_map[azure_result.vms[0].name]] | length > 0
+            - azure_result.item.name not in (vm_ip_map | default({}))
+
+    - name: Build per-VM WinRM password mapping
+      ansible.builtin.set_fact:
+        vm_winrm_passwords: >-
+          {{
+            vm_winrm_passwords | default({}) | combine({
+              item.name: (
+                lookup('vars', 'winrm_password_' + (item.target_vm_name | default(item.name) | lower), default='') if
+                (lookup('vars', 'winrm_password_' + (item.target_vm_name | default(item.name) | lower), default='') | string | length > 0)
+                else (item.vm_winrm_password | default(''))
+              )
+            })
+          }}
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Build per-VM WinRM username mapping
+      ansible.builtin.set_fact:
+        vm_winrm_usernames: "{{ vm_winrm_usernames | default({}) | combine({item.name: item.vm_winrm_username | default('')}) }}"
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+  when:
+    - (manifest_data.vms | default([])) | length > 0
+    - not (dry_run | default(false)) | bool
+
+- name: Disjoin-only path (targets from manifest)
+  block:
+    - name: Assert manifest has VMs for disjoin
+      ansible.builtin.assert:
+        that:
+          - (manifest_data.vms | default([])) | length > 0
+        fail_msg: "❌ Disjoin requires manifest with at least one VM in vms. Pass manifest=... (e.g. test_vm_migration)."
+
+    - name: Disjoin each Windows server from domain
+      ansible.builtin.include_tasks: disjoin_vm.yaml
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host: "{{ (vm_ip_map | default({}))[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        winrm_port: "{{ item.vm_winrm_port | default(5985) }}"
+        winrm_transport: "{{ item.vm_winrm_transport | default('ntlm') }}"
+        item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
+        item_winrm_password: "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
+      register: disjoin_results
+      no_log: true
+
+    - name: Display disjoin summary
+      ansible.builtin.debug:
+        msg: |
+          Disjoin results:
+          {% for result in disjoin_results.results %}
+          - {{ result.item.name }}: {{ 'SUCCESS' if result is succeeded else 'FAILED' }}
+          {% endfor %}
+      when: disjoin_results is defined
+
+    - name: Fail if any disjoin failed
+      ansible.builtin.fail:
+        msg: "One or more VMs failed to disjoin from the domain. Check the task output above."
+      when:
+        - disjoin_results is defined
+        - disjoin_results.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
+  when: disjoin_only | default(false) | bool
+
+- name: Domain join path
+  block:
+    - name: Assert required variables
+      ansible.builtin.assert:
+        that:
+          - (manifest_data.domainNameSetup | default({})) | length > 0
+          - (manifest_data.domainNameSetup.domain | default('')) | length > 0
+          - (manifest_data.domainNameSetup.domain_admin_username | default('')) | length > 0
+          - (domain_admin_password | default('')) | length > 0
+        fail_msg: "❌ Required domain join variables missing. Need: domainNameSetup.domain, domainNameSetup.domain_admin_username (in manifest), and domain_admin_password (passed via playbook/GitHub Secrets)"
+
+    - name: Set domain configuration facts
+      ansible.builtin.set_fact:
+        domain_name: "{{ manifest_data.domainNameSetup.domain }}"
+        domain_admin_username: "{{ (manifest_data.domainNameSetup.domain_admin_username | default('') | trim) }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        # Prefer domain_ou_path from extra vars (e.g. DOMAIN_OU_PATH secret); fall back to manifest
+        domain_ou_path: "{{ domain_ou_path | default(manifest_data.domainNameSetup.domain_ou_path) | default('') }}"
+        dry_run: "{{ dry_run | default(false) }}"
+        restart_on_success: "{{ restart_on_success | default(true) }}"
+        wait_for_reboot: "{{ wait_for_reboot | default(true) }}"
+        safe_mode_password: "{{ safe_mode_password | default('') }}"
+        force_rejoin: "{{ force_rejoin | default(false) }}"
+      no_log: true
+
+    - name: Debug effective domain admin username (non-sensitive)
+      ansible.builtin.debug:
+        msg: "Using domain_admin_username='{{ domain_admin_username }}' (length={{ domain_admin_username | length }})"
+      no_log: false
+
+    - name: Test WinRM port connectivity before domain join
+      block:
+        - name: Test TCP connectivity to WinRM port
+          ansible.builtin.command: timeout 5 bash -c "echo > /dev/tcp/{{ (vm_ip_map | default({}))[item.name] }}/{{ item.vm_winrm_port | default(5985) }}" || true
+          loop: "{{ manifest_data.vms }}"
+          loop_control:
+            label: "{{ item.name }} ({{ (vm_ip_map | default({}))[item.name] | default('?') }}:{{ item.vm_winrm_port | default(5985) }})"
+          register: port_test_result
+          changed_when: false
+          failed_when: false
+          when:
+            - not (dry_run | default(false))
+            - item.name in (vm_ip_map | default({}))
+            - (vm_ip_map | default({}))[item.name] | length > 0
+
+        - name: Fail if port is not reachable
+          ansible.builtin.fail:
+            msg: |
+              ❌ WinRM port {{ item.item.vm_winrm_port | default(5985) }} is not reachable on {{ (vm_ip_map | default({}))[item.item.name] | default('?') }}
+              This indicates a firewall/NSG blocking issue. Please verify:
+              - Azure NSG allows inbound port {{ item.item.vm_winrm_port | default(5985) }} from GitHub Actions runner
+              - Windows Firewall allows port {{ item.item.vm_winrm_port | default(5985) }} on the VM
+              - WinRM service is running and configured on the VM
+          loop: "{{ port_test_result.results | default([]) }}"
+          when:
+            - not (dry_run | default(false))
+            - port_test_result is defined
+            - port_test_result.results is defined
+            - item.rc != 0
+      when:
+        - not (dry_run | default(false))
+        - (vm_ip_map | default({})) | length > 0
+
+    - name: Join each Windows server to domain
+      ansible.builtin.include_tasks: join_vm.yaml
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host: "{{ (vm_ip_map | default({}))[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        winrm_port: "{{ item.vm_winrm_port | default(5985) }}"
+        winrm_transport: "{{ item.vm_winrm_transport | default('ntlm') }}"
+        item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
+        item_winrm_password: "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
+      ignore_errors: true
+      register: domain_join_results
+      no_log: true
+
+    - name: Display domain join summary
+      ansible.builtin.debug:
+        msg: |
+          Domain join results summary:
+          {% for result in domain_join_results.results %}
+          - {{ result.item.name }}: {{ '✅ SUCCESS' if result is succeeded else '❌ FAILED' }}
+          {% endfor %}
+      when: domain_join_results is defined
+
+    - name: Fail if any domain join failed
+      ansible.builtin.fail:
+        msg: "One or more VMs failed to join the domain. Check the task output above for details."
+      when:
+        - domain_join_results is defined
+        - domain_join_results.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
+  when: not (disjoin_only | default(false)) | bool

@@ -1,0 +1,63 @@
+---
+# Orchestrator for test_migration action
+# Handles execution, result collection, and summary display
+
+- name: Include start test migration tasks
+  ansible.builtin.include_tasks: start_test_migration.yml
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_spec
+    label: "{{ vm_spec.name }}"
+  vars:
+    vm_name: "{{ vm_spec.name }}"
+    azure_migrate_project_name: "{{ manifest_data.azure_migrate_project_name | default('') }}"
+    azure_migrate_project_resource_group: "{{ manifest_data.azure_migrate_project_resource_group | default('') }}"
+    azure_migrate_subscription_id: "{{ manifest_data.azure_migrate_subscription_id | default('') }}"
+    target_resource_group: "{{ vm_spec.target_resource_group | default(manifest_data.target_resource_group | default('')) }}"
+    target_subscription_id: "{{ vm_spec.target_subscription_id | default(manifest_data.target_subscription_id | default('')) }}"
+    test_network_id: "{{ vm_spec.test_network_id | default(manifest_data.test_network_id | default('')) }}"
+
+- name: Collect test migration results
+  ansible.builtin.set_fact:
+    all_test_migration_results: "{{ all_test_migration_results | default([]) + [vm_result] }}"
+  loop: "{{ manifest_data.vms | default([]) }}"
+  loop_control:
+    loop_var: vm_item
+    label: "{{ vm_item.name }}"
+  vars:
+    vm_result:
+      vm_name: "{{ vm_item.name }}"
+      status: >-
+        {{
+          'success' if (all_test_migration_outputs[vm_item.name].test_migration_json.Success | default(false))
+          else (
+            'skipped' if (all_test_migration_outputs[vm_item.name].test_migration_json.Skipped | default(false))
+            else 'failed'
+          )
+        }}
+      changed: "{{ all_test_migration_outputs[vm_item.name].changed | default(false) }}"
+      error: "{{ all_test_migration_outputs[vm_item.name].stderr | default(all_test_migration_outputs[vm_item.name].test_migration_json.Error | default('')) }}"
+      output: "{{ all_test_migration_outputs[vm_item.name].stdout | default('') }}"
+      skipped: "{{ all_test_migration_outputs[vm_item.name].test_migration_json.Skipped | default(false) }}"
+  when: all_test_migration_outputs is defined
+
+- name: Build test migration summary details
+  ansible.builtin.set_fact:
+    test_migration_summary_details: "{{ test_migration_summary_details | default([]) + [result.vm_name + ': ' + result.status] }}"
+  loop: "{{ all_test_migration_results | default([]) }}"
+  loop_control:
+    loop_var: result
+    label: "{{ result.vm_name }}"
+  when: all_test_migration_results is defined and all_test_migration_results | length > 0
+
+- name: Display test migration summary
+  ansible.builtin.debug:
+    msg:
+      - "Migration test migration summary:"
+      - "Total VMs: {{ manifest_data.vms | default([]) | length }}"
+      - "Successful: {{ all_test_migration_results | default([]) | selectattr('status', 'equalto', 'success') | list | length }}"
+      - "Skipped: {{ all_test_migration_results | default([]) | selectattr('status', 'equalto', 'skipped') | list | length }}"
+      - "Failed: {{ all_test_migration_results | default([]) | selectattr('status', 'equalto', 'failed') | list | length }}"
+      - "VM Details:"
+      - "{{ test_migration_summary_details | default([]) | join('\n  ') }}"
+  when: all_test_migration_results is defined

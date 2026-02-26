@@ -1,0 +1,15 @@
+---
+# Common manifest loading task
+# Loads the migration manifest from the vars directory based on manifest name
+
+- name: Load sql migration manifest
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../vars/{{ manifest }}/manifest.yml"
+    name: manifest_data
+
+- name: Display loaded manifest summary
+  ansible.builtin.debug:
+    msg:
+      - "Loaded manifest: {{ manifest }}"
+      - "VMs: {{ manifest_data.vms | default([]) | length }} ({{ manifest_data.vms | default([]) | map(attribute='name') | list | join(', ') }})"
+      - "Project: {{ manifest_data.azure_migrate_project_name | default('NOT SET') }}"
