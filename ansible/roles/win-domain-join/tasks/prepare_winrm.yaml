@@ -35,13 +35,15 @@
     current_hostname_info: { old_name: "{{ target_vm_name }}" }
     actual_vm_hostname: "{{ target_vm_name }}"
     formatted_winrm_username: "{{ target_vm_name }}\\{{ resolved_winrm_username }}"
-  when: dry_run | default(false) | bool
+  when: dry_run | default(false) | bool or skip_hostname_setup | default(false) | bool
 
 - name: Get actual VM hostname (for proper WinRM authentication)
   ansible.windows.win_shell: |
     $env:COMPUTERNAME
   delegate_to: "{{ target_vm_host }}"
-  when: not (dry_run | default(false) | bool)
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
   vars:
     ansible_connection: winrm
     ansible_winrm_transport: "{{ winrm_transport }}"
@@ -63,6 +65,7 @@
   delegate_to: "{{ target_vm_host }}"
   when:
     - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
     - actual_hostname_result.unreachable | default(false) | bool
   vars:
     ansible_connection: winrm
@@ -92,12 +95,14 @@
       }}
   when:
     - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
 
 - name: Set actual hostname for WinRM authentication
   ansible.builtin.set_fact:
     actual_vm_hostname: "{{ (actual_hostname_probe_result.stdout | default('') | trim) if (actual_hostname_probe_result.stdout is defined and (actual_hostname_probe_result.stdout | default('') | trim | length > 0)) else target_vm_name }}"
   when:
     - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
     - actual_hostname_probe_result is defined
     - not (actual_hostname_probe_result.unreachable | default(false) | bool)
 
@@ -106,6 +111,7 @@
     formatted_winrm_username: "{{ actual_vm_hostname }}\\{{ resolved_winrm_username }}"
   when:
     - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
     - actual_hostname_probe_result is defined
     - not (actual_hostname_probe_result.unreachable | default(false) | bool)
 
@@ -115,6 +121,7 @@
     formatted_winrm_username: "{{ target_vm_name }}\\{{ resolved_winrm_username }}"
   when:
     - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
     - actual_hostname_probe_result is not defined or (actual_hostname_probe_result.unreachable | default(false) | bool)
 
 - name: Warn if hostname retrieval failed
@@ -127,6 +134,7 @@
   when:
     - actual_hostname_probe_result is not defined or (actual_hostname_probe_result.unreachable | default(false) | bool)
     - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
 
 - name: Display WinRM connection details
   ansible.builtin.debug:
