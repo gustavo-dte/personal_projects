@@ -31,12 +31,10 @@ Usage (from a workflow step):
   python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 """
 
-import json
 import logging
 import os
+import requests
 import sys
-import urllib.parse
-import urllib.request
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
@@ -58,20 +56,18 @@ if not search_text and not machine_filter:
     sys.exit(1)
 
 try:
-    with urllib.request.urlopen(
-        urllib.request.Request(
-            f"{base_url}/oauth2/token",
-            data=urllib.parse.urlencode({
-                'grant_type': 'password',
-                'username':   username,
-                'password':   password,
-            }).encode(),
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            method='POST',
-        ),
+    resp = requests.post(
+        f"{base_url}/oauth2/token",
+        data={
+            'grant_type': 'password',
+            'username':   username,
+            'password':   password,
+        },
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
         timeout=30,
-    ) as resp:
-        token = json.loads(resp.read()).get('access_token')
+    )
+    resp.raise_for_status()
+    token = resp.json().get('access_token')
 except Exception as ex:
     logging.warning(f'Could not acquire Delinea token: {ex}')
     sys.exit(1)
@@ -84,19 +80,17 @@ auth = {'Authorization': f'Bearer {token}'}
 
 seed = machine_filter or search_text
 try:
-    with urllib.request.urlopen(
-        urllib.request.Request(
-            f"{base_url}/api/v1/secrets?"
-            + urllib.parse.urlencode({
-                'filter.includeRestricted': 'true',
-                'filter.searchtext':        seed,
-            }),
-            headers=auth,
-            method='GET',
-        ),
+    resp = requests.get(
+        f"{base_url}/api/v1/secrets",
+        params={
+            'filter.includeRestricted': 'true',
+            'filter.searchtext':        seed,
+        },
+        headers=auth,
         timeout=30,
-    ) as resp:
-        records = json.loads(resp.read()).get('records') or []
+    )
+    resp.raise_for_status()
+    records = resp.json().get('records') or []
 except Exception as ex:
     logging.warning(f'Secret search failed: {ex}')
     sys.exit(1)
@@ -114,15 +108,13 @@ def item_val(items, *slugs):
 
 
 def fetch_detail(delinea_id):
-    with urllib.request.urlopen(
-        urllib.request.Request(
-            f"{base_url}/api/v1/secrets/{delinea_id}",
-            headers=auth,
-            method='GET',
-        ),
+    resp = requests.get(
+        f"{base_url}/api/v1/secrets/{delinea_id}",
+        headers=auth,
         timeout=30,
-    ) as resp:
-        return json.loads(resp.read())
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def write_delinea_id(delinea_id):
