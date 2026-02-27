@@ -140,9 +140,11 @@ def write_secret_id(secret_id):
         print(f"::add-mask::{secret_id}")
         
         # Write to GITHUB_ENV for use by subsequent workflow steps
+        # lgtm[py/clear-text-storage-sensitive-data]
         # CodeQL: This is an identifier (not the password itself) that must be
         # stored in clear text for Ansible to fetch the actual secret from Delinea
         with open(github_env, 'a', encoding='utf-8') as f:
+            # lgtm[py/clear-text-storage-sensitive-data]
             f.write(f"DELINEA_SECRET_ID={secret_id}\n")
 
 
