@@ -5,16 +5,17 @@ resolve_delinea_secret_id.py
 Resolves the numeric Delinea Secret Server secret ID for the SE-Admin account
 and writes it to GITHUB_ENV so subsequent workflow steps can use it.
 
-Skips silently (exit 0) when:
+Exits with code 1 (failure) when:
   - DELINEA_SECRET_ID is already set  →  caller should short-circuit before invoking this
   - Delinea credentials are missing
   - Neither DELINEA_SECRET_PATH nor DELINEA_SECRET_MACHINE is set
   - The Delinea API returns no matching records
-
-Exits with code 1 (hard failure) when:
   - DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set
   - No secret matched the machine + account/name filters
   - Multiple secrets matched and cannot be disambiguated
+
+Exits with code 0 (success) when:
+  - Secret ID is successfully resolved and written to GITHUB_ENV
 
 Environment variables read:
   DELINEA_BASE_URL        Base URL of the Delinea Secret Server instance
@@ -30,6 +31,7 @@ Usage (from a workflow step):
   python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 """
 
+# ── Standard library imports ───────────────────────────────────────────────────
 import json
 import logging
 import os
@@ -37,10 +39,10 @@ import sys
 import urllib.parse
 import urllib.request
 
-# Configure logging
+# ── Logging configuration ──────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-# ── Read environment ───────────────────────────────────────────────────────────
+# ── Environment variables ──────────────────────────────────────────────────────
 base_url           = (os.getenv('DELINEA_BASE_URL',       '') or '').strip().rstrip('/')
 username           = (os.getenv('DELINEA_USERNAME',       '') or '').strip()
 password           =  os.getenv('DELINEA_PASSWORD',       '') or ''
@@ -53,11 +55,11 @@ github_env         =  os.getenv('GITHUB_ENV')
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
 if not base_url or not username or not password:
     logging.warning('⚠️ Skipping secret ID resolution — missing Delinea credentials.')
-    sys.exit(0)
+    sys.exit(1)
 
 if not search_text and not machine_filter:
     logging.warning('⚠️ Skipping secret ID resolution — no DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE set.')
-    sys.exit(0)
+    sys.exit(1)
 
 # ── Acquire OAuth2 token ───────────────────────────────────────────────────────
 try:
@@ -77,11 +79,11 @@ try:
         token = json.loads(resp.read()).get('access_token')
 except Exception as ex:
     logging.warning(f'⚠️ Could not acquire Delinea token: {ex}')
-    sys.exit(0)
+    sys.exit(1)
 
 if not token:
     logging.warning('⚠️ No access token returned — skipping.')
-    sys.exit(0)
+    sys.exit(1)
 
 auth = {'Authorization': f'Bearer {token}'}
 
@@ -103,11 +105,11 @@ try:
         records = json.loads(resp.read()).get('records') or []
 except Exception as ex:
     logging.warning(f'⚠️ Secret search failed: {ex}')
-    sys.exit(0)
+    sys.exit(1)
 
 if not records:
     logging.warning(f'⚠️ No secrets found for "{seed}" — falling back to path-based lookup.')
-    sys.exit(0)
+    sys.exit(1)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def item_val(items, *slugs):
@@ -220,7 +222,7 @@ exact = next(
 
 if not exact or not exact.get('id'):
     logging.warning('⚠️ No exact name match for the provided path — falling back to path-based lookup.')
-    sys.exit(0)
+    sys.exit(1)
 
 secret_id = exact['id']
 logging.info(f"✅ Resolved DELINEA_SECRET_ID from the provided path.")
