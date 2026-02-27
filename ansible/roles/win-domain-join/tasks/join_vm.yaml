@@ -39,6 +39,7 @@
 
     - name: Rename hostname to target
       ansible.builtin.include_tasks: rename_computer.yaml
+      when: not (skip_hostname_setup | default(false) | bool)
 
     - name: Join to target domain
       ansible.builtin.include_tasks: join_domain.yaml

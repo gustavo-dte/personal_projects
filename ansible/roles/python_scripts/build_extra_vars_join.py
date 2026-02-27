@@ -8,6 +8,7 @@ Variables written:
   manifest              — manifest directory name
   dry_run               — boolean
   force_rejoin          — boolean
+  skip_hostname_setup   — boolean (skip hostname retrieval and rename steps)
   winrm_username        — hardcoded to "SE-Admin"
   domain_admin_password — cpoe-automation password (from SECRET_DOMAIN_ADMIN_PASSWORD)
   domain_ou_path        — (optional) OU path for the computer object
@@ -20,6 +21,7 @@ Environment variables read:
   WORKFLOW_MANIFEST               Value of the 'manifest' workflow input
   WORKFLOW_DRY_RUN                Value of the 'dry_run' workflow input  ("true" or "false")
   WORKFLOW_FORCE_REJOIN           Value of the 'force_rejoin' workflow input  ("true" or "false")
+  WORKFLOW_SKIP_HOSTNAME_SETUP    Value of the 'skip_hostname_setup' workflow input  ("true" or "false")
   SECRET_DOMAIN_ADMIN_PASSWORD    cpoe-automation domain account password (from GitHub Secret)
   SECRET_DOMAIN_OU_PATH           (Optional) OU path  (from GitHub Secret)
 
@@ -37,6 +39,7 @@ import sys
 manifest      = os.environ.get('WORKFLOW_MANIFEST',            '').strip()
 dry_run       = os.environ.get('WORKFLOW_DRY_RUN',       'true').strip().lower() == 'true'
 force_rejoin  = os.environ.get('WORKFLOW_FORCE_REJOIN',  'false').strip().lower() == 'true'
+skip_hostname = os.environ.get('WORKFLOW_SKIP_HOSTNAME_SETUP', 'false').strip().lower() == 'true'
 domain_passwd = os.environ.get('SECRET_DOMAIN_ADMIN_PASSWORD', '')
 domain_ou     = os.environ.get('SECRET_DOMAIN_OU_PATH',        '')
 
@@ -48,6 +51,7 @@ extra_vars = {
     'manifest':              manifest,
     'dry_run':               dry_run,
     'force_rejoin':          force_rejoin,
+    'skip_hostname_setup':   skip_hostname,
     'winrm_username':        'SE-Admin',
     'domain_admin_password': domain_passwd,
     'domain_ou_path':        domain_ou,

@@ -40,6 +40,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_hostname_setup:
+        description: "Skip hostname retrieval and rename steps (go directly to domain join)"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}
@@ -200,6 +205,7 @@ jobs:
           WORKFLOW_MANIFEST:            ${{ inputs.manifest }}
           WORKFLOW_DRY_RUN:             ${{ inputs.dry_run }}
           WORKFLOW_FORCE_REJOIN:        ${{ inputs.force_rejoin }}
+          WORKFLOW_SKIP_HOSTNAME_SETUP: ${{ inputs.skip_hostname_setup }}
           SECRET_DOMAIN_ADMIN_PASSWORD: ${{ secrets.DOMAIN_ADMIN_PASSWORD }}
           SECRET_DOMAIN_OU_PATH:        ${{ secrets.DOMAIN_OU_PATH }}
         run: |

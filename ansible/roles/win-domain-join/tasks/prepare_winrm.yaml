@@ -213,7 +213,9 @@
 
 # Read-only: get current computer name (do not use win_hostname here - it would set the name, not read it)
 - name: Get current hostname (read-only)
-  when: not (dry_run | default(false) | bool)
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
   ansible.windows.win_shell: |
     (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
   delegate_to: "{{ target_vm_host }}"
@@ -234,6 +236,7 @@
 - name: Set current hostname fact for workflow
   when:
     - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
     - get_current_hostname_result is defined
   ansible.builtin.set_fact:
     current_hostname_info:

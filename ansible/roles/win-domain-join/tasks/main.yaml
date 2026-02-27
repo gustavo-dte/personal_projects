@@ -114,6 +114,10 @@
 
 - name: Disjoin-only path (targets from manifest)
   block:
+    - name: Set WinRM username separator
+      ansible.builtin.set_fact:
+        winrm_username_sep: "\\"  # Backslash separator for Windows domain\username format
+
     - name: Assert manifest has VMs for disjoin
       ansible.builtin.assert:
         that:
@@ -155,6 +159,10 @@
 
 - name: Disjoin and rename path (disjoin → reboot → rename → reboot; no domain rejoin)
   block:
+    - name: Set WinRM username separator
+      ansible.builtin.set_fact:
+        winrm_username_sep: "\\"  # Backslash separator for Windows domain\username format
+
     - name: Assert manifest has VMs for disjoin-and-rename
       ansible.builtin.assert:
         that:
@@ -217,6 +225,7 @@
         wait_for_reboot: "{{ wait_for_reboot | default(true) }}"
         safe_mode_password: "{{ safe_mode_password | default('') }}"
         force_rejoin: "{{ force_rejoin | default(false) }}"
+        winrm_username_sep: "\\"  # Backslash separator for Windows domain\username format
       no_log: true
 
     - name: Debug effective domain admin username (non-sensitive)
