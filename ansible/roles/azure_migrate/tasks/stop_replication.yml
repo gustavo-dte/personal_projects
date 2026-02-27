@@ -89,7 +89,7 @@
     - name: Handle "Solution not found" error
       ansible.builtin.fail:
         msg: |
-          ❌ Azure Migrate solution not found for VM '{{ vm_name }}'
+          Azure Migrate solution not found for VM '{{ vm_name }}'
 
           This error typically means:
           1. The Azure Migrate project '{{ azure_migrate_project_name }}' doesn't exist
@@ -174,7 +174,7 @@
     - name: Replication stop failed
       ansible.builtin.fail:
         msg: |
-          ❌ Failed to stop replication for VM '{{ vm_name }}'
+          Failed to stop replication for VM '{{ vm_name }}'
           Error: {{ stop_replication_json.Error | default('Unknown error occurred') }}
 
           This could be due to:

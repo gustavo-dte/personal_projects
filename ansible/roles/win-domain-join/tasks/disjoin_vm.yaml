@@ -36,7 +36,7 @@
         - name: Fail with secure channel guidance when disjoin failed with Access is denied
           ansible.builtin.fail:
             msg: |
-              ❌ Disjoin failed for {{ target_vm_name }}: Access is denied.
+              Disjoin failed for {{ target_vm_name }}: Access is denied.
               The computer's secure channel to the domain is likely broken.
               Fix: Add domain_admin_username and domain_admin_password to the playbook, or run Test-ComputerSecureChannel -Repair on the VM.
               Original error: {{ disjoin_result.msg | default('Unknown') }}
@@ -114,7 +114,7 @@
     - name: Fail when still in domain after disjoin
       ansible.builtin.fail:
         msg: |
-          ❌ Disjoin did not succeed: {{ target_vm_name }} is still in domain ({{ (final_status.stdout | from_json).domain | default('unknown') }}).
+          Disjoin did not succeed: {{ target_vm_name }} is still in domain ({{ (final_status.stdout | from_json).domain | default('unknown') }}).
           PartOfDomain={{ (final_status.stdout | from_json).part_of_domain | default('unknown') }}.
           Fix: reset computer account in AD, run Test-ComputerSecureChannel -Repair on the VM, or add domain_admin_password to the playbook for broken secure channel.
       when:

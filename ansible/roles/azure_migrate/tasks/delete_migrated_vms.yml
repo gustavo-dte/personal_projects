@@ -107,7 +107,7 @@
     - name: Log VM info retrieval error and skip
       ansible.builtin.debug:
         msg: |
-          ⚠️  Skipping deletion for VM '{{ target_vm_name }}' due to error retrieving VM information.
+          Skipping deletion for VM '{{ target_vm_name }}' due to error retrieving VM information.
           Error: {{ vm_info_error }}
           Treating as if VM does not exist.
 
@@ -118,7 +118,7 @@
     - name: Please wait - deleting VM and associated resources
       ansible.builtin.debug:
         msg: |
-          ⏳  Deleting VM '{{ target_vm_name }}' and associated resources...
+          Deleting VM '{{ target_vm_name }}' and associated resources...
           This may take a few moments. Please wait.
       when: not (dry_run | default(false))
 
@@ -213,7 +213,7 @@
     - name: VM deletion failed
       ansible.builtin.fail:
         msg: |
-          ❌ Failed to delete VM '{{ target_vm_name }}'
+          Failed to delete VM '{{ target_vm_name }}'
           Error: {{ ansible_failed_result.msg | default('Unknown error occurred') }}
 
           This could be due to:

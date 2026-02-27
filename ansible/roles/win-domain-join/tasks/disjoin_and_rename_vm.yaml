@@ -33,7 +33,7 @@
       - target_vm_name is defined
       - target_vm_name | length > 0
     fail_msg: >-
-      ❌ target_vm_name is missing for VM '{{ item.name }}' in manifest.
+      target_vm_name is missing for VM '{{ item.name }}' in manifest.
       Every VM entry must have a 'target_vm_name' field specifying the new hostname.
 
 - name: "Display disjoin-and-rename plan for {{ item.name }}"
@@ -49,7 +49,7 @@
         Rename needed    : {{ (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper) }}
       ══════════════════════════════════════════════════════
       {% if dry_run | default(false) | bool %}
-      🧪 DRY RUN — no changes will be made.
+      DRY RUN — no changes will be made.
       {% endif %}
 
 # ── Step 2: Disjoin from domain ───────────────────────────────────────────────
@@ -135,7 +135,7 @@
     azure_vm_name:          "{{ target_vm_name }}"
     azure_subscription_id:  "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
 
-- name: "✅ Disjoin-and-rename complete for {{ item.name }}"
+- name: "Disjoin-and-rename complete for {{ item.name }}"
   ansible.builtin.debug:
     msg: >-
       VM '{{ item.name }}' has been disjoined from domain and renamed to '{{ target_vm_name }}'.
@@ -143,7 +143,7 @@
       It is ready for the domain-join workflow.
   when: not (dry_run | default(false) | bool)
 
-- name: "🧪 [DRY RUN] Disjoin-and-rename preview for {{ item.name }}"
+- name: "[DRY RUN] Disjoin-and-rename preview for {{ item.name }}"
   ansible.builtin.debug:
     msg: |
       [DRY RUN] Would execute for {{ item.name }}:

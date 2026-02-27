@@ -58,7 +58,7 @@
     msg: |
       [DRY RUN] Domain migration workflow for {{ target_vm_host }}:
       {% if force_rejoin_requested %}
-      ⚠️ Force rejoin is enabled - will disjoin and rejoin even if already in target domain
+      Force rejoin is enabled - will disjoin and rejoin even if already in target domain
       {% endif %}
       {% if needs_disjoin %}
       Step 1: Would disjoin from {{ current_domain_status.domain | default('WORKGROUP') }} and move to WORKGROUP

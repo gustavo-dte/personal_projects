@@ -22,7 +22,7 @@
 - name: Log warning when VM is not reachable by IP from runner
   ansible.builtin.debug:
     msg: |
-      ⚠️ VM is not reachable by IP from runner: {{ target_vm_host }}
+      WARNING: VM is not reachable by IP from runner: {{ target_vm_host }}
       Logged only for now per requirement. Investigate separately (NSG/routes/firewall/runner network path).
   when: ping_by_ip_result.rc != 0
 
@@ -128,7 +128,7 @@
 - name: Warn when name-based reachability still fails after registerdns
   ansible.builtin.debug:
     msg: |
-      ⚠️ Name-based reachability still failing after ipconfig /registerdns (runner may be outside AD DNS scope).
+      WARNING: Name-based reachability still failing after ipconfig /registerdns (runner may be outside AD DNS scope).
       - Name: {{ target_vm_name }}
       - FQDN: {{ target_vm_fqdn }}
       - IP: {{ target_vm_host }}

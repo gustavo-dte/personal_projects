@@ -78,7 +78,7 @@
 - name: Fail early when SE-Admin cannot perform disjoin pre-check
   ansible.builtin.fail:
     msg: |
-      ❌ Pre-check failed: SE-Admin (local admin) cannot perform disjoin for {{ target_vm_name }}.
+      Pre-check failed: SE-Admin (local admin) cannot perform disjoin for {{ target_vm_name }}.
       Ensure SE-Admin has local administrator rights on the VM.
       Pre-check error: {{ disjoin_permission_precheck.stdout | default(disjoin_permission_precheck.msg) | default('Unknown') }}
   when:
@@ -116,7 +116,7 @@
     - name: Fail with guidance when disjoin failed with Access is denied
       ansible.builtin.fail:
         msg: |
-          ❌ Disjoin failed for {{ target_vm_name }}: Access is denied.
+          Disjoin failed for {{ target_vm_name }}: Access is denied.
           SE-Admin (local admin) was denied permission to leave the domain.
           Ensure SE-Admin is in the local Administrators group on the VM.
           Original error: {{ domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('Unknown') }}
@@ -172,7 +172,7 @@
 - name: Fail when still in domain after disjoin
   ansible.builtin.fail:
     msg: |
-      ❌ Disjoin did not succeed: the computer is still in domain ({{ (domain_status_after_disjoin.stdout | from_json).domain | default('unknown') }}).
+      Disjoin did not succeed: the computer is still in domain ({{ (domain_status_after_disjoin.stdout | from_json).domain | default('unknown') }}).
       PartOfDomain={{ (domain_status_after_disjoin.stdout | from_json).part_of_domain | default('unknown') }}.
       Fix the secure channel (reset computer account in AD, run Test-ComputerSecureChannel -Repair on the VM), then re-run. Verify with: (Get-CimInstance Win32_ComputerSystem).PartOfDomain
   when:
@@ -202,7 +202,7 @@
 - name: Fail when Azure CLI cannot access VM (pre-disjoin reboot)
   ansible.builtin.fail:
     msg: |
-      ❌ Azure CLI cannot access VM {{ target_vm_name }} (pre-disjoin reboot). Runner may lack Azure auth or VM Contributor/restart permissions.
+      Azure CLI cannot access VM {{ target_vm_name }} (pre-disjoin reboot). Runner may lack Azure auth or VM Contributor/restart permissions.
       Resource group: {{ azure_resource_group | default(manifest_data.target_resource_group) }}
       Error: {{ az_vm_access_check_disjoin.stderr | default(az_vm_access_check_disjoin.msg) | default('Unknown') | truncate(300) }}
   when:
@@ -271,7 +271,7 @@
 - name: Warn if disjoin reboot failed (neither Azure nor WinRM succeeded)
   ansible.builtin.debug:
     msg: |
-      ⚠️ Reboot after disjoin failed. VM may be in inconsistent state.
+      Reboot after disjoin failed. VM may be in inconsistent state.
       Reboot {{ target_vm_host }} manually, then re-run this playbook.
   when:
     - not (dry_run | default(false) | bool)

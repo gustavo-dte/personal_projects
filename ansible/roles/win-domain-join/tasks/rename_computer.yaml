@@ -116,7 +116,7 @@
 - name: Fail when neither Azure nor WinRM rename path confirmed hostname change
   ansible.builtin.fail:
     msg: |
-      ❌ Hostname rename was not confirmed for {{ target_vm_name }} ({{ target_vm_host }}).
+      Hostname rename was not confirmed for {{ target_vm_name }} ({{ target_vm_host }}).
 
       Azure RunCommand did not return a confirmed rename marker, and WinRM fallback failed.
 
@@ -170,7 +170,7 @@
 - name: Fail when hostname rename failed (before reboot)
   ansible.builtin.fail:
     msg: |
-      ❌ Hostname rename failed for {{ target_vm_name }} ({{ target_vm_host }}).
+      Hostname rename failed for {{ target_vm_name }} ({{ target_vm_host }}).
       Error: {{ hostname_rename_result.msg | default('Unknown') | string }}
 
       If the error is "Access is denied":
@@ -210,7 +210,7 @@
 - name: Fail when rename requires reboot but restart was skipped
   ansible.builtin.fail:
     msg: |
-      ❌ Hostname was renamed to {{ target_vm_name }} but a reboot is required for the change to take effect.
+      Hostname was renamed to {{ target_vm_name }} but a reboot is required for the change to take effect.
       The playbook did not reboot because restart_on_success is false.
       Joining the domain without rebooting would leave the computer showing the old name ({{ current_hostname_info.old_name | default('unknown') }}).
       Fix: Set restart_on_success to true and re-run, or reboot the VM ({{ target_vm_host }}) manually and then re-run this playbook to complete the domain join.
@@ -251,7 +251,7 @@
 - name: Fail when hostname did not change after rename reboot
   ansible.builtin.fail:
     msg: |
-      ❌ Hostname on {{ target_vm_host }} is still "{{ hostname_after_reboot.stdout | default('') | trim }}" after reboot; expected "{{ target_vm_name }}".
+      Hostname on {{ target_vm_host }} is still "{{ hostname_after_reboot.stdout | default('') | trim }}" after reboot; expected "{{ target_vm_name }}".
       The rename or reboot may not have taken effect. Reboot the VM manually and re-run, or check WinRM/reboot permissions.
   when:
     - not (dry_run | default(false) | bool)

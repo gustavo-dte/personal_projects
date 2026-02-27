@@ -5,202 +5,264 @@ resolve_delinea_secret_id.py
 Resolves the numeric Delinea Secret Server secret ID for the SE-Admin account
 and writes it to GITHUB_ENV so subsequent workflow steps can use it.
 
-Exits with code 1 (failure) when:
-  - DELINEA_SECRET_ID is already set  →  caller should short-circuit before invoking this
-  - Delinea credentials are missing
+Exits with code 1 on:
+  - Missing Delinea credentials
   - Neither DELINEA_SECRET_PATH nor DELINEA_SECRET_MACHINE is set
-  - The Delinea API returns no matching records
-  - DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set
-  - No secret matched the machine + account/name filters
+  - DELINEA_SECRET_MACHINE set without DELINEA_SECRET_NAME or DELINEA_SECRET_ACCOUNT
+  - No records returned by the Delinea API
+  - No secret matched the applied filters
   - Multiple secrets matched and cannot be disambiguated
 
-Exits with code 0 (success) when:
-  - Secret ID is successfully resolved and written to GITHUB_ENV
+Exits with code 0 on:
+  - Secret ID successfully resolved and written to GITHUB_ENV
+
+Resolution strategy (in order):
+  1. Exact name match against DELINEA_SECRET_PATH
+  2. Machine-based filtering using DELINEA_SECRET_MACHINE + NAME/ACCOUNT
 
 Environment variables read:
   DELINEA_BASE_URL        Base URL of the Delinea Secret Server instance
   DELINEA_USERNAME        Service account used to authenticate
   DELINEA_PASSWORD        Password for the service account
-  DELINEA_SECRET_PATH     Name / path search term  (fallback when ID is not set)
+  DELINEA_SECRET_PATH     Name / path search term (used as search seed and exact-match target)
   DELINEA_SECRET_MACHINE  (Optional) Machine FQDN to narrow matching
   DELINEA_SECRET_NAME     (Optional) Secret name filter (preferred over ACCOUNT)
   DELINEA_SECRET_ACCOUNT  (Optional) Account name filter (fallback if NAME not set)
   GITHUB_ENV              Path to the GitHub Actions env file (set automatically by the runner)
 
-Usage (from a workflow step):
+Usage:
   python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 """
 
 import logging
 import os
-import requests
 import sys
 from typing import Any, Dict, List, Optional
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+import requests
 
-base_url: str = (os.getenv('DELINEA_BASE_URL', '') or '').strip().rstrip('/')
-username: str = (os.getenv('DELINEA_USERNAME', '') or '').strip()
-password: str = os.getenv('DELINEA_PASSWORD', '') or ''
-search_text: str = (os.getenv('DELINEA_SECRET_PATH', '') or '').strip()
-machine_filter: str = (os.getenv('DELINEA_SECRET_MACHINE', '') or '').strip().lower()
-secret_name_filter: str = (os.getenv('DELINEA_SECRET_NAME', '') or '').strip().lower()
-account_filter: str = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
-github_env: Optional[str] = os.getenv('GITHUB_ENV')
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
-if not base_url or not username or not password:
-    logging.error('Skipping resolution, missing Delinea credentials.')
-    sys.exit(1)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-if not search_text and not machine_filter:
-    logging.error('Skipping resolution, no search criteria set.')
-    sys.exit(1)
-
-try:
-    resp: requests.Response = requests.post(
-        f"{base_url}/oauth2/token",
-        data={
-            'grant_type': 'password',
-            'username':   username,
-            'password':   password,
-        },
-        headers={'Content-Type': 'application/x-www-form-urlencoded'},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    token: Optional[str] = resp.json().get('access_token')
-except Exception as ex:
-    logging.error('Could not acquire Delinea token: %s', ex)
-    sys.exit(1)
-
-if not token:
-    logging.error('No access token returned.')
-    sys.exit(1)
-
-auth: Dict[str, str] = {'Authorization': f'Bearer {token}'}
-
-seed: str = machine_filter or search_text
-try:
-    resp = requests.get(
-        f"{base_url}/api/v1/secrets",
-        params={
-            'filter.includeRestricted': 'true',
-            'filter.searchtext':        seed,
-        },
-        headers=auth,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    records: List[Dict[str, Any]] = resp.json().get('records') or []
-except Exception as ex:
-    logging.error('Secret search failed: %s', ex)
-    sys.exit(1)
-
-if not records:
-    logging.error('No records found for "%s".', seed)
-    sys.exit(1)
-
-def item_val(items: Optional[List[Dict[str, Any]]], *slugs: str) -> str:
-    wanted = {s.lower() for s in slugs}
-    for item in items or []:
-        if str(item.get('slug', '')).strip().lower() in wanted:
-            return str(item.get('itemValue', '')).strip().lower()
-    return ''
+# ---------------------------------------------------------------------------
+# Helpers — environment
+# ---------------------------------------------------------------------------
 
 
-def fetch_detail(delinea_id: Any) -> Dict[str, Any]:
-    resp: requests.Response = requests.get(
-        f"{base_url}/api/v1/secrets/{delinea_id}",
-        headers=auth,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+def _env(var: str) -> str:
+    """Return a stripped environment variable value, defaulting to empty string."""
+    return (os.getenv(var) or "").strip()
 
 
-def write_delinea_id(delinea_id: Any) -> None:
-    if github_env:
-        # lgtm[py/clear-text-logging-sensitive-data]
-        sys.stdout.write(f"::add-mask::{delinea_id}\n")
-        sys.stdout.flush()
-        
-        # lgtm[py/clear-text-storage-sensitive-data]
-        env_handler = logging.FileHandler(github_env, mode='a', encoding='utf-8')
-        env_handler.setFormatter(logging.Formatter('%(message)s'))
-        env_logger = logging.getLogger('github_env')
-        env_logger.setLevel(logging.INFO)
-        env_logger.addHandler(env_handler)
-        # lgtm[py/clear-text-storage-sensitive-data]
-        env_logger.info("DELINEA_SECRET_ID=%s", delinea_id)
-        env_handler.close()
-        env_logger.removeHandler(env_handler)
+def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
+    """Mask a value and export it to the GitHub Actions environment file."""
+    sys.stdout.write(f"::add-mask::{value}\n")
+    sys.stdout.flush()
 
+    if not github_env:
+        logging.warning("GITHUB_ENV not set — skipping environment variable export")
+        return
 
-# Strategy 1: Try exact name match first (fastest, simplest)
-exact: Optional[Dict[str, Any]] = next(
-    (r for r in records if str(r.get('name', '')).strip().lower() == search_text.lower()),
-    None,
-)
-
-if exact and exact.get('id'):
-    delinea_id: Any = exact['id']
-    logging.info('Resolved DELINEA_SECRET_ID via exact name match.')
-    write_delinea_id(delinea_id)
-    sys.exit(0)
-
-# Strategy 2: If no exact match and machine filter is set, do machine-based filtering
-if machine_filter:
-    if not secret_name_filter and not account_filter:
-        logging.error('DELINEA_SECRET_MACHINE requires DELINEA_SECRET_NAME or DELINEA_SECRET_ACCOUNT.')
+    try:
+        with open(github_env, "a", encoding="utf-8") as fh:  # lgtm[py/clear-text-storage-sensitive-data]
+            fh.write(f"{key}={value}\n")
+    except OSError as ex:
+        logging.error(f"Failed to write to GITHUB_ENV: {ex}")
         sys.exit(1)
 
-    desired_name: str = secret_name_filter or account_filter
+
+# ---------------------------------------------------------------------------
+# Helpers — Delinea API
+# ---------------------------------------------------------------------------
+
+
+def _acquire_token(base_url: str, username: str, password: str) -> str:
+    """Authenticate against Delinea and return a bearer token. Exits with code 1 on failure."""
+    try:
+        resp = requests.post(
+            f"{base_url}/oauth2/token",
+            data={"grant_type": "password", "username": username, "password": password},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        token: Optional[str] = resp.json().get("access_token")
+    except Exception as ex:
+        logging.error(f"Could not acquire Delinea token: {ex}")
+        sys.exit(1)
+
+    if not token:
+        logging.error("No access token returned by Delinea")
+        sys.exit(1)
+
+    return token
+
+
+def _search_secrets(base_url: str, auth: Dict[str, str], seed: str) -> List[Dict[str, Any]]:
+    """Search Delinea for secrets matching the given seed term. Exits with code 1 on failure."""
+    try:
+        resp = requests.get(
+            f"{base_url}/api/v1/secrets",
+            params={"filter.includeRestricted": "true", "filter.searchtext": seed},
+            headers=auth,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("records") or []
+    except Exception as ex:
+        logging.error(f"Secret search failed: {ex}")
+        sys.exit(1)
+
+
+def _fetch_detail(base_url: str, auth: Dict[str, str], secret_id: int) -> Dict[str, Any]:
+    """Fetch full detail for a single secret by ID. Exits with code 1 on failure."""
+    try:
+        resp = requests.get(
+            f"{base_url}/api/v1/secrets/{secret_id}",
+            headers=auth,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as ex:
+        logging.error(f"Failed to fetch detail for secret ID {secret_id}: {ex}")
+        sys.exit(1)
+
+
+def _item_val(items: List[Dict[str, Any]], *slugs: str) -> str:
+    """Return the lowercased itemValue for the first slug that matches any item."""
+    wanted = {s.lower() for s in slugs}
+    for item in items:
+        if str(item.get("slug", "")).strip().lower() in wanted:
+            return str(item.get("itemValue", "")).strip().lower()
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Helpers — matching logic
+# ---------------------------------------------------------------------------
+
+
+def _resolve_by_machine(
+    base_url: str,
+    auth: Dict[str, str],
+    records: List[Dict[str, Any]],
+    machine_filter: str,
+    secret_name_filter: str,
+    account_filter: str,
+) -> str:
+    """
+    Filter records by machine FQDN and account/name, fetching full details when needed.
+    Returns the matched secret ID. Exits with code 1 when no match or ambiguous match.
+    """
+    if not secret_name_filter and not account_filter:
+        logging.error(
+            "DELINEA_SECRET_MACHINE requires DELINEA_SECRET_NAME or DELINEA_SECRET_ACCOUNT"
+        )
+        sys.exit(1)
+
+    desired_name = secret_name_filter or account_filter
     matches: List[Dict[str, Any]] = []
 
     for rec in records:
-        name: str = str(rec.get('name', '') or '').strip()
-        matched: bool = False
-        
-        # First, try simple name-based matching if name contains backslash
-        if '\\' in name:
-            fqdn: str
-            acct: str
-            fqdn, acct = name.split('\\', 1)
+        name = str(rec.get("name") or "").strip()
+
+        # Fast path: name is in "fqdn\account" format
+        if "\\" in name:
+            fqdn, acct = name.split("\\", 1)
             if fqdn.strip().lower() == machine_filter and acct.strip().lower() == desired_name:
                 matches.append(rec)
-                matched = True
-        
-        # If no match yet and we have account_filter, check detailed items
-        if not matched and account_filter:
-            sid: Any = rec.get('id')
-            if sid:
-                try:
-                    detail: Dict[str, Any] = fetch_detail(sid)
-                    items: List[Dict[str, Any]] = detail.get('items') or rec.get('items') or []
-                    if (
-                        item_val(items, 'machine', 'host', 'hostname', 'fqdn', 'server') == machine_filter
-                        and item_val(items, 'username', 'user', 'account', 'login') == account_filter
-                    ):
-                        matches.append(rec)
-                except Exception as ex:
-                    logging.warning('Could not fetch details for secret ID %s: %s', sid, ex)
-                    continue
+                continue
 
-    matches = list({str(m.get('id')): m for m in matches if m.get('id')}.values())
+        # Slow path: inspect item slugs from the full secret detail
+        if account_filter:
+            secret_id: Optional[int] = rec.get("id")
+            if not secret_id:
+                continue
+            try:
+                detail = _fetch_detail(base_url, auth, secret_id)
+                items: List[Dict[str, Any]] = detail.get("items") or []
+                if (
+                    _item_val(items, "machine", "host", "hostname", "fqdn", "server") == machine_filter
+                    and _item_val(items, "username", "user", "account", "login") == account_filter
+                ):
+                    matches.append(rec)
+            except SystemExit:
+                logging.warning(f"Skipping secret ID {secret_id} — could not fetch details")
 
-    if len(matches) == 0:
-        logging.error('No matching records found. Check filter values.')
+    # Deduplicate by ID
+    matches = list({str(m["id"]): m for m in matches if m.get("id")}.values())
+
+    if not matches:
+        logging.error("No matching records found — verify DELINEA_SECRET_MACHINE and filter values")
         sys.exit(1)
 
     if len(matches) > 1:
-        logging.error('Multiple matches (%s). Set DELINEA_SECRET_ID explicitly.', len(matches))
+        logging.error(f"Ambiguous match — {len(matches)} records found; set DELINEA_SECRET_ID explicitly")
         sys.exit(1)
 
-    delinea_id = matches[0].get('id')
-    logging.info('Resolved DELINEA_SECRET_ID via machine filter.')
-    write_delinea_id(delinea_id)
-    sys.exit(0)
+    return str(matches[0]["id"])
 
-# If we reach here, no match was found
-logging.error('No exact name match found and no machine filter criteria provided.')
-sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    base_url = _env("DELINEA_BASE_URL").rstrip("/")
+    username = _env("DELINEA_USERNAME")
+    password = _env("DELINEA_PASSWORD")
+    search_text = _env("DELINEA_SECRET_PATH")
+    machine_filter = _env("DELINEA_SECRET_MACHINE").lower()
+    secret_name_filter = _env("DELINEA_SECRET_NAME").lower()
+    account_filter = _env("DELINEA_SECRET_ACCOUNT").lower()
+    github_env: Optional[str] = os.getenv("GITHUB_ENV")
+
+    if not all([base_url, username, password]):
+        logging.error("Missing Delinea credentials — set DELINEA_BASE_URL, DELINEA_USERNAME, DELINEA_PASSWORD")
+        sys.exit(1)
+
+    if not search_text and not machine_filter:
+        logging.error("No search criteria — set DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE")
+        sys.exit(1)
+
+    token = _acquire_token(base_url, username, password)
+    auth: Dict[str, str] = {"Authorization": f"Bearer {token}"}
+
+    # Use machine FQDN as search seed when available; it gives tighter results
+    seed = machine_filter or search_text
+    records = _search_secrets(base_url, auth, seed)
+
+    if not records:
+        logging.error(f'No records returned for search term "{seed}"')
+        sys.exit(1)
+
+    # Strategy 1: exact name match (fastest, no extra API calls)
+    exact = next(
+        (r for r in records if str(r.get("name", "")).strip().lower() == search_text.lower()),
+        None,
+    )
+    if exact and exact.get("id"):
+        logging.info("Resolved DELINEA_SECRET_ID via exact name match")
+        _write_github_env(github_env, "DELINEA_SECRET_ID", str(exact["id"]))
+        return
+
+    # Strategy 2: machine-based filtering
+    if machine_filter:
+        secret_id = _resolve_by_machine(
+            base_url, auth, records, machine_filter, secret_name_filter, account_filter
+        )
+        logging.info("Resolved DELINEA_SECRET_ID via machine filter")
+        _write_github_env(github_env, "DELINEA_SECRET_ID", secret_id)
+        return
+
+    logging.error("No exact name match found and DELINEA_SECRET_MACHINE is not set")
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

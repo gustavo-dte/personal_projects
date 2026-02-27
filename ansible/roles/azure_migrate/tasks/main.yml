@@ -14,7 +14,7 @@
   ansible.builtin.assert:
     that:
       - migration_action in migration_actions
-    fail_msg: "❌ migration_action must be one of: {{ migration_actions | join(', ') }}"
+    fail_msg: "migration_action must be one of: {{ migration_actions | join(', ') }}"
 
 - name: Execute start_replication action
   ansible.builtin.include_tasks: orchestrators/start_replication.yml

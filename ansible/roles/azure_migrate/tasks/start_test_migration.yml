@@ -117,7 +117,7 @@
     - name: Warn when skipping test migration
       ansible.builtin.debug:
         msg: |
-          ⚠️  Skipping test migration for VM '{{ vm_name }}'
+          Skipping test migration for VM '{{ vm_name }}'
 
           Reason: {{ test_migration_skip_reason }}
 
@@ -146,7 +146,7 @@
     - name: Fail if replication object ID is not found
       ansible.builtin.fail:
         msg: |
-          ❌ Could not retrieve replication object ID for VM '{{ vm_name }}'
+          Could not retrieve replication object ID for VM '{{ vm_name }}'
 
           This is required to start test migration.
 
@@ -191,7 +191,7 @@
     - name: Test migration failed
       ansible.builtin.fail:
         msg: |
-          ❌ Test migration failed for VM '{{ vm_name }}'
+          Test migration failed for VM '{{ vm_name }}'
           Error: {{ test_migration_json.Error | default('Unknown error occurred') }}
 
           This could be due to:

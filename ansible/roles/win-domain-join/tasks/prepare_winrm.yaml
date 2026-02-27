@@ -21,7 +21,7 @@
       - resolved_winrm_username | length > 0
       - resolved_winrm_password | length > 0
     fail_msg: |
-      ❌ WinRM credentials are missing for {{ target_vm_name }} ({{ target_vm_host }})
+      WinRM credentials are missing for {{ target_vm_name }} ({{ target_vm_host }})
       - Username: {{ 'PROVIDED' if (resolved_winrm_username | length > 0) else 'MISSING' }}
       - Password: {{ 'PROVIDED' if (resolved_winrm_password | length > 0) else 'MISSING' }}
       Please ensure either:
@@ -127,7 +127,7 @@
 - name: Warn if hostname retrieval failed
   ansible.builtin.debug:
     msg: |
-      ⚠️ WARNING: Could not retrieve actual hostname from VM {{ target_vm_host }}.
+      WARNING: Could not retrieve actual hostname from VM {{ target_vm_host }}.
       Using target_vm_name ({{ target_vm_name }}) as fallback.
       If authentication fails, the VM's actual hostname may differ from the target name.
       Error: {{ actual_hostname_probe_result.msg | default('Unknown error') if (actual_hostname_probe_result is defined) else 'N/A' }}
@@ -204,7 +204,7 @@
 - name: Handle WinRM connection failures
   ansible.builtin.fail:
     msg: |
-      ❌ WinRM connection failed for {{ target_vm_name }} ({{ target_vm_host }}:{{ winrm_port }})
+      WinRM connection failed for {{ target_vm_name }} ({{ target_vm_host }}:{{ winrm_port }})
       Error: {{ current_domain_status_raw.msg | default('Unknown error') }}
 
       Troubleshooting:

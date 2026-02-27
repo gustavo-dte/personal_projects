@@ -122,7 +122,7 @@
       ansible.builtin.assert:
         that:
           - (manifest_data.vms | default([])) | length > 0
-        fail_msg: "❌ Disjoin requires manifest with at least one VM in vms. Pass manifest=... (e.g. test_vm_migration)."
+        fail_msg: "Disjoin requires manifest with at least one VM in vms. Pass manifest=... (e.g. test_vm_migration)."
 
     - name: Disjoin each Windows server from domain
       ansible.builtin.include_tasks: disjoin_vm.yaml
@@ -168,7 +168,7 @@
       ansible.builtin.assert:
         that:
           - (manifest_data.vms | default([])) | length > 0
-        fail_msg: "❌ disjoin_and_rename requires manifest with at least one VM in vms."
+        fail_msg: "disjoin_and_rename requires manifest with at least one VM in vms."
 
     - name: Disjoin then rename each Windows server
       ansible.builtin.include_tasks: disjoin_and_rename_vm.yaml
@@ -192,7 +192,7 @@
         msg: |
           Disjoin-and-rename results:
           {% for result in disjoin_and_rename_results.results %}
-          - {{ result.item.name }} → {{ result.item.target_vm_name | default(result.item.name) }}: {{ '✅ SUCCESS' if result is succeeded else '❌ FAILED' }}
+          - {{ result.item.name }} -> {{ result.item.target_vm_name | default(result.item.name) }}: {{ 'SUCCESS' if result is succeeded else 'FAILED' }}
           {% endfor %}
       when: disjoin_and_rename_results is defined
 
@@ -213,7 +213,7 @@
           - (manifest_data.domainNameSetup.domain | default('')) | length > 0
           - (manifest_data.domainNameSetup.domain_admin_username | default('')) | length > 0
           - (domain_admin_password | default('')) | length > 0
-        fail_msg: "❌ Required domain join variables missing. Need: domainNameSetup.domain, domainNameSetup.domain_admin_username (in manifest), and domain_admin_password (passed via playbook/GitHub Secrets)"
+        fail_msg: "Required domain join variables missing. Need: domainNameSetup.domain, domainNameSetup.domain_admin_username (in manifest), and domain_admin_password (passed via playbook/GitHub Secrets)"
 
     - name: Set domain configuration facts
       ansible.builtin.set_fact:
@@ -253,7 +253,7 @@
         - name: Fail if port is not reachable
           ansible.builtin.fail:
             msg: |
-              ❌ WinRM port {{ item.item.vm_winrm_port | default(5985) }} is not reachable on {{ (vm_ip_map | default({}))[item.item.name] | default('?') }}
+              WinRM port {{ item.item.vm_winrm_port | default(5985) }} is not reachable on {{ (vm_ip_map | default({}))[item.item.name] | default('?') }}
               This indicates a firewall/NSG blocking issue. Please verify:
               - Azure NSG allows inbound port {{ item.item.vm_winrm_port | default(5985) }} from GitHub Actions runner
               - Windows Firewall allows port {{ item.item.vm_winrm_port | default(5985) }} on the VM
@@ -291,7 +291,7 @@
         msg: |
           Domain join results summary:
           {% for result in domain_join_results.results %}
-          - {{ result.item.name }}: {{ '✅ SUCCESS' if result is succeeded else '❌ FAILED' }}
+          - {{ result.item.name }}: {{ 'SUCCESS' if result is succeeded else 'FAILED' }}
           {% endfor %}
       when: domain_join_results is defined
 

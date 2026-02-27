@@ -99,7 +99,7 @@
     - name: Notify when skipping cleanup
       ansible.builtin.debug:
         msg: |
-          ⚠️  Skipping test migration cleanup for VM '{{ vm_name }}'
+          Skipping test migration cleanup for VM '{{ vm_name }}'
 
           Reason: {{ cleanup_skip_reason }}
 
@@ -128,7 +128,7 @@
     - name: Fail if replication object ID is not found
       ansible.builtin.fail:
         msg: |
-          ❌ Could not retrieve replication object ID for VM '{{ vm_name }}'
+          Could not retrieve replication object ID for VM '{{ vm_name }}'
 
           This is required to start test migration cleanup.
 
@@ -172,7 +172,7 @@
     - name: Test migration cleanup failed
       ansible.builtin.fail:
         msg: |
-          ❌ Test migration cleanup failed for VM '{{ vm_name }}'
+          Test migration cleanup failed for VM '{{ vm_name }}'
           Error: {{ test_migration_cleanup_json.Error | default('Unknown error occurred') }}
 
           This could be due to:

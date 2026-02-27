@@ -53,13 +53,13 @@
 - name: Display final domain status
   ansible.builtin.debug:
     msg: |
-      ✅ Domain join completed successfully!
+      Domain join completed successfully.
       {% if ((az_restart_succeeded | default(false)) or (winrm_reboot_succeeded | default(false))) and post_reboot_domain_status is defined %}
       Final domain status:
       - Domain: {{ post_reboot_domain_status.domain | default('N/A') }}
       - Computer Name: {{ target_vm_name }}
       {% elif not ((az_restart_succeeded | default(false)) or (winrm_reboot_succeeded | default(false))) %}
-      ⚠️ Domain join succeeded, but automatic reboot failed.
+      WARNING: Domain join succeeded, but automatic reboot failed.
       - Domain join is complete, but server must be manually rebooted for changes to take effect.
       - Computer Name: {{ target_vm_name }}
       {% else %}

@@ -30,7 +30,7 @@
 - name: Fail when domain join failed (rename or Access is denied during join)
   ansible.builtin.fail:
     msg: |
-      ❌ Domain join failed for {{ target_vm_name }}: the module tried to rename the computer to "{{ target_vm_name }}" and got Access is denied.
+      Domain join failed for {{ target_vm_name }}: the module tried to rename the computer to "{{ target_vm_name }}" and got Access is denied.
 
       The computer is still named {{ current_hostname_info.old_name | default('unknown') }}. Rename must succeed before or during join.
 
@@ -50,7 +50,7 @@
 - name: Fail when domain join failed (other errors)
   ansible.builtin.fail:
     msg: |
-      ❌ Domain join failed for {{ target_vm_name }}.
+      Domain join failed for {{ target_vm_name }}.
       Error: {{ domain_join_result.msg | default('Unknown') | string }}
       This could indicate invalid domain credentials, network/DC issues, or insufficient permissions.
   when:
@@ -76,7 +76,7 @@
 - name: Fail if domain join didn't complete successfully
   ansible.builtin.fail:
     msg: |
-      ❌ Domain join failed or didn't complete successfully.
+      Domain join failed or didn't complete successfully.
       Current domain status: {{ current_domain_status.domain | default('WORKGROUP') }}
       Target domain: {{ domain_name }}
       Error: {{ domain_join_result.msg | default('Unknown') | string }}
@@ -125,7 +125,7 @@
 - name: Fail when Azure CLI cannot access VM (check runner auth and Contributor/restart role)
   ansible.builtin.fail:
     msg: |
-      ❌ Azure CLI cannot access VM {{ target_vm_name }}. The runner may lack Azure auth or VM Contributor/restart permissions.
+      Azure CLI cannot access VM {{ target_vm_name }}. The runner may lack Azure auth or VM Contributor/restart permissions.
       Resource group: {{ azure_resource_group | default(manifest_data.target_resource_group) }}
       Subscription: {{ azure_subscription_id | default(manifest_data.target_subscription_id) }}
       Error: {{ az_vm_access_check.stderr | default(az_vm_access_check.msg) | default('Unknown') | truncate(300) }}
@@ -206,7 +206,7 @@
 - name: Warn if reboot failed (neither Azure nor WinRM succeeded)
   ansible.builtin.debug:
     msg: |
-      ⚠️ WARNING: Automatic reboot failed (Azure and/or WinRM restart did not succeed).
+      WARNING: Automatic reboot failed (Azure and/or WinRM restart did not succeed).
       The server has been successfully joined to the domain, but a manual reboot is required
       for the domain join to take full effect.
       Please reboot the server manually: {{ target_vm_name }}

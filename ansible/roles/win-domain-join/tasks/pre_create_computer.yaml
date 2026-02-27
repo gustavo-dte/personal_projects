@@ -46,7 +46,7 @@
     - name: Fail when pre-create AD computer object failed
       ansible.builtin.fail:
         msg: |
-          ❌ Pre-create AD computer object failed for {{ target_vm_name }}.
+          Pre-create AD computer object failed for {{ target_vm_name }}.
           The playbook stops here. Fix the error and re-run.
           Error: {{ precreate_computer_result.msg | default('Unknown error') | string }}
       when:
@@ -57,7 +57,7 @@
     # Skip separate Verify to avoid DN format mismatch failures (AD may return path in different format)
     - name: "Pre-create: AD computer object verified (Create succeeded)"
       ansible.builtin.debug:
-        msg: "✅ AD computer object {{ target_vm_name }}$ created in OU {{ domain_ou_path | trim }}. Proceeding to disjoin/rename/join."
+        msg: "AD computer object {{ target_vm_name }}$ created in OU {{ domain_ou_path | trim }}. Proceeding to disjoin/rename/join."
       when:
         - precreate_computer_result is defined
         - not (precreate_computer_result.failed | default(false) | bool)
