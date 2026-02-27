@@ -63,34 +63,18 @@ jobs:
 
     steps:
 
-      # ── Install dependencies ─────────────────────────────────────────────────
-      - name: "🔧 Install Delinea Python SDK"
-        run: pip install python-tss-sdk
-        shell: bash
-
-      - name: "🔧 Upgrade Ansible"
-        run: pip install --upgrade 'ansible>=2.15.0'
-        shell: bash
-
-      - name: "🔧 Install Delinea Ansible collection"
-        run: ansible-galaxy collection install delinea.platform_secretserver
-        shell: bash
-
-      - name: "✅ Verify Delinea TSS lookup plugin"
-        run: ansible-doc -t lookup -l | grep tss
-        shell: bash
-
-      # ── Checkout & validate ──────────────────────────────────────────────────
-      - name: "📥 Checkout repository"
+      - name: "Checkout repository"
         uses: actions/checkout@v4
 
-      - name: "✅ Validate manifest"
+      - name: "Setup Ansible environment"
+        uses: ./.github/actions/setup-ansible-environment
+
+      - name: "Validate manifest"
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      # ── Azure login (live runs only) ─────────────────────────────────────────
-      - name: "🔐 Azure Login"
+      - name: "Azure Login"
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
@@ -100,8 +84,7 @@ jobs:
           allow-no-subscriptions: true
           enable-AzPSSession: true
 
-      # ── Summary ──────────────────────────────────────────────────────────────
-      - name: "📊 Display configuration"
+      - name: "Display configuration"
         run: |
           echo "════════════════════════════════════════════════════════"
           echo "  Ansible-Disjoin-Windows-Domain — ${{ inputs.manifest }}"
@@ -117,21 +100,19 @@ jobs:
           echo "  Step 2 — Disjoin VM from domain → WORKGROUP  [SE-Admin via WinRM]"
           echo "════════════════════════════════════════════════════════"
           [ "${{ inputs.dry_run }}" = "true" ] \
-            && echo "🧪 DRY RUN — no changes will be made." \
-            || echo "🚀 LIVE RUN — changes will be applied."
+            && echo "DRY RUN — no changes will be made." \
+            || echo "LIVE RUN — changes will be applied."
 
-      # ── Resolve Delinea secret ID ────────────────────────────────────────────
-      - name: "🔎 Resolve Delinea secret ID"
+      - name: "Resolve Delinea secret ID"
         shell: bash
         run: |
           if [ -n "${DELINEA_SECRET_ID}" ]; then
-            echo "✅ DELINEA_SECRET_ID already set: ${DELINEA_SECRET_ID}"
+            echo "DELINEA_SECRET_ID already set: ${DELINEA_SECRET_ID}"
             exit 0
           fi
           python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 
-      # ── Extra-vars ───────────────────────────────────────────────────────────
-      - name: "🧱 Prepare Ansible extra-vars"
+      - name: "Prepare Ansible extra-vars"
         env:
           WORKFLOW_MANIFEST: ${{ inputs.manifest }}
           WORKFLOW_DRY_RUN:  ${{ inputs.dry_run }}
@@ -139,11 +120,10 @@ jobs:
           python3 ansible/roles/python_scripts/build_extra_vars_disjoin.py
           chmod 600 ansible_extra_vars.json
           python3 -m json.tool ansible_extra_vars.json > /dev/null \
-            && echo "✅ JSON valid" \
-            || (echo "❌ JSON invalid" && exit 1)
+            && echo "JSON valid" \
+            || (echo "JSON invalid" && exit 1)
 
-      # ── Run playbook ─────────────────────────────────────────────────────────
-      - name: "🎬 Run disjoin playbook"
+      - name: "Run disjoin playbook"
         run: |
           mkdir -p ansible/logs
           ansible-playbook ansible/playbooks/disjoin-windows-domain.yaml \
@@ -152,8 +132,7 @@ jobs:
           rm -f ansible_extra_vars.json
           exit $rc
 
-      # ── Upload logs ──────────────────────────────────────────────────────────
-      - name: "📤 Upload logs"
+      - name: "Upload logs"
         if: always()
         uses: actions/upload-artifact@v4
         with:

@@ -23,18 +23,19 @@ import json
 import logging
 import os
 import sys
+from typing import Any, Dict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-manifest = os.environ.get('WORKFLOW_MANIFEST', '').strip()
-dry_run  = os.environ.get('WORKFLOW_DRY_RUN',  'true').strip().lower() == 'true'
+manifest: str = os.environ.get('WORKFLOW_MANIFEST', '').strip()
+dry_run: bool = os.environ.get('WORKFLOW_DRY_RUN', 'true').strip().lower() == 'true'
 
 if not manifest:
     logging.error('WORKFLOW_MANIFEST is not set.')
     sys.exit(1)
 
-extra_vars = {
+extra_vars: Dict[str, Any] = {
     'manifest': manifest,
     'dry_run':  dry_run,
 }

@@ -36,22 +36,23 @@ import json
 import logging
 import os
 import sys
+from typing import Any, Dict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-manifest      = os.environ.get('WORKFLOW_MANIFEST',            '').strip()
-dry_run       = os.environ.get('WORKFLOW_DRY_RUN',       'true').strip().lower() == 'true'
-force_rejoin  = os.environ.get('WORKFLOW_FORCE_REJOIN',  'false').strip().lower() == 'true'
-skip_hostname = os.environ.get('WORKFLOW_SKIP_HOSTNAME_SETUP', 'false').strip().lower() == 'true'
-domain_passwd = os.environ.get('SECRET_DOMAIN_ADMIN_PASSWORD', '')
-domain_ou     = os.environ.get('SECRET_DOMAIN_OU_PATH',        '')
+manifest: str = os.environ.get('WORKFLOW_MANIFEST', '').strip()
+dry_run: bool = os.environ.get('WORKFLOW_DRY_RUN', 'true').strip().lower() == 'true'
+force_rejoin: bool = os.environ.get('WORKFLOW_FORCE_REJOIN', 'false').strip().lower() == 'true'
+skip_hostname: bool = os.environ.get('WORKFLOW_SKIP_HOSTNAME_SETUP', 'false').strip().lower() == 'true'
+domain_passwd: str = os.environ.get('SECRET_DOMAIN_ADMIN_PASSWORD', '')
+domain_ou: str = os.environ.get('SECRET_DOMAIN_OU_PATH', '')
 
 if not manifest:
     logging.error('WORKFLOW_MANIFEST is not set.')
     sys.exit(1)
 
-extra_vars = {
+extra_vars: Dict[str, Any] = {
     'manifest':              manifest,
     'dry_run':               dry_run,
     'force_rejoin':          force_rejoin,

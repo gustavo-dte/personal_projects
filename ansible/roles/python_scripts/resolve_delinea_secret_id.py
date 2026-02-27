@@ -35,28 +35,29 @@ import logging
 import os
 import requests
 import sys
+from typing import Any, Dict, List, Optional
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-base_url           = (os.getenv('DELINEA_BASE_URL',       '') or '').strip().rstrip('/')
-username           = (os.getenv('DELINEA_USERNAME',       '') or '').strip()
-password           =  os.getenv('DELINEA_PASSWORD',       '') or ''
-search_text        = (os.getenv('DELINEA_SECRET_PATH',    '') or '').strip()
-machine_filter     = (os.getenv('DELINEA_SECRET_MACHINE', '') or '').strip().lower()
-secret_name_filter = (os.getenv('DELINEA_SECRET_NAME',    '') or '').strip().lower()
-account_filter     = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
-github_env         =  os.getenv('GITHUB_ENV')
+base_url: str = (os.getenv('DELINEA_BASE_URL', '') or '').strip().rstrip('/')
+username: str = (os.getenv('DELINEA_USERNAME', '') or '').strip()
+password: str = os.getenv('DELINEA_PASSWORD', '') or ''
+search_text: str = (os.getenv('DELINEA_SECRET_PATH', '') or '').strip()
+machine_filter: str = (os.getenv('DELINEA_SECRET_MACHINE', '') or '').strip().lower()
+secret_name_filter: str = (os.getenv('DELINEA_SECRET_NAME', '') or '').strip().lower()
+account_filter: str = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
+github_env: Optional[str] = os.getenv('GITHUB_ENV')
 
 if not base_url or not username or not password:
-    logging.warning('Skipping resolution, missing Delinea credentials.')
+    logging.error('Skipping resolution, missing Delinea credentials.')
     sys.exit(1)
 
 if not search_text and not machine_filter:
-    logging.warning('Skipping resolution, no search criteria set.')
+    logging.error('Skipping resolution, no search criteria set.')
     sys.exit(1)
 
 try:
-    resp = requests.post(
+    resp: requests.Response = requests.post(
         f"{base_url}/oauth2/token",
         data={
             'grant_type': 'password',
@@ -67,18 +68,18 @@ try:
         timeout=30,
     )
     resp.raise_for_status()
-    token = resp.json().get('access_token')
+    token: Optional[str] = resp.json().get('access_token')
 except Exception as ex:
-    logging.warning(f'Could not acquire Delinea token: {ex}')
+    logging.error('Could not acquire Delinea token: %s', ex)
     sys.exit(1)
 
 if not token:
-    logging.warning('No access token returned.')
+    logging.error('No access token returned.')
     sys.exit(1)
 
-auth = {'Authorization': f'Bearer {token}'}
+auth: Dict[str, str] = {'Authorization': f'Bearer {token}'}
 
-seed = machine_filter or search_text
+seed: str = machine_filter or search_text
 try:
     resp = requests.get(
         f"{base_url}/api/v1/secrets",
@@ -90,16 +91,16 @@ try:
         timeout=30,
     )
     resp.raise_for_status()
-    records = resp.json().get('records') or []
+    records: List[Dict[str, Any]] = resp.json().get('records') or []
 except Exception as ex:
-    logging.warning(f'Secret search failed: {ex}')
+    logging.error('Secret search failed: %s', ex)
     sys.exit(1)
 
 if not records:
-    logging.warning(f'No records found for "{seed}".')
+    logging.error('No records found for "%s".', seed)
     sys.exit(1)
 
-def item_val(items, *slugs):
+def item_val(items: Optional[List[Dict[str, Any]]], *slugs: str) -> str:
     wanted = {s.lower() for s in slugs}
     for item in items or []:
         if str(item.get('slug', '')).strip().lower() in wanted:
@@ -107,8 +108,8 @@ def item_val(items, *slugs):
     return ''
 
 
-def fetch_detail(delinea_id):
-    resp = requests.get(
+def fetch_detail(delinea_id: Any) -> Dict[str, Any]:
+    resp: requests.Response = requests.get(
         f"{base_url}/api/v1/secrets/{delinea_id}",
         headers=auth,
         timeout=30,
@@ -117,7 +118,7 @@ def fetch_detail(delinea_id):
     return resp.json()
 
 
-def write_delinea_id(delinea_id):
+def write_delinea_id(delinea_id: Any) -> None:
     if github_env:
         # lgtm[py/clear-text-logging-sensitive-data]
         sys.stdout.write(f"::add-mask::{delinea_id}\n")
@@ -130,41 +131,59 @@ def write_delinea_id(delinea_id):
         env_logger.setLevel(logging.INFO)
         env_logger.addHandler(env_handler)
         # lgtm[py/clear-text-storage-sensitive-data]
-        env_logger.info(f"DELINEA_SECRET_ID={delinea_id}")
+        env_logger.info("DELINEA_SECRET_ID=%s", delinea_id)
         env_handler.close()
         env_logger.removeHandler(env_handler)
 
 
+# Strategy 1: Try exact name match first (fastest, simplest)
+exact: Optional[Dict[str, Any]] = next(
+    (r for r in records if str(r.get('name', '')).strip().lower() == search_text.lower()),
+    None,
+)
+
+if exact and exact.get('id'):
+    delinea_id: Any = exact['id']
+    logging.info('Resolved DELINEA_SECRET_ID via exact name match.')
+    write_delinea_id(delinea_id)
+    sys.exit(0)
+
+# Strategy 2: If no exact match and machine filter is set, do machine-based filtering
 if machine_filter:
     if not secret_name_filter and not account_filter:
         logging.error('DELINEA_SECRET_MACHINE requires DELINEA_SECRET_NAME or DELINEA_SECRET_ACCOUNT.')
         sys.exit(1)
 
-    desired_name = secret_name_filter or account_filter
-    matches = []
+    desired_name: str = secret_name_filter or account_filter
+    matches: List[Dict[str, Any]] = []
 
     for rec in records:
-        name = str(rec.get('name', '') or '').strip()
+        name: str = str(rec.get('name', '') or '').strip()
+        matched: bool = False
+        
+        # First, try simple name-based matching if name contains backslash
         if '\\' in name:
+            fqdn: str
+            acct: str
             fqdn, acct = name.split('\\', 1)
             if fqdn.strip().lower() == machine_filter and acct.strip().lower() == desired_name:
                 matches.append(rec)
-
-    if not matches and account_filter:
-        for rec in records:
-            sid = rec.get('id')
-            if not sid:
-                continue
-            try:
-                detail = fetch_detail(sid)
-            except Exception:
-                continue
-            items = detail.get('items') or rec.get('items') or []
-            if (
-                item_val(items, 'machine', 'host', 'hostname', 'fqdn', 'server') == machine_filter
-                and item_val(items, 'username', 'user', 'account', 'login') == account_filter
-            ):
-                matches.append(rec)
+                matched = True
+        
+        # If no match yet and we have account_filter, check detailed items
+        if not matched and account_filter:
+            sid: Any = rec.get('id')
+            if sid:
+                try:
+                    detail: Dict[str, Any] = fetch_detail(sid)
+                    items: List[Dict[str, Any]] = detail.get('items') or rec.get('items') or []
+                    if (
+                        item_val(items, 'machine', 'host', 'hostname', 'fqdn', 'server') == machine_filter
+                        and item_val(items, 'username', 'user', 'account', 'login') == account_filter
+                    ):
+                        matches.append(rec)
+                except Exception:
+                    continue
 
     matches = list({str(m.get('id')): m for m in matches if m.get('id')}.values())
 
@@ -173,23 +192,14 @@ if machine_filter:
         sys.exit(1)
 
     if len(matches) > 1:
-        logging.error(f'Multiple matches ({len(matches)}). Set DELINEA_SECRET_ID explicitly.')
+        logging.error('Multiple matches (%s). Set DELINEA_SECRET_ID explicitly.', len(matches))
         sys.exit(1)
 
     delinea_id = matches[0].get('id')
-    logging.info('Resolved DELINEA_SECRET_ID.')
+    logging.info('Resolved DELINEA_SECRET_ID via machine filter.')
     write_delinea_id(delinea_id)
     sys.exit(0)
 
-exact = next(
-    (r for r in records if str(r.get('name', '')).strip().lower() == search_text.lower()),
-    None,
-)
-
-if not exact or not exact.get('id'):
-    logging.warning('No exact name match found.')
-    sys.exit(1)
-
-delinea_id = exact['id']
-logging.info('Resolved DELINEA_SECRET_ID.')
-write_delinea_id(delinea_id)
+# If we reach here, no match was found
+logging.error('No exact name match found and no machine filter criteria provided.')
+sys.exit(1)
