@@ -136,6 +136,7 @@
         winrm_transport: "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
         item_winrm_password: "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
         bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
       register: disjoin_results
       no_log: true
@@ -181,6 +182,7 @@
         winrm_transport:  "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
         item_winrm_password: "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
         bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
       register: disjoin_and_rename_results
       no_log: true
@@ -278,6 +280,7 @@
         winrm_transport: "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
         item_winrm_password: "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
         bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
       ignore_errors: true
       register: domain_join_results

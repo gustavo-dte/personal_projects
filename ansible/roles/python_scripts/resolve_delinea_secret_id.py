@@ -129,8 +129,19 @@ def fetch_detail(secret_id):
 
 
 def write_secret_id(secret_id):
-    """Write the resolved secret ID to GITHUB_ENV."""
+    """Write the resolved secret ID to GITHUB_ENV and mask it in logs.
+    
+    Note: The secret ID is a numeric identifier used to fetch the actual password
+    from Delinea Secret Server. While not sensitive itself, we mask it to prevent
+    enumeration attacks. The ID must be stored (not hashed) so Ansible can use it.
+    """
     if github_env:
+        # Mask the secret ID in GitHub Actions logs
+        print(f"::add-mask::{secret_id}")
+        
+        # Write to GITHUB_ENV for use by subsequent workflow steps
+        # CodeQL: This is an identifier (not the password itself) that must be
+        # stored in clear text for Ansible to fetch the actual secret from Delinea
         with open(github_env, 'a', encoding='utf-8') as f:
             f.write(f"DELINEA_SECRET_ID={secret_id}\n")
 
@@ -174,21 +185,21 @@ if machine_filter:
 
     if len(matches) == 0:
         print(
-            f"❌ No secret matched machine='{machine_filter}' and name/account='{desired_name}'. "
+            "❌ No secret matched the provided machine and name/account filters. "
             "Provide DELINEA_SECRET_ID explicitly or correct DELINEA_SECRET_MACHINE + DELINEA_SECRET_NAME."
         )
         sys.exit(1)
 
     if len(matches) > 1:
-        ids = ', '.join(str(m.get('id')) for m in matches)
+        ids_count = len(matches)
         print(
-            f"❌ Multiple secrets matched machine='{machine_filter}' and name/account='{desired_name}' "
-            f"(ids: {ids}). Set DELINEA_SECRET_ID explicitly to disambiguate."
+            f"❌ Multiple secrets ({ids_count}) matched the provided machine and name/account filters. "
+            "Set DELINEA_SECRET_ID explicitly to disambiguate."
         )
         sys.exit(1)
 
     secret_id = matches[0].get('id')
-    print(f"✅ Resolved DELINEA_SECRET_ID={secret_id} (machine='{machine_filter}', name/account='{desired_name}')")
+    print(f"✅ Resolved DELINEA_SECRET_ID using the provided machine and name/account filters.")
     write_secret_id(secret_id)
     sys.exit(0)
 
@@ -199,9 +210,9 @@ exact = next(
 )
 
 if not exact or not exact.get('id'):
-    print(f'⚠️ No exact name match for "{search_text}" — falling back to path-based lookup.')
+    print('⚠️ No exact name match for the provided path — falling back to path-based lookup.')
     sys.exit(0)
 
 secret_id = exact['id']
-print(f"✅ Resolved DELINEA_SECRET_ID={secret_id} from path '{search_text}'")
+print(f"✅ Resolved DELINEA_SECRET_ID from the provided path.")
 write_secret_id(secret_id)
