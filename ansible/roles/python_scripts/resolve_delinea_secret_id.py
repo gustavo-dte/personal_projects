@@ -137,6 +137,9 @@ def write_secret_id(secret_id):
     """
     if github_env:
         # Mask the secret ID in GitHub Actions logs
+        # lgtm[py/clear-text-logging-sensitive-data]
+        # CodeQL: This workflow command instructs GitHub Actions to mask this value
+        # in all subsequent log output. The value must be printed once to register it.
         print(f"::add-mask::{secret_id}")
         
         # Write to GITHUB_ENV for use by subsequent workflow steps
