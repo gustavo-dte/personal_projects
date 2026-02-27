@@ -182,7 +182,8 @@ if machine_filter:
                         and item_val(items, 'username', 'user', 'account', 'login') == account_filter
                     ):
                         matches.append(rec)
-                except Exception:
+                except Exception as ex:
+                    logging.warning('Could not fetch details for secret ID %s: %s', sid, ex)
                     continue
 
     matches = list({str(m.get('id')): m for m in matches if m.get('id')}.values())

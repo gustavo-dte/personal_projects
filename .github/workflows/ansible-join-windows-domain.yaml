@@ -147,7 +147,7 @@ jobs:
           SECRET_DOMAIN_ADMIN_PASSWORD: ${{ secrets.DOMAIN_ADMIN_PASSWORD }}
           SECRET_DOMAIN_OU_PATH:        ${{ secrets.DOMAIN_OU_PATH }}
         run: |
-          python3 ansible/roles/python_scripts/build_extra_vars_join.py
+          python3 ansible/roles/python_scripts/json_builder.py join
           chmod 600 ansible_extra_vars.json
           python3 -m json.tool ansible_extra_vars.json > /dev/null \
             && echo "JSON valid" \

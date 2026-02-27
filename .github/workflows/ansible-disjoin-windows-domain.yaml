@@ -117,7 +117,7 @@ jobs:
           WORKFLOW_MANIFEST: ${{ inputs.manifest }}
           WORKFLOW_DRY_RUN:  ${{ inputs.dry_run }}
         run: |
-          python3 ansible/roles/python_scripts/build_extra_vars_disjoin.py
+          python3 ansible/roles/python_scripts/json_builder.py disjoin
           chmod 600 ansible_extra_vars.json
           python3 -m json.tool ansible_extra_vars.json > /dev/null \
             && echo "JSON valid" \
