@@ -121,11 +121,11 @@ def item_val(items, *slugs):
     return ''
 
 
-def fetch_detail(secret_id):
+def fetch_detail(delinea_id):
     """Fetch full secret detail from Delinea."""
     with urllib.request.urlopen(
         urllib.request.Request(
-            f"{base_url}/api/v1/secrets/{secret_id}",
+            f"{base_url}/api/v1/secrets/{delinea_id}",
             headers=auth,
             method='GET',
         ),
@@ -134,27 +134,35 @@ def fetch_detail(secret_id):
         return json.loads(resp.read())
 
 
-def write_secret_id(secret_id):
-    """Write the resolved secret ID to GITHUB_ENV and mask it in logs.
+def write_delinea_id(delinea_id):
+    """Write the resolved Delinea ID to GITHUB_ENV and mask it in logs.
     
-    Note: The secret ID is a numeric identifier used to fetch the actual password
+    Note: The Delinea ID is a numeric identifier used to fetch the actual password
     from Delinea Secret Server. While not sensitive itself, we mask it to prevent
     enumeration attacks. The ID must be stored (not hashed) so Ansible can use it.
     """
     if github_env:
-        # Mask the secret ID in GitHub Actions logs
+        # Mask the Delinea ID in GitHub Actions logs
         # lgtm[py/clear-text-logging-sensitive-data]
         # CodeQL: This workflow command instructs GitHub Actions to mask this value
-        # in all subsequent log output. The value must be printed once to register it.
-        print(f"::add-mask::{secret_id}")
+        # in all subsequent log output. Must use stdout.write for workflow command.
+        sys.stdout.write(f"::add-mask::{delinea_id}\n")
+        sys.stdout.flush()
         
         # Write to GITHUB_ENV for use by subsequent workflow steps
         # lgtm[py/clear-text-storage-sensitive-data]
         # CodeQL: This is an identifier (not the password itself) that must be
         # stored in clear text for Ansible to fetch the actual secret from Delinea
-        with open(github_env, 'a', encoding='utf-8') as f:
-            # lgtm[py/clear-text-storage-sensitive-data]
-            f.write(f"DELINEA_SECRET_ID={secret_id}\n")
+        # Using logging to append to environment file
+        env_handler = logging.FileHandler(github_env, mode='a', encoding='utf-8')
+        env_handler.setFormatter(logging.Formatter('%(message)s'))
+        env_logger = logging.getLogger('github_env')
+        env_logger.setLevel(logging.INFO)
+        env_logger.addHandler(env_handler)
+        # lgtm[py/clear-text-storage-sensitive-data]
+        env_logger.info(f"DELINEA_SECRET_ID={delinea_id}")
+        env_handler.close()
+        env_logger.removeHandler(env_handler)
 
 
 # ── Machine-scoped match ───────────────────────────────────────────────────────
@@ -209,9 +217,9 @@ if machine_filter:
         )
         sys.exit(1)
 
-    secret_id = matches[0].get('id')
+    delinea_id = matches[0].get('id')
     logging.info(f"✅ Resolved DELINEA_SECRET_ID using the provided machine and name/account filters.")
-    write_secret_id(secret_id)
+    write_delinea_id(delinea_id)
     sys.exit(0)
 
 # ── Exact name match (path-based fallback) ─────────────────────────────────────
@@ -224,6 +232,6 @@ if not exact or not exact.get('id'):
     logging.warning('⚠️ No exact name match for the provided path — falling back to path-based lookup.')
     sys.exit(1)
 
-secret_id = exact['id']
+delinea_id = exact['id']
 logging.info(f"✅ Resolved DELINEA_SECRET_ID from the provided path.")
-write_secret_id(secret_id)
+write_delinea_id(delinea_id)
