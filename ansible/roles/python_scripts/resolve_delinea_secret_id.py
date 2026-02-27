@@ -12,18 +12,19 @@ Skips silently (exit 0) when:
   - The Delinea API returns no matching records
 
 Exits with code 1 (hard failure) when:
-  - DELINEA_SECRET_MACHINE is set but DELINEA_SECRET_ACCOUNT is missing
-  - No secret matched the machine + account filters
+  - DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set
+  - No secret matched the machine + account/name filters
   - Multiple secrets matched and cannot be disambiguated
 
 Environment variables read:
-  DELINEA_BASE_URL      Base URL of the Delinea Secret Server instance
-  DELINEA_USERNAME      Service account used to authenticate
-  DELINEA_PASSWORD      Password for the service account
-  DELINEA_SECRET_PATH   Name / path search term  (fallback when ID is not set)
+  DELINEA_BASE_URL        Base URL of the Delinea Secret Server instance
+  DELINEA_USERNAME        Service account used to authenticate
+  DELINEA_PASSWORD        Password for the service account
+  DELINEA_SECRET_PATH     Name / path search term  (fallback when ID is not set)
   DELINEA_SECRET_MACHINE  (Optional) Machine FQDN to narrow matching
-  DELINEA_SECRET_ACCOUNT  (Optional) Account name filter — defaults to SE-Admin
-  GITHUB_ENV            Path to the GitHub Actions env file (set automatically by the runner)
+  DELINEA_SECRET_NAME     (Optional) Secret name filter (preferred over ACCOUNT)
+  DELINEA_SECRET_ACCOUNT  (Optional) Account name filter (fallback if NAME not set)
+  GITHUB_ENV              Path to the GitHub Actions env file (set automatically by the runner)
 
 Usage (from a workflow step):
   python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
@@ -36,13 +37,14 @@ import urllib.parse
 import urllib.request
 
 # ── Read environment ───────────────────────────────────────────────────────────
-base_url       = (os.getenv('DELINEA_BASE_URL',       '') or '').strip().rstrip('/')
-username       = (os.getenv('DELINEA_USERNAME',       '') or '').strip()
-password       =  os.getenv('DELINEA_PASSWORD',       '') or ''
-search_text    = (os.getenv('DELINEA_SECRET_PATH',    '') or '').strip()
-machine_filter = (os.getenv('DELINEA_SECRET_MACHINE', '') or '').strip().lower()
-account_filter = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
-github_env     =  os.getenv('GITHUB_ENV')
+base_url           = (os.getenv('DELINEA_BASE_URL',       '') or '').strip().rstrip('/')
+username           = (os.getenv('DELINEA_USERNAME',       '') or '').strip()
+password           =  os.getenv('DELINEA_PASSWORD',       '') or ''
+search_text        = (os.getenv('DELINEA_SECRET_PATH',    '') or '').strip()
+machine_filter     = (os.getenv('DELINEA_SECRET_MACHINE', '') or '').strip().lower()
+secret_name_filter = (os.getenv('DELINEA_SECRET_NAME',    '') or '').strip().lower()
+account_filter     = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
+github_env         =  os.getenv('GITHUB_ENV')
 
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
 if not base_url or not username or not password:
@@ -135,10 +137,11 @@ def write_secret_id(secret_id):
 
 # ── Machine-scoped match ───────────────────────────────────────────────────────
 if machine_filter:
-    if not account_filter:
-        print('⚠️ DELINEA_SECRET_MACHINE is set but DELINEA_SECRET_ACCOUNT is missing.')
+    if not secret_name_filter and not account_filter:
+        print('⚠️ DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set.')
         sys.exit(1)
 
+    desired_name = secret_name_filter or account_filter
     matches = []
 
     # Strategy 1: "FQDN\AccountName" pattern in the record name field
@@ -146,11 +149,11 @@ if machine_filter:
         name = str(rec.get('name', '') or '').strip()
         if '\\' in name:
             fqdn, acct = name.split('\\', 1)
-            if fqdn.strip().lower() == machine_filter and acct.strip().lower() == account_filter:
+            if fqdn.strip().lower() == machine_filter and acct.strip().lower() == desired_name:
                 matches.append(rec)
 
     # Strategy 2: fetch full secret detail and match machine + username fields
-    if not matches:
+    if not matches and account_filter:
         for rec in records:
             sid = rec.get('id')
             if not sid:
@@ -171,21 +174,21 @@ if machine_filter:
 
     if len(matches) == 0:
         print(
-            f"❌ No secret matched machine='{machine_filter}' account='{account_filter}'. "
-            "Set DELINEA_SECRET_ID explicitly or correct DELINEA_SECRET_MACHINE / DELINEA_SECRET_ACCOUNT."
+            f"❌ No secret matched machine='{machine_filter}' and name/account='{desired_name}'. "
+            "Provide DELINEA_SECRET_ID explicitly or correct DELINEA_SECRET_MACHINE + DELINEA_SECRET_NAME."
         )
         sys.exit(1)
 
     if len(matches) > 1:
         ids = ', '.join(str(m.get('id')) for m in matches)
         print(
-            f"❌ Multiple secrets matched machine='{machine_filter}' account='{account_filter}' "
+            f"❌ Multiple secrets matched machine='{machine_filter}' and name/account='{desired_name}' "
             f"(ids: {ids}). Set DELINEA_SECRET_ID explicitly to disambiguate."
         )
         sys.exit(1)
 
     secret_id = matches[0].get('id')
-    print(f"✅ Resolved DELINEA_SECRET_ID={secret_id} (machine='{machine_filter}', account='{account_filter}')")
+    print(f"✅ Resolved DELINEA_SECRET_ID={secret_id} (machine='{machine_filter}', name/account='{desired_name}')")
     write_secret_id(secret_id)
     sys.exit(0)
 

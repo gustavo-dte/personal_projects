@@ -67,6 +67,7 @@ jobs:
       DELINEA_SECRET_ID: ${{ vars.DELINEA_SECRET_ID }}
       DELINEA_SECRET_PATH: ${{ vars.DELINEA_SECRET_PATH != '' && vars.DELINEA_SECRET_PATH || 'SE-Admin' }}
       DELINEA_SECRET_MACHINE: ${{ vars.DELINEA_SECRET_MACHINE }}
+      DELINEA_SECRET_NAME: ${{ vars.DELINEA_SECRET_NAME }}
       DELINEA_SECRET_ACCOUNT: ${{ vars.DELINEA_SECRET_ACCOUNT != '' && vars.DELINEA_SECRET_ACCOUNT || 'SE-Admin' }}
 
     steps:
@@ -140,7 +141,7 @@ jobs:
         shell: bash
         run: |
           if [ -n "${DELINEA_SECRET_ID}" ]; then
-            echo "✅ DELINEA_SECRET_ID already set: ${DELINEA_SECRET_ID}"
+            echo "✅ DELINEA_SECRET_ID already provided: ${DELINEA_SECRET_ID}"
             exit 0
           fi
           python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
