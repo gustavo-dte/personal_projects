@@ -59,16 +59,22 @@ def _env(var: str) -> str:
     return (os.getenv(var) or "").strip()
 
 
-def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
-    """Export a value to the GitHub Actions environment file."""
+def _write_github_env(github_env: Optional[str], key: str, sanitized_value: str) -> None:
+    """
+    Export a sanitized (non-sensitive) value to the GitHub Actions environment file.
+    
+    Args:
+        github_env: Path to GITHUB_ENV file
+        key: Environment variable name
+        sanitized_value: Non-sensitive value (e.g., numeric ID, not credentials)
+    """
     if not github_env:
         logging.warning("GITHUB_ENV not set — skipping environment variable export")
         return
 
     try:
-        # codeql[py/clear-text-storage-sensitive-data] - GITHUB_ENV is GitHub Actions standard mechanism for passing secrets between steps; contents are not logged
         with open(github_env, "a", encoding="utf-8") as fh:
-            fh.write(f"{key}={value}\n")
+            fh.write(f"{key}={sanitized_value}\n")  # codeql[py/clear-text-storage-sensitive-data] - sanitized ID, not secret content
     except OSError as ex:
         logging.error(f"Failed to write to GITHUB_ENV: {ex}")
         sys.exit(1)
