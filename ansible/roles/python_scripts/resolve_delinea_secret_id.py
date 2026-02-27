@@ -31,7 +31,6 @@ Usage (from a workflow step):
   python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 """
 
-# ── Standard library imports ───────────────────────────────────────────────────
 import json
 import logging
 import os
@@ -39,10 +38,8 @@ import sys
 import urllib.parse
 import urllib.request
 
-# ── Logging configuration ──────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-# ── Environment variables ──────────────────────────────────────────────────────
 base_url           = (os.getenv('DELINEA_BASE_URL',       '') or '').strip().rstrip('/')
 username           = (os.getenv('DELINEA_USERNAME',       '') or '').strip()
 password           =  os.getenv('DELINEA_PASSWORD',       '') or ''
@@ -52,16 +49,14 @@ secret_name_filter = (os.getenv('DELINEA_SECRET_NAME',    '') or '').strip().low
 account_filter     = (os.getenv('DELINEA_SECRET_ACCOUNT', '') or '').strip().lower()
 github_env         =  os.getenv('GITHUB_ENV')
 
-# ── Pre-flight checks ──────────────────────────────────────────────────────────
 if not base_url or not username or not password:
-    logging.warning('⚠️ Skipping secret ID resolution — missing Delinea credentials.')
+    logging.warning('Skipping resolution, missing Delinea credentials.')
     sys.exit(1)
 
 if not search_text and not machine_filter:
-    logging.warning('⚠️ Skipping secret ID resolution — no DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE set.')
+    logging.warning('Skipping resolution, no search criteria set.')
     sys.exit(1)
 
-# ── Acquire OAuth2 token ───────────────────────────────────────────────────────
 try:
     with urllib.request.urlopen(
         urllib.request.Request(
@@ -78,16 +73,15 @@ try:
     ) as resp:
         token = json.loads(resp.read()).get('access_token')
 except Exception as ex:
-    logging.warning(f'⚠️ Could not acquire Delinea token: {ex}')
+    logging.warning(f'Could not acquire Delinea token: {ex}')
     sys.exit(1)
 
 if not token:
-    logging.warning('⚠️ No access token returned — skipping.')
+    logging.warning('No access token returned.')
     sys.exit(1)
 
 auth = {'Authorization': f'Bearer {token}'}
 
-# ── Search secrets ─────────────────────────────────────────────────────────────
 seed = machine_filter or search_text
 try:
     with urllib.request.urlopen(
@@ -104,16 +98,14 @@ try:
     ) as resp:
         records = json.loads(resp.read()).get('records') or []
 except Exception as ex:
-    logging.warning(f'⚠️ Secret search failed: {ex}')
+    logging.warning(f'Secret search failed: {ex}')
     sys.exit(1)
 
 if not records:
-    logging.warning(f'⚠️ No secrets found for "{seed}" — falling back to path-based lookup.')
+    logging.warning(f'No records found for "{seed}".')
     sys.exit(1)
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
 def item_val(items, *slugs):
-    """Return the itemValue for the first matching slug (case-insensitive)."""
     wanted = {s.lower() for s in slugs}
     for item in items or []:
         if str(item.get('slug', '')).strip().lower() in wanted:
@@ -122,7 +114,6 @@ def item_val(items, *slugs):
 
 
 def fetch_detail(delinea_id):
-    """Fetch full secret detail from Delinea."""
     with urllib.request.urlopen(
         urllib.request.Request(
             f"{base_url}/api/v1/secrets/{delinea_id}",
@@ -135,25 +126,12 @@ def fetch_detail(delinea_id):
 
 
 def write_delinea_id(delinea_id):
-    """Write the resolved Delinea ID to GITHUB_ENV and mask it in logs.
-    
-    Note: The Delinea ID is a numeric identifier used to fetch the actual password
-    from Delinea Secret Server. While not sensitive itself, we mask it to prevent
-    enumeration attacks. The ID must be stored (not hashed) so Ansible can use it.
-    """
     if github_env:
-        # Mask the Delinea ID in GitHub Actions logs
         # lgtm[py/clear-text-logging-sensitive-data]
-        # CodeQL: This workflow command instructs GitHub Actions to mask this value
-        # in all subsequent log output. Must use stdout.write for workflow command.
         sys.stdout.write(f"::add-mask::{delinea_id}\n")
         sys.stdout.flush()
         
-        # Write to GITHUB_ENV for use by subsequent workflow steps
         # lgtm[py/clear-text-storage-sensitive-data]
-        # CodeQL: This is an identifier (not the password itself) that must be
-        # stored in clear text for Ansible to fetch the actual secret from Delinea
-        # Using logging to append to environment file
         env_handler = logging.FileHandler(github_env, mode='a', encoding='utf-8')
         env_handler.setFormatter(logging.Formatter('%(message)s'))
         env_logger = logging.getLogger('github_env')
@@ -165,16 +143,14 @@ def write_delinea_id(delinea_id):
         env_logger.removeHandler(env_handler)
 
 
-# ── Machine-scoped match ───────────────────────────────────────────────────────
 if machine_filter:
     if not secret_name_filter and not account_filter:
-        logging.error('⚠️ DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set.')
+        logging.error('DELINEA_SECRET_MACHINE requires DELINEA_SECRET_NAME or DELINEA_SECRET_ACCOUNT.')
         sys.exit(1)
 
     desired_name = secret_name_filter or account_filter
     matches = []
 
-    # Strategy 1: "FQDN\AccountName" pattern in the record name field
     for rec in records:
         name = str(rec.get('name', '') or '').strip()
         if '\\' in name:
@@ -182,7 +158,6 @@ if machine_filter:
             if fqdn.strip().lower() == machine_filter and acct.strip().lower() == desired_name:
                 matches.append(rec)
 
-    # Strategy 2: fetch full secret detail and match machine + username fields
     if not matches and account_filter:
         for rec in records:
             sid = rec.get('id')
@@ -199,39 +174,30 @@ if machine_filter:
             ):
                 matches.append(rec)
 
-    # De-duplicate by ID (a record could match both strategies)
     matches = list({str(m.get('id')): m for m in matches if m.get('id')}.values())
 
     if len(matches) == 0:
-        logging.error(
-            "❌ No secret matched the provided machine and name/account filters. "
-            "Provide DELINEA_SECRET_ID explicitly or correct DELINEA_SECRET_MACHINE + DELINEA_SECRET_NAME."
-        )
+        logging.error('No matching records found. Check filter values.')
         sys.exit(1)
 
     if len(matches) > 1:
-        ids_count = len(matches)
-        logging.error(
-            f"❌ Multiple secrets ({ids_count}) matched the provided machine and name/account filters. "
-            "Set DELINEA_SECRET_ID explicitly to disambiguate."
-        )
+        logging.error(f'Multiple matches ({len(matches)}). Set DELINEA_SECRET_ID explicitly.')
         sys.exit(1)
 
     delinea_id = matches[0].get('id')
-    logging.info(f"✅ Resolved DELINEA_SECRET_ID using the provided machine and name/account filters.")
+    logging.info('Resolved DELINEA_SECRET_ID.')
     write_delinea_id(delinea_id)
     sys.exit(0)
 
-# ── Exact name match (path-based fallback) ─────────────────────────────────────
 exact = next(
     (r for r in records if str(r.get('name', '')).strip().lower() == search_text.lower()),
     None,
 )
 
 if not exact or not exact.get('id'):
-    logging.warning('⚠️ No exact name match for the provided path — falling back to path-based lookup.')
+    logging.warning('No exact name match found.')
     sys.exit(1)
 
 delinea_id = exact['id']
-logging.info(f"✅ Resolved DELINEA_SECRET_ID from the provided path.")
+logging.info('Resolved DELINEA_SECRET_ID.')
 write_delinea_id(delinea_id)
