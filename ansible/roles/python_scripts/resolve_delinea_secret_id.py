@@ -178,23 +178,15 @@ def _resolve_by_machine(
                 continue
 
         # Slow path: inspect item slugs from the full secret detail
-        if account_filter:
-            secret_id: Optional[int] = rec.get("id")
-            if not secret_id:
-                continue
-            try:
-                detail = _fetch_detail(base_url, auth, secret_id)
-                items: List[Dict[str, Any]] = detail.get("items") or []
-                if (
-                    _item_val(items, "machine", "host", "hostname", "fqdn", "server") == machine_filter
-                    and _item_val(items, "username", "user", "account", "login") == account_filter
-                ):
-                    matches.append(rec)
-            except SystemExit:
-                logging.warning(f"Skipping secret ID {secret_id} — could not fetch details")
-
-    # Deduplicate by ID
-    matches = list({str(m["id"]): m for m in matches if m.get("id")}.values())
+        secret_id: Optional[int] = rec.get("id")
+        if account_filter and secret_id:
+            detail = _fetch_detail(base_url, auth, secret_id)
+            items: List[Dict[str, Any]] = detail.get("items") or []
+            if (
+                _item_val(items, "machine", "host", "hostname", "fqdn", "server") == machine_filter
+                and _item_val(items, "username", "user", "account", "login") == account_filter
+            ):
+                matches.append(rec)
 
     if not matches:
         logging.error("No matching records found — verify DELINEA_SECRET_MACHINE and filter values")
@@ -242,8 +234,9 @@ def main() -> None:
         sys.exit(1)
 
     # Strategy 1: exact name match (fastest, no extra API calls)
+    search_text_lower = search_text.lower()
     exact = next(
-        (r for r in records if str(r.get("name", "")).strip().lower() == search_text.lower()),
+        (r for r in records if str(r.get("name", "")).strip().lower() == search_text_lower),
         None,
     )
     if exact and exact.get("id"):
