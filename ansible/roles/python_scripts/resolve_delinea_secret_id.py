@@ -60,21 +60,32 @@ def _env(var: str) -> str:
 
 
 def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
-    """Mask a value and export it to the GitHub Actions environment file."""
-    sys.stdout.write("::add-mask::" + value + "\n")
-    sys.stdout.flush()
-
+    """Export a value to the GitHub Actions environment file."""
     if not github_env:
         logging.warning("GITHUB_ENV not set — skipping environment variable export")
         return
 
     try:
-        # codeql[py/clear-text-storage-sensitive-data] - GITHUB_ENV is standard GitHub Actions mechanism; value is masked via ::add-mask::
+        # codeql[py/clear-text-storage-sensitive-data] - GITHUB_ENV is GitHub Actions standard mechanism for passing secrets between steps; contents are not logged
         with open(github_env, "a", encoding="utf-8") as fh:
             fh.write(f"{key}={value}\n")
     except OSError as ex:
         logging.error(f"Failed to write to GITHUB_ENV: {ex}")
         sys.exit(1)
+
+
+def _sanitize_secret_id(value: str) -> str:
+    """
+    Sanitize a Delinea secret ID to ensure it is a non-empty numeric identifier.
+
+    This treats the ID as an opaque, non-secret identifier suitable for storage
+    in GITHUB_ENV while rejecting unexpected values that might contain sensitive
+    data.
+    """
+    value = (value or "").strip()
+    if not value or not value.isdigit():
+        raise ValueError("Unexpected secret identifier format")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +255,9 @@ def main() -> None:
     )
     if exact and exact.get("id"):
         logging.info("Resolved DELINEA_SECRET_ID via exact name match")
-        _write_github_env(github_env, "DELINEA_SECRET_ID", str(exact["id"]))
+        _write_github_env(
+            github_env, "DELINEA_SECRET_ID", _sanitize_secret_id(str(exact["id"]))
+        )
         return
 
     # Strategy 2: machine-based filtering
@@ -253,7 +266,9 @@ def main() -> None:
             base_url, auth, records, machine_filter, secret_name_filter, account_filter
         )
         logging.info("Resolved DELINEA_SECRET_ID via machine filter")
-        _write_github_env(github_env, "DELINEA_SECRET_ID", secret_id)
+        _write_github_env(
+            github_env, "DELINEA_SECRET_ID", _sanitize_secret_id(str(secret_id))
+        )
         return
 
     logging.error("No exact name match found and DELINEA_SECRET_MACHINE is not set")
