@@ -25,6 +25,8 @@ Usage:
     python3 ansible/roles/python_scripts/extract_vm_hostname.py
 """
 
+# TODO: Add unit tests before moving to stage or prod. Currently in dev environment.
+
 import logging
 import os
 import sys
@@ -62,7 +64,8 @@ def load_manifest(manifest_file: str) -> Dict[str, Any]:
 def write_github_env(github_env: str, key: str, value: str) -> None:
     """Append a key=value pair to the GitHub Actions environment file. Exits with code 1 on failure."""
     try:
-        with open(github_env, "a", encoding="utf-8") as fh:  # lgtm[py/clear-text-logging-sensitive-data]
+        # codeql[py/clear-text-storage-sensitive-data] - Value is non-sensitive (machine hostname/FQDN)
+        with open(github_env, "a", encoding="utf-8") as fh:
             fh.write(f"{key}={value}\n")
     except OSError as ex:
         logging.error(f"Failed to write to GITHUB_ENV: {ex}")

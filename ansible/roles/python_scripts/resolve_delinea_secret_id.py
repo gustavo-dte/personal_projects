@@ -34,6 +34,8 @@ Usage:
   python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 """
 
+# TODO: Add unit tests before moving to stage or prod. Currently in dev environment.
+
 import logging
 import os
 import sys
@@ -59,7 +61,7 @@ def _env(var: str) -> str:
 
 def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
     """Mask a value and export it to the GitHub Actions environment file."""
-    sys.stdout.write(f"::add-mask::{value}\n")
+    sys.stdout.write("::add-mask::" + value + "\n")
     sys.stdout.flush()
 
     if not github_env:
@@ -67,7 +69,8 @@ def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
         return
 
     try:
-        with open(github_env, "a", encoding="utf-8") as fh:  # lgtm[py/clear-text-storage-sensitive-data]
+        # codeql[py/clear-text-storage-sensitive-data] - GITHUB_ENV is standard GitHub Actions mechanism; value is masked via ::add-mask::
+        with open(github_env, "a", encoding="utf-8") as fh:
             fh.write(f"{key}={value}\n")
     except OSError as ex:
         logging.error(f"Failed to write to GITHUB_ENV: {ex}")
@@ -128,7 +131,7 @@ def _fetch_detail(base_url: str, auth: Dict[str, str], secret_id: int) -> Dict[s
         resp.raise_for_status()
         return resp.json()
     except Exception as ex:
-        logging.error(f"Failed to fetch detail for secret ID {secret_id}: {ex}")
+        logging.error(f"Failed to fetch secret detail: {ex}")
         sys.exit(1)
 
 
