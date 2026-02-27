@@ -31,10 +31,14 @@ Usage (from a workflow step):
 """
 
 import json
+import logging
 import os
 import sys
 import urllib.parse
 import urllib.request
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 # ── Read environment ───────────────────────────────────────────────────────────
 base_url           = (os.getenv('DELINEA_BASE_URL',       '') or '').strip().rstrip('/')
@@ -48,11 +52,11 @@ github_env         =  os.getenv('GITHUB_ENV')
 
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
 if not base_url or not username or not password:
-    print('⚠️ Skipping secret ID resolution — missing Delinea credentials.')
+    logging.warning('⚠️ Skipping secret ID resolution — missing Delinea credentials.')
     sys.exit(0)
 
 if not search_text and not machine_filter:
-    print('⚠️ Skipping secret ID resolution — no DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE set.')
+    logging.warning('⚠️ Skipping secret ID resolution — no DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE set.')
     sys.exit(0)
 
 # ── Acquire OAuth2 token ───────────────────────────────────────────────────────
@@ -72,11 +76,11 @@ try:
     ) as resp:
         token = json.loads(resp.read()).get('access_token')
 except Exception as ex:
-    print(f'⚠️ Could not acquire Delinea token: {ex}')
+    logging.warning(f'⚠️ Could not acquire Delinea token: {ex}')
     sys.exit(0)
 
 if not token:
-    print('⚠️ No access token returned — skipping.')
+    logging.warning('⚠️ No access token returned — skipping.')
     sys.exit(0)
 
 auth = {'Authorization': f'Bearer {token}'}
@@ -98,11 +102,11 @@ try:
     ) as resp:
         records = json.loads(resp.read()).get('records') or []
 except Exception as ex:
-    print(f'⚠️ Secret search failed: {ex}')
+    logging.warning(f'⚠️ Secret search failed: {ex}')
     sys.exit(0)
 
 if not records:
-    print(f'⚠️ No secrets found for "{seed}" — falling back to path-based lookup.')
+    logging.warning(f'⚠️ No secrets found for "{seed}" — falling back to path-based lookup.')
     sys.exit(0)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -154,7 +158,7 @@ def write_secret_id(secret_id):
 # ── Machine-scoped match ───────────────────────────────────────────────────────
 if machine_filter:
     if not secret_name_filter and not account_filter:
-        print('⚠️ DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set.')
+        logging.error('⚠️ DELINEA_SECRET_MACHINE is set but neither DELINEA_SECRET_NAME nor DELINEA_SECRET_ACCOUNT is set.')
         sys.exit(1)
 
     desired_name = secret_name_filter or account_filter
@@ -189,7 +193,7 @@ if machine_filter:
     matches = list({str(m.get('id')): m for m in matches if m.get('id')}.values())
 
     if len(matches) == 0:
-        print(
+        logging.error(
             "❌ No secret matched the provided machine and name/account filters. "
             "Provide DELINEA_SECRET_ID explicitly or correct DELINEA_SECRET_MACHINE + DELINEA_SECRET_NAME."
         )
@@ -197,14 +201,14 @@ if machine_filter:
 
     if len(matches) > 1:
         ids_count = len(matches)
-        print(
+        logging.error(
             f"❌ Multiple secrets ({ids_count}) matched the provided machine and name/account filters. "
             "Set DELINEA_SECRET_ID explicitly to disambiguate."
         )
         sys.exit(1)
 
     secret_id = matches[0].get('id')
-    print(f"✅ Resolved DELINEA_SECRET_ID using the provided machine and name/account filters.")
+    logging.info(f"✅ Resolved DELINEA_SECRET_ID using the provided machine and name/account filters.")
     write_secret_id(secret_id)
     sys.exit(0)
 
@@ -215,9 +219,9 @@ exact = next(
 )
 
 if not exact or not exact.get('id'):
-    print('⚠️ No exact name match for the provided path — falling back to path-based lookup.')
+    logging.warning('⚠️ No exact name match for the provided path — falling back to path-based lookup.')
     sys.exit(0)
 
 secret_id = exact['id']
-print(f"✅ Resolved DELINEA_SECRET_ID from the provided path.")
+logging.info(f"✅ Resolved DELINEA_SECRET_ID from the provided path.")
 write_secret_id(secret_id)

@@ -33,8 +33,12 @@ Usage (from a workflow step):
 """
 
 import json
+import logging
 import os
 import sys
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 manifest      = os.environ.get('WORKFLOW_MANIFEST',            '').strip()
 dry_run       = os.environ.get('WORKFLOW_DRY_RUN',       'true').strip().lower() == 'true'
@@ -44,7 +48,7 @@ domain_passwd = os.environ.get('SECRET_DOMAIN_ADMIN_PASSWORD', '')
 domain_ou     = os.environ.get('SECRET_DOMAIN_OU_PATH',        '')
 
 if not manifest:
-    print('❌ WORKFLOW_MANIFEST is not set.')
+    logging.error('❌ WORKFLOW_MANIFEST is not set.')
     sys.exit(1)
 
 extra_vars = {
@@ -60,4 +64,4 @@ extra_vars = {
 with open('ansible_extra_vars.json', 'w', encoding='utf-8') as f:
     json.dump(extra_vars, f, indent=2)
 
-print('✅ ansible_extra_vars.json written.')
+logging.info('✅ ansible_extra_vars.json written.')
