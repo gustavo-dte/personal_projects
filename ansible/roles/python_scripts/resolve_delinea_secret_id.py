@@ -65,6 +65,16 @@ class ConfigurationError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
+
+
+def _env(var: str) -> str:
+    """Return a stripped environment variable value, defaulting to empty string."""
+    return (os.getenv(var) or "").strip()
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -125,16 +135,6 @@ class Config:
 
 
 # ---------------------------------------------------------------------------
-# Environment helpers
-# ---------------------------------------------------------------------------
-
-
-def _env(var: str) -> str:
-    """Return a stripped environment variable value, defaulting to empty string."""
-    return (os.getenv(var) or "").strip()
-
-
-# ---------------------------------------------------------------------------
 # GitHub Actions environment export
 # ---------------------------------------------------------------------------
 
@@ -162,7 +162,7 @@ def _write_github_env(
     # codeql[py/clear-text-storage-sensitive-data] - sanitized_value is a validated
     # numeric identifier (not credentials), produced by _sanitize_secret_id().
     with open(github_env, "a", encoding="utf-8") as fh:  # noqa: SIM115
-        fh.write("%s=%s\n" % (key, sanitized_value))  # codeql[py/clear-text-storage-sensitive-data]
+        fh.write("%s=%s\n" % (key, sanitized_value))
 
 
 # ---------------------------------------------------------------------------

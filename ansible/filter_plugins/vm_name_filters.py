@@ -1,5 +1,9 @@
+"""Ansible filter plugins for VM name validation and transformation."""
+
 import re
 from typing import Any, Dict, Iterable, List, Optional
+
+_STOP_ALL = "STOP_ALL"
 
 
 # ---------------------------------------------------------------------------
@@ -15,16 +19,13 @@ def _normalize_vm_name(candidate: Any) -> str:
 
 
 def _parse_names_input(vm_names_input: Any) -> List[str]:
-    """
-    Parse a names input into a list of strings.
+    """Parse a names input into a list of strings.
 
     Accepts a list/tuple or a comma-delimited string. Returns:
-      - ["STOP_ALL"] when the input equals the STOP_ALL keyword (case-insensitive)
-      - []           when input is None or empty (no VMs selected)
-      - [name, ...]  list of non-empty name strings otherwise
+      - [_STOP_ALL] when the input equals the STOP_ALL keyword (case-insensitive)
+      - []          when input is None or empty (no VMs selected)
+      - [name, ...] list of non-empty name strings otherwise
     """
-    _STOP_ALL = "STOP_ALL"
-
     if vm_names_input is None:
         return []
 
@@ -47,9 +48,9 @@ def _parse_names_input(vm_names_input: Any) -> List[str]:
 
 
 def validate_target_vm_name(target_vm_name: str) -> bool:
-    """
-    Validate that a target VM name follows the naming convention:
-      vm{region}{os}{appname}{env}{instance}
+    """Validate that a target VM name follows the naming convention.
+
+    Pattern: vm{region}{os}{appname}{env}{instance}
 
     Segments:
       vm        — literal prefix (2 chars)
@@ -60,22 +61,16 @@ def validate_target_vm_name(target_vm_name: str) -> bool:
       instance  — zero-padded number (2 digits)
 
     Minimum length: 13 characters (2+2+3+3+1+2)
-
-    Examples:
-      vmcuwinwebp01   Central US, Windows, web server, production, instance 01
-      vme2lnxsqlp02   East US 2, Linux, SQL server, production, instance 02
-      vmcuwinmond03   Central US, Windows, monitoring, development, instance 03
     """
     pattern = r"^vm(cu|e2)(win|lnx)[a-z]{3,}[pdt]\d{2}$"
     return bool(re.match(pattern, target_vm_name, re.IGNORECASE))
 
 
 def compute_vmss_short_hostname(target_vm_name: str, os_disk_os_type: Optional[str] = None) -> str:
-    """
-    Build a VMSS-compatible short hostname from a target VM name and OS type.
+    """Build a VMSS-compatible short hostname from a target VM name and OS type.
 
     Rules:
-      - Prepend "vm" to the name
+      - Prepend 'vm' to the name
       - Strip all non-alphanumeric characters
       - Lowercase the result
       - Truncate to 63 chars for Linux, 9 chars for Windows (provider constraints)
@@ -91,13 +86,14 @@ def filter_vm_specs_by_names(
     vm_specs: Optional[Iterable[Dict[str, Any]]],
     vm_names_input: Any,
 ) -> List[Dict[str, Any]]:
-    """
-    Filter a list of VM spec dicts by a names input (comma-delimited string, list, or 'STOP_ALL').
+    """Filter a list of VM spec dicts by a names input.
+
+    Accepts a comma-delimited string, list, or the literal 'STOP_ALL'.
 
     Behaviour:
-      - STOP_ALL / stop_all  → return all vm_specs unfiltered
-      - empty / None         → return empty list (no VMs selected)
-      - named list           → return only specs whose 'name' exactly matches one of the given names
+      - STOP_ALL / stop_all  — return all vm_specs unfiltered
+      - empty / None         — return empty list (no VMs selected)
+      - named list           — return only specs whose 'name' exactly matches one of the given names
     """
     specs_list: List[Dict[str, Any]] = list(vm_specs or [])
     requested = _parse_names_input(vm_names_input)
@@ -124,7 +120,7 @@ def filter_vm_specs_by_names(
 class FilterModule:
     def filters(self) -> Dict[str, Any]:
         return {
-            "validate_target_vm_name":     validate_target_vm_name,
+            "validate_target_vm_name": validate_target_vm_name,
             "compute_vmss_short_hostname": compute_vmss_short_hostname,
-            "filter_vm_specs_by_names":    filter_vm_specs_by_names,
+            "filter_vm_specs_by_names": filter_vm_specs_by_names,
         }
