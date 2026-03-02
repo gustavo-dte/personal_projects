@@ -162,7 +162,7 @@ def _write_github_env(
     # codeql[py/clear-text-storage-sensitive-data] - sanitized_value is a validated
     # numeric identifier (not credentials), produced by _sanitize_secret_id().
     with open(github_env, "a", encoding="utf-8") as fh:  # noqa: SIM115
-        fh.write("%s=%s\n" % (key, sanitized_value))
+        fh.write("%s=%s\n" % (key, sanitized_value))  # codeql[py/clear-text-storage-sensitive-data]
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +428,7 @@ def _resolve_by_machine(
         try:
             detail = _fetch_detail(base_url, auth, sid)
         except DelineaError as ex:
-            log.warning("Skipping secret %s — could not fetch details: %s", sid, ex)
+            log.warning("Skipping secret — could not fetch details: %s", ex)
             continue
 
         items: List[Dict[str, Any]] = detail.get("items") or []
