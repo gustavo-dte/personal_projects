@@ -9,24 +9,22 @@ Usage:
   python3 ansible/roles/python_scripts/json_builder.py disjoin
 
 Actions:
-  join     — Build extra_vars for join-windows-domain workflow.
+  join     — Build extra_vars for the join-windows-domain workflow.
              Reads: WORKFLOW_MANIFEST, WORKFLOW_DRY_RUN, WORKFLOW_FORCE_REJOIN,
                     WORKFLOW_SKIP_HOSTNAME_SETUP, SECRET_DOMAIN_ADMIN_PASSWORD,
                     SECRET_DOMAIN_OU_PATH
 
-  disjoin  — Build extra_vars for disjoin-windows-domain workflow.
+  disjoin  — Build extra_vars for the disjoin-windows-domain workflow.
              Reads: WORKFLOW_MANIFEST, WORKFLOW_DRY_RUN
 
 Output:
-  ansible_extra_vars.json — written to the current working directory
+  ansible_extra_vars.json — written to the current working directory.
 
 Note:
   The SE-Admin WinRM password is intentionally excluded from join extra_vars.
   It is fetched live from Delinea inside the Ansible playbook pre_tasks so it
   is always current and never cached in the extra-vars file.
 """
-
-# TODO: Add unit tests before moving to stage or prod. Currently in dev environment.
 
 import json
 import logging
@@ -40,35 +38,59 @@ from typing import Any, Callable, Dict
 
 OUTPUT_FILE = "ansible_extra_vars.json"
 WINRM_USERNAME = "SE-Admin"
+VALID_ACTIONS = ("join", "disjoin")
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Custom exceptions
 # ---------------------------------------------------------------------------
+
+
+class ConfigurationError(Exception):
+    """Raised when required environment configuration is missing or invalid."""
+
+
+# ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
+
+
+def _env(var: str) -> str:
+    """Return a stripped environment variable value, defaulting to empty string."""
+    return (os.getenv(var) or "").strip()
 
 
 def _env_bool(var: str, default: str = "false") -> bool:
-    """Read an environment variable and interpret it as a boolean."""
-    return os.environ.get(var, default).strip().lower() == "true"
+    """Read an environment variable and interpret it as a boolean.
+
+    Any value (case-insensitive) equal to 'true' returns True; everything
+    else — including unset — returns False, unless default is overridden.
+    """
+    return (os.getenv(var) or default).strip().lower() == "true"
 
 
-def _env_str(var: str) -> str:
-    """Read a stripped environment variable value, defaulting to empty string."""
-    return os.environ.get(var, "").strip()
+def _require_env(var: str) -> str:
+    """Return the value of a required environment variable.
 
+    Args:
+        var: Name of the environment variable.
 
-def _require_manifest() -> str:
-    """Read and validate WORKFLOW_MANIFEST from the environment. Exits with code 1 if not set."""
-    manifest = _env_str("WORKFLOW_MANIFEST")
-    if not manifest:
-        logging.error("WORKFLOW_MANIFEST is not set")
-        sys.exit(1)
-    return manifest
+    Returns:
+        Stripped, non-empty value of the variable.
+
+    Raises:
+        ConfigurationError: If the variable is unset or empty.
+    """
+    value = _env(var)
+    if not value:
+        raise ConfigurationError("%s is not set" % var)
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -77,61 +99,119 @@ def _require_manifest() -> str:
 
 
 def _build_join_vars() -> Dict[str, Any]:
-    """Build extra_vars dictionary for the join workflow."""
-    domain_admin_password = os.environ.get("SECRET_DOMAIN_ADMIN_PASSWORD", "")
+    """Build the extra_vars dictionary for the join workflow.
+
+    Returns:
+        Dictionary of extra_vars ready for JSON serialization.
+
+    Raises:
+        ConfigurationError: If WORKFLOW_MANIFEST is not set.
+    """
+    domain_admin_password = _env("SECRET_DOMAIN_ADMIN_PASSWORD")
     if not domain_admin_password:
-        logging.warning("SECRET_DOMAIN_ADMIN_PASSWORD is not set — domain join will fail at runtime")
+        log.warning(
+            "SECRET_DOMAIN_ADMIN_PASSWORD is not set — domain join will fail at runtime"
+        )
 
     return {
-        "manifest":              _require_manifest(),
-        "dry_run":               _env_bool("WORKFLOW_DRY_RUN", default="true"),
-        "force_rejoin":          _env_bool("WORKFLOW_FORCE_REJOIN"),
-        "skip_hostname_setup":   _env_bool("WORKFLOW_SKIP_HOSTNAME_SETUP"),
-        "winrm_username":        WINRM_USERNAME,
+        "manifest": _require_env("WORKFLOW_MANIFEST"),
+        "dry_run": _env_bool("WORKFLOW_DRY_RUN", default="true"),
+        "force_rejoin": _env_bool("WORKFLOW_FORCE_REJOIN"),
+        "skip_hostname_setup": _env_bool("WORKFLOW_SKIP_HOSTNAME_SETUP"),
+        "winrm_username": WINRM_USERNAME,
         "domain_admin_password": domain_admin_password,
-        "domain_ou_path":        _env_str("SECRET_DOMAIN_OU_PATH"),
+        "domain_ou_path": _env("SECRET_DOMAIN_OU_PATH"),
     }
 
 
 def _build_disjoin_vars() -> Dict[str, Any]:
-    """Build extra_vars dictionary for the disjoin workflow."""
+    """Build the extra_vars dictionary for the disjoin workflow.
+
+    Returns:
+        Dictionary of extra_vars ready for JSON serialization.
+
+    Raises:
+        ConfigurationError: If WORKFLOW_MANIFEST is not set.
+    """
     return {
-        "manifest": _require_manifest(),
-        "dry_run":  _env_bool("WORKFLOW_DRY_RUN", default="true"),
+        "manifest": _require_env("WORKFLOW_MANIFEST"),
+        "dry_run": _env_bool("WORKFLOW_DRY_RUN", default="true"),
     }
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Dispatch table
 # ---------------------------------------------------------------------------
 
 _BUILDERS: Dict[str, Callable[[], Dict[str, Any]]] = {
-    "join":    _build_join_vars,
+    "join": _build_join_vars,
     "disjoin": _build_disjoin_vars,
 }
 
 
+# ---------------------------------------------------------------------------
+# Core logic
+# ---------------------------------------------------------------------------
+
+
+def build_extra_vars(action: str) -> Dict[str, Any]:
+    """Return the extra_vars dictionary for the given workflow action.
+
+    Args:
+        action: Workflow action — one of 'join' or 'disjoin' (case-insensitive).
+
+    Returns:
+        Dictionary of extra_vars ready for JSON serialization.
+
+    Raises:
+        ConfigurationError: If action is invalid or required env vars are missing.
+    """
+    normalized = action.strip().lower()
+    if normalized not in _BUILDERS:
+        raise ConfigurationError(
+            'Invalid action "%s" — must be one of: %s'
+            % (action, ", ".join(VALID_ACTIONS))
+        )
+    return _BUILDERS[normalized]()
+
+
+def write_extra_vars(extra_vars: Dict[str, Any], output_file: str) -> None:
+    """Serialize extra_vars to a JSON file.
+
+    Args:
+        extra_vars:  Dictionary to serialize.
+        output_file: Destination file path.
+
+    Raises:
+        OSError: If the file cannot be created or written.
+    """
+    with open(output_file, "w", encoding="utf-8") as fh:
+        json.dump(extra_vars, fh, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        logging.error(f"Usage: {sys.argv[0]} <join|disjoin>")
+        log.error("Usage: %s <join|disjoin>", sys.argv[0])
         sys.exit(1)
 
-    action: str = sys.argv[1].strip().lower()
-
-    if action not in _BUILDERS:
-        logging.error(f'Invalid action "{action}" — must be one of: {", ".join(_BUILDERS)}')
-        sys.exit(1)
-
-    extra_vars: Dict[str, Any] = _BUILDERS[action]()
+    action = sys.argv[1]
 
     try:
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as fh:
-            json.dump(extra_vars, fh, indent=2)
+        extra_vars = build_extra_vars(action)
+        write_extra_vars(extra_vars, OUTPUT_FILE)
+    except ConfigurationError as ex:
+        log.error("Configuration error: %s", ex)
+        sys.exit(1)
     except OSError as ex:
-        logging.error(f"Failed to write {OUTPUT_FILE}: {ex}")
+        log.error("Failed to write to '%s': %s", OUTPUT_FILE, ex)
         sys.exit(1)
 
-    logging.info(f"{OUTPUT_FILE} written for {action} workflow")
+    log.info("%s written for %s workflow", OUTPUT_FILE, action.strip().lower())
 
 
 if __name__ == "__main__":

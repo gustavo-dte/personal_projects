@@ -8,7 +8,7 @@ to GITHUB_ENV for subsequent workflow steps.
 
 Exits with code 1 on:
   - MANIFEST_FILE not set
-  - Manifest file not found
+  - Manifest file not found or unreadable
   - Manifest YAML parse failure
   - No VMs found in manifest
   - No hostname found in first VM entry
@@ -24,8 +24,6 @@ Usage:
   MANIFEST_FILE="ansible/vars/my-manifest/manifest.yml" \\
     python3 ansible/roles/python_scripts/extract_vm_hostname.py
 """
-
-# TODO: Add unit tests before moving to stage or prod. Currently in dev environment.
 
 import logging
 import os
@@ -45,77 +43,162 @@ DOMAIN_SUFFIX = "dtenet.com"
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Custom exceptions
+# ---------------------------------------------------------------------------
+
+
+class ManifestError(Exception):
+    """Raised when the manifest cannot be loaded or does not contain expected data."""
+
+
+# ---------------------------------------------------------------------------
+# Manifest helpers
 # ---------------------------------------------------------------------------
 
 
 def load_manifest(manifest_file: str) -> Dict[str, Any]:
-    """Load and parse a YAML manifest file. Exits with code 1 on failure."""
+    """Load and parse a YAML manifest file.
+
+    Args:
+        manifest_file: Absolute or relative path to the manifest YAML.
+
+    Returns:
+        Parsed manifest as a dictionary (empty dict if the file is blank).
+
+    Raises:
+        ManifestError: If the file cannot be read or the YAML is invalid.
+    """
     try:
         with open(manifest_file, encoding="utf-8") as fh:
             return yaml.safe_load(fh) or {}
-    except yaml.YAMLError as ex:
-        logging.error(f"Failed to parse manifest YAML: {ex}")
-        sys.exit(1)
-
-
-def write_github_env(github_env: str, key: str, value: str) -> None:
-    """Append a key=value pair to the GitHub Actions environment file. Exits with code 1 on failure."""
-    try:
-        # codeql[py/clear-text-storage-sensitive-data] - Value is non-sensitive (machine hostname/FQDN)
-        with open(github_env, "a", encoding="utf-8") as fh:
-            fh.write(f"{key}={value}\n")
     except OSError as ex:
-        logging.error(f"Failed to write to GITHUB_ENV: {ex}")
-        sys.exit(1)
+        raise ManifestError(
+            "Cannot read manifest file '%s': %s" % (manifest_file, ex)
+        ) from ex
+    except yaml.YAMLError as ex:
+        raise ManifestError(
+            "Failed to parse manifest YAML '%s': %s" % (manifest_file, ex)
+        ) from ex
+
+
+def extract_hostname(manifest: Dict[str, Any]) -> str:
+    """Extract the first VM's hostname from a parsed manifest.
+
+    Prefers vm_winrm_connect_hostname over name so that the WinRM-reachable
+    address is used when it differs from the VM's display name.
+
+    Args:
+        manifest: Parsed manifest dictionary.
+
+    Returns:
+        Hostname string (not yet qualified with the domain suffix).
+
+    Raises:
+        ManifestError: If no VMs are listed or the first VM has no hostname.
+    """
+    vms: List[Dict[str, Any]] = manifest.get("vms") or []
+    if not vms:
+        raise ManifestError("No VMs found in manifest")
+
+    first_vm: Dict[str, Any] = vms[0]
+    hostname: Optional[str] = first_vm.get("vm_winrm_connect_hostname") or first_vm.get(
+        "name"
+    )
+
+    if not hostname:
+        raise ManifestError(
+            "No hostname found in first VM entry "
+            "(missing both 'vm_winrm_connect_hostname' and 'name')"
+        )
+
+    return hostname.strip()
 
 
 # ---------------------------------------------------------------------------
-# Main
+# GitHub Actions environment export
+# ---------------------------------------------------------------------------
+
+
+def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
+    """Export a value to the GitHub Actions environment file.
+
+    When github_env is None (script is running outside of Actions), logs a
+    warning and returns without error so local runs stay non-fatal.
+
+    Args:
+        github_env: Path to the GITHUB_ENV file, or None if not in Actions.
+        key:        Environment variable name to export.
+        value:      Value to assign (non-sensitive, e.g. hostname/FQDN).
+
+    Raises:
+        OSError: If the GITHUB_ENV file cannot be written.
+    """
+    if not github_env:
+        log.warning("GITHUB_ENV not set — skipping environment variable export")
+        return
+
+    # codeql[py/clear-text-storage-sensitive-data] - value is a non-sensitive
+    # machine hostname/FQDN, not a credential or secret.
+    with open(github_env, "a", encoding="utf-8") as fh:  # noqa: SIM115
+        fh.write("%s=%s\n" % (key, value))
+
+
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+
+
+def run(manifest_file: str, github_env: Optional[str]) -> None:
+    """Load the manifest, extract the hostname, and export the FQDN.
+
+    Args:
+        manifest_file: Path to the manifest YAML file.
+        github_env:    Path to the GITHUB_ENV file, or None if not in Actions.
+
+    Raises:
+        ManifestError: On manifest load or parse failures.
+        OSError:       If the GITHUB_ENV file cannot be written.
+    """
+    manifest = load_manifest(manifest_file)
+    hostname = extract_hostname(manifest)
+    vm_fqdn = "%s.%s" % (hostname, DOMAIN_SUFFIX)
+
+    log.info("Extracted VM hostname: %s", hostname)
+    log.info("Setting DELINEA_SECRET_MACHINE=%s", vm_fqdn)
+
+    _write_github_env(github_env, "DELINEA_SECRET_MACHINE", vm_fqdn)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
     manifest_file: str = os.getenv("MANIFEST_FILE", "").strip()
+    # os.getenv used directly — must be None (not "") when absent so run() can
+    # distinguish "not in Actions" from "set to empty string".
     github_env: Optional[str] = os.getenv("GITHUB_ENV")
 
     if not manifest_file:
-        logging.error("MANIFEST_FILE environment variable is not set")
+        log.error("MANIFEST_FILE environment variable is not set")
         sys.exit(1)
 
     if not os.path.isfile(manifest_file):
-        logging.error(f"Manifest file not found: {manifest_file}")
+        log.error("Manifest file not found: %s", manifest_file)
         sys.exit(1)
 
-    manifest: Dict[str, Any] = load_manifest(manifest_file)
-
-    vms: List[Dict[str, Any]] = manifest.get("vms") or []
-    if not vms:
-        logging.error("No VMs found in manifest")
+    try:
+        run(manifest_file, github_env)
+    except ManifestError as ex:
+        log.error("Manifest error: %s", ex)
         sys.exit(1)
-
-    first_vm: Dict[str, Any] = vms[0]
-    hostname: Optional[str] = first_vm.get("vm_winrm_connect_hostname") or first_vm.get("name")
-
-    if not hostname:
-        logging.error(
-            "No hostname found in first VM entry "
-            "(missing both vm_winrm_connect_hostname and name)"
-        )
+    except OSError as ex:
+        log.error("Failed to write to '%s': %s", github_env, ex)
         sys.exit(1)
-
-    vm_fqdn: str = f"{hostname}.{DOMAIN_SUFFIX}"
-
-    logging.info(f"Extracted VM hostname: {hostname}")
-    logging.info(f"Set DELINEA_SECRET_MACHINE={vm_fqdn}")
-
-    if not github_env:
-        logging.warning("GITHUB_ENV not set — skipping environment variable export")
-        return
-
-    write_github_env(github_env, "DELINEA_SECRET_MACHINE", vm_fqdn)
 
 
 if __name__ == "__main__":
