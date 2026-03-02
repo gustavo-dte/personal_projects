@@ -322,7 +322,7 @@
 
 - name: "Step 3: Re-probe hostname after disjoin reboot"
   block:
-    - name: "Step 3: Read hostname via WinRM (post-disjoin, .\SE-Admin)"
+    - name: 'Step 3: Read hostname via WinRM (post-disjoin, .\SE-Admin)'
       ansible.windows.win_shell: |
         $env:COMPUTERNAME
       delegate_to: "{{ target_vm_host }}"
