@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import unittest
+from typing import Any, Dict
 from unittest.mock import MagicMock, call, mock_open, patch
 
 # ---------------------------------------------------------------------------
@@ -55,7 +56,7 @@ from json_builder import (
 # ---------------------------------------------------------------------------
 
 
-def _base_join_env() -> dict:
+def _base_join_env() -> Dict[str, str]:
     """Return a minimal environment dict sufficient for the join workflow."""
     return {
         "WORKFLOW_MANIFEST": "ansible/vars/test/manifest.yml",
@@ -67,7 +68,7 @@ def _base_join_env() -> dict:
     }
 
 
-def _base_disjoin_env() -> dict:
+def _base_disjoin_env() -> Dict[str, str]:
     """Return a minimal environment dict sufficient for the disjoin workflow."""
     return {
         "WORKFLOW_MANIFEST": "ansible/vars/test/manifest.yml",

@@ -26,6 +26,7 @@ import sys
 import os
 import unittest
 from io import StringIO
+from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch, mock_open
 
 # ---------------------------------------------------------------------------
@@ -67,9 +68,9 @@ def _make_http_error(status_code: int) -> HTTPError:
     return HTTPError(response=response)
 
 
-def _make_config(**overrides) -> Config:
+def _make_config(**overrides: Any) -> Config:
     """Return a minimal valid Config, with optional field overrides."""
-    defaults = {
+    defaults: Dict[str, Any] = {
         "base_url": "https://delinea.example.com",
         "username": "svc-account",
         "password": "s3cr3t",
@@ -175,7 +176,7 @@ class TestWriteGithubEnv(unittest.TestCase):
 class TestItemVal(unittest.TestCase):
     """Tests for the _item_val() slug-matching helper."""
 
-    def _make_item(self, slug: str, value: str) -> dict:
+    def _make_item(self, slug: str, value: str) -> Dict[str, str]:
         return {"slug": slug, "itemValue": value}
 
     def test_returns_value_for_matching_slug(self) -> None:
@@ -248,7 +249,7 @@ class TestMatchesByName(unittest.TestCase):
 class TestMatchesByItems(unittest.TestCase):
     """Tests for the _matches_by_items() slow-path predicate."""
 
-    def _make_items(self, machine: str, account: str) -> list:
+    def _make_items(self, machine: str, account: str) -> List[Dict[str, str]]:
         return [
             {"slug": "machine", "itemValue": machine},
             {"slug": "username", "itemValue": account},

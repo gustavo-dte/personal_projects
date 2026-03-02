@@ -22,6 +22,7 @@ Coverage:
 import os
 import sys
 import unittest
+from typing import Any, Dict, List
 from unittest.mock import mock_open, patch
 
 import yaml
@@ -47,7 +48,7 @@ from extract_vm_hostname import (
 # ---------------------------------------------------------------------------
 
 
-def _manifest_with_hostname(hostname: str) -> dict:
+def _manifest_with_hostname(hostname: str) -> Dict[str, List[Dict[str, str]]]:
     """Return a minimal manifest dict containing a single VM with the given name."""
     return {"vms": [{"name": hostname}]}
 
