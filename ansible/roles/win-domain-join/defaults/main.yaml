@@ -4,6 +4,11 @@
 # WinRM username format: computername\username (one backslash; used in bootstrap_winrm_username)
 winrm_username_sep: "\\"
 
+# Username used for the hostname rename step (Step 3 in join / Step 4 in disjoin).
+# This account must have local Administrator rights on the VM.
+# The SE-Admin Delinea password (winrm_password) is reused for authentication.
+rename_winrm_username: "Administrator"
+
 # Domain configuration
 domain_name: ""
 domain_admin_username: ""

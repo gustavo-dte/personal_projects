@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# TODO: pending to do unitest.
 """
 resolve_delinea_secret_id.py
 ============================

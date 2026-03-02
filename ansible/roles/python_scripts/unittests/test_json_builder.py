@@ -13,9 +13,13 @@ Coverage:
                         when unset, raises when set to empty string
   - _build_join_vars  : all fields populated correctly, WORKFLOW_MANIFEST
                         missing raises ConfigurationError, missing password
-                        logs warning, dry_run defaults to True
+                        logs warning, dry_run defaults to True,
+                        rename_winrm_username defaults to Administrator,
+                        rename_winrm_username overridden by WORKFLOW_RENAME_USERNAME
   - _build_disjoin_vars: all fields populated correctly, WORKFLOW_MANIFEST
-                         missing raises ConfigurationError, dry_run defaults to True
+                         missing raises ConfigurationError, dry_run defaults to True,
+                         rename_winrm_username defaults to Administrator,
+                         rename_winrm_username overridden by WORKFLOW_RENAME_USERNAME
   - build_extra_vars  : join action dispatched, disjoin action dispatched,
                         invalid action raises ConfigurationError, action is
                         case-insensitive, error message lists valid actions
@@ -42,6 +46,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import json_builder as module
 from json_builder import (
     ConfigurationError,
+    RENAME_USERNAME,
     _build_disjoin_vars,
     _build_join_vars,
     _env,
@@ -66,6 +71,11 @@ def _base_join_env() -> Dict[str, str]:
         "SECRET_DOMAIN_ADMIN_PASSWORD": "s3cr3t",
         "SECRET_DOMAIN_OU_PATH": "OU=Servers,DC=corp,DC=com",
     }
+
+
+def _base_join_env_with_rename() -> Dict[str, str]:
+    """Return a join environment dict with an explicit WORKFLOW_RENAME_USERNAME."""
+    return {**_base_join_env(), "WORKFLOW_RENAME_USERNAME": "CustomAdmin"}
 
 
 def _base_disjoin_env() -> Dict[str, str]:
@@ -196,7 +206,7 @@ class TestBuildJoinVars(unittest.TestCase):
             result = _build_join_vars()
         expected_keys = {
             "manifest", "dry_run", "force_rejoin", "skip_hostname_setup",
-            "winrm_username", "domain_admin_password", "domain_ou_path",
+            "winrm_username", "rename_winrm_username", "domain_admin_password", "domain_ou_path",
         }
         self.assertEqual(set(result.keys()), expected_keys)
 
@@ -226,6 +236,17 @@ class TestBuildJoinVars(unittest.TestCase):
         with patch.dict(os.environ, _base_join_env(), clear=True):
             result = _build_join_vars()
         self.assertEqual(result["winrm_username"], "SE-Admin")
+
+    def test_rename_winrm_username_defaults_to_administrator(self) -> None:
+        env = {k: v for k, v in _base_join_env().items() if k != "WORKFLOW_RENAME_USERNAME"}
+        with patch.dict(os.environ, env, clear=True):
+            result = _build_join_vars()
+        self.assertEqual(result["rename_winrm_username"], RENAME_USERNAME)
+
+    def test_rename_winrm_username_uses_workflow_rename_username_when_set(self) -> None:
+        with patch.dict(os.environ, _base_join_env_with_rename(), clear=True):
+            result = _build_join_vars()
+        self.assertEqual(result["rename_winrm_username"], "CustomAdmin")
 
     def test_raises_configuration_error_when_manifest_not_set(self) -> None:
         env = {k: v for k, v in _base_join_env().items() if k != "WORKFLOW_MANIFEST"}
@@ -260,7 +281,7 @@ class TestBuildDisjoinVars(unittest.TestCase):
     def test_returns_all_expected_keys(self) -> None:
         with patch.dict(os.environ, _base_disjoin_env(), clear=True):
             result = _build_disjoin_vars()
-        self.assertEqual(set(result.keys()), {"manifest", "dry_run"})
+        self.assertEqual(set(result.keys()), {"manifest", "dry_run", "rename_winrm_username"})
 
     def test_manifest_value_matches_env_var(self) -> None:
         with patch.dict(os.environ, _base_disjoin_env(), clear=True):
@@ -291,6 +312,18 @@ class TestBuildDisjoinVars(unittest.TestCase):
         self.assertNotIn("winrm_username", result)
         self.assertNotIn("domain_admin_password", result)
         self.assertNotIn("domain_ou_path", result)
+
+    def test_rename_winrm_username_defaults_to_administrator(self) -> None:
+        env = {k: v for k, v in _base_disjoin_env().items() if k != "WORKFLOW_RENAME_USERNAME"}
+        with patch.dict(os.environ, env, clear=True):
+            result = _build_disjoin_vars()
+        self.assertEqual(result["rename_winrm_username"], RENAME_USERNAME)
+
+    def test_rename_winrm_username_uses_workflow_rename_username_when_set(self) -> None:
+        env = {**_base_disjoin_env(), "WORKFLOW_RENAME_USERNAME": "CustomAdmin"}
+        with patch.dict(os.environ, env, clear=True):
+            result = _build_disjoin_vars()
+        self.assertEqual(result["rename_winrm_username"], "CustomAdmin")
 
 
 # ---------------------------------------------------------------------------

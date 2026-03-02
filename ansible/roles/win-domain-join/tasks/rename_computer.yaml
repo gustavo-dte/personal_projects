@@ -72,11 +72,11 @@
   when:
     - az_rename_result is defined
 
-# Rename uses SE-Admin (local admin) credentials via WinRM session.
-# Domain credentials (cpoe-automation) are reserved for domain join/disjoin only.
+# Rename runs as Administrator (rename_winrm_username) using the SE-Admin Delinea password.
+# SE-Admin (winrm_username) is used for disjoin and domain join only.
 
 
-# Fallback: WinRM rename using SE-Admin (local admin) session credentials
+# Fallback: WinRM rename using Administrator (local admin) session credentials
 - name: "Step 2: Rename hostname to target (no reboot) via WinRM fallback"
   ansible.windows.win_shell: |
     $ErrorActionPreference = 'Stop'
@@ -90,7 +90,7 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+    ansible_user: "{{ hostvars['localhost']['current_hostname_info']['old_name'] }}\\{{ rename_winrm_username | default('Administrator') }}"
     ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
   register: hostname_rename_result
   ignore_errors: true
@@ -146,7 +146,8 @@
     - not (hostname_rename_result.failed | default(false) | bool)
     - restart_on_success | bool
 
-# Rename only (no reboot) when restart_on_success is false
+# Rename only (no reboot) when restart_on_success is false.
+# Uses Administrator (rename_winrm_username) with the SE-Admin Delinea password.
 - name: "Step 2: Rename hostname to target name (no reboot)"
   ansible.windows.win_hostname:
     name: "{{ target_vm_name }}"
@@ -159,7 +160,7 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+    ansible_user: "{{ hostvars['localhost']['current_hostname_info']['old_name'] }}\\{{ rename_winrm_username | default('Administrator') }}"
     ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
   register: hostname_rename_result
   when:
@@ -221,8 +222,9 @@
     - not (hostname_rename_result.failed | default(false) | bool)
     - not (restart_on_success | bool)
 
-# Use .\username for post-reboot auth - avoids hostname resolution issues when Windows is still settling
-# Retry up to 6 times with 90s delay - Windows may reject auth for several minutes after rename reboot
+# Use .\username for post-reboot auth - avoids hostname resolution issues when Windows is still settling.
+# Retry up to 6 times with 90s delay - Windows may reject auth for several minutes after rename reboot.
+# Post-reboot verification uses Administrator (rename_winrm_username) with the SE-Admin Delinea password.
 - name: Verify hostname after rename reboot
   ansible.windows.win_shell: |
     (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
@@ -235,7 +237,7 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+    ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
     ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
   register: hostname_after_reboot
   retries: 6
@@ -259,6 +261,8 @@
     - not (hostname_after_reboot.skipped | default(false) | bool)
     - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
 
+# After rename reboot, update formatted_winrm_username back to resolved_winrm_username (SE-Admin)
+# so that subsequent tasks (domain join) continue to use the correct SE-Admin credentials.
 - name: Update WinRM username to new hostname for subsequent tasks (after rename reboot)
   ansible.builtin.set_fact:
     formatted_winrm_username: "{{ target_vm_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
