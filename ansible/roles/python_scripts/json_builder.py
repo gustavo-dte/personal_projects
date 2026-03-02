@@ -111,17 +111,25 @@ def _build_join_vars() -> Dict[str, Any]:
         Dictionary of extra_vars ready for JSON serialization.
 
     Raises:
-        ConfigurationError: If WORKFLOW_MANIFEST is not set.
+        ConfigurationError: If WORKFLOW_MANIFEST is not set or if
+                          SECRET_DOMAIN_ADMIN_PASSWORD is missing in non-dry-run mode.
     """
+    dry_run = _env_bool("WORKFLOW_DRY_RUN", default="true")
     domain_admin_password = _env("SECRET_DOMAIN_ADMIN_PASSWORD")
+    
     if not domain_admin_password:
-        log.warning(
-            "SECRET_DOMAIN_ADMIN_PASSWORD is not set — domain join will fail at runtime"
-        )
+        if dry_run:
+            log.warning(
+                "SECRET_DOMAIN_ADMIN_PASSWORD is not set — domain join will fail at runtime"
+            )
+        else:
+            raise ConfigurationError(
+                "SECRET_DOMAIN_ADMIN_PASSWORD is required for production domain join operations"
+            )
 
     return {
         "manifest": _require_env("WORKFLOW_MANIFEST"),
-        "dry_run": _env_bool("WORKFLOW_DRY_RUN", default="true"),
+        "dry_run": dry_run,
         "force_rejoin": _env_bool("WORKFLOW_FORCE_REJOIN"),
         "skip_hostname_setup": _env_bool("WORKFLOW_SKIP_HOSTNAME_SETUP"),
         "winrm_username": WINRM_USERNAME,

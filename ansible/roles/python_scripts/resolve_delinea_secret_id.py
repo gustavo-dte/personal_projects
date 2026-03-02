@@ -418,6 +418,12 @@ def _resolve_by_machine(
         # Fast path: name already encodes machine and account as 'fqdn\account'.
         if _matches_by_name(name, machine_filter, desired_name):
             matches.append(rec)
+            # Fail fast on ambiguity — no need to check remaining records
+            if len(matches) > 1:
+                raise DelineaError(
+                    "Ambiguous match — %d records found; set DELINEA_SECRET_ID explicitly"
+                    % len(matches)
+                )
             continue
 
         # Slow path: inspect item slugs from the full secret detail.
@@ -435,16 +441,16 @@ def _resolve_by_machine(
         items: List[Dict[str, Any]] = detail.get("items") or []
         if _matches_by_items(items, machine_filter, desired_name):
             matches.append(rec)
+            # Fail fast on ambiguity — no need to check remaining records
+            if len(matches) > 1:
+                raise DelineaError(
+                    "Ambiguous match — %d records found; set DELINEA_SECRET_ID explicitly"
+                    % len(matches)
+                )
 
     if not matches:
         raise DelineaError(
             "No matching records found — verify DELINEA_SECRET_MACHINE and filter values"
-        )
-
-    if len(matches) > 1:
-        raise DelineaError(
-            "Ambiguous match — %d records found; set DELINEA_SECRET_ID explicitly"
-            % len(matches)
         )
 
     return _sanitize_secret_id(str(matches[0]["id"]))

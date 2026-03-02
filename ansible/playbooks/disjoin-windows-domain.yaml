@@ -161,7 +161,7 @@
         winrm_password:     "{{ winrm_password }}"
         # Step 4 (rename) — Administrator local account using the SE-Admin Delinea password
         # Overridable via WORKFLOW_RENAME_USERNAME if the local admin has a different name
-        rename_winrm_username: "{{ rename_winrm_username | default('Administrator') }}"
+        rename_winrm_username: "{{ lookup('ansible.builtin.env', 'WORKFLOW_RENAME_USERNAME', default='Administrator') }}"
         disjoin_and_rename: true
         disjoin_only:       false
         dry_run:            "{{ dry_run | default(false) }}"

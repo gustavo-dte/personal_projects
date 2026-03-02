@@ -1,19 +1,19 @@
 ---
 # ansible/playbooks/join-windows-domain.yaml
 #
-# Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server
-# Step 2 — Connect to the Azure VM as SE-Admin (WinRM) and disjoin from domain → WORKGROUP
-#           (only when force_rejoin=true; skipped if already in WORKGROUP)
-# Step 3 — Connect to the Azure VM as SE-Admin (WinRM) and rename hostname to target_vm_name
-# Step 4 — Rejoin the VM to the domain using the cpoe-automation domain account
+# Joins Windows VMs to Active Directory domain.
+# Assumes VMs have already been disjoined and renamed by the disjoin-windows-domain playbook.
+#
+# Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server (for WinRM)
+# Step 2 — Join the VM to the domain using the cpoe-automation domain account
 #
 # Required extra-vars:
 #   manifest              Directory name under ansible/vars/ describing the target VMs
-#   domain_admin_password Password for the cpoe-automation domain account (Step 4)
+#   domain_admin_password Password for the cpoe-automation domain account (Step 2)
 #
 # Optional extra-vars:
 #   dry_run               true → preview only, no changes applied  (default: false)
-#   force_rejoin          true → disjoin first even if already in target domain (default: false)
+#   force_rejoin          true → forces disjoin before join (default: false; use with caution)
 #
 # Required environment variables (injected by the workflow):
 #   DELINEA_BASE_URL      Delinea Secret Server base URL
@@ -23,9 +23,9 @@
 #   DELINEA_SECRET_PATH   Name/path search term              (fallback when ID not set)
 #
 # Required manifest keys:
-#   vms[*].target_vm_name                   Target hostname for each VM (Step 3)
+#   vms[*].target_vm_name                   Target hostname for each VM (must match current hostname)
 #   domainNameSetup.domain                  AD domain FQDN  (e.g. dtenet.com)
-#   domainNameSetup.domain_admin_username   Must be cpoe-automation
+#   domainNameSetup.domain_admin_username   cpoe-automation domain account
 #   domainNameSetup.domain_ou_path          (Optional) OU path for the computer object
 
 - name: "Join Windows VMs to domain (Disjoin → Rename → Rejoin)"
@@ -145,10 +145,11 @@
                 3. Confirm the secret exists and the service account has read permission
                 4. Check Delinea audit logs for the failed access attempt
 
-  # Steps 2-4: handled by the win-domain-join role
-  #   disjoin_vm.yaml      → Step 2  SE-Admin via WinRM  (only when force_rejoin=true)
-  #   rename_computer.yaml → Step 3  SE-Admin via WinRM
-  #   join_domain.yaml     → Step 4  cpoe-automation domain account
+  # Step 2: handled by the win-domain-join role
+  #   join.yml → domain join using cpoe-automation domain account
+  #
+  # Note: This playbook assumes VMs are already in WORKGROUP with the correct hostname.
+  #       Run disjoin-windows-domain.yaml first if VMs need to be disjoined/renamed.
   roles:
     - role: common
 
@@ -156,16 +157,12 @@
       vars:
         manifest: "{{ manifest }}"
 
-        # Steps 2 & 3 — SE-Admin local-admin credentials
+        # SE-Admin local-admin credentials for WinRM connectivity
         # Password fetched live from Delinea in Step 1; never stored in extra-vars
         winrm_username: "SE-Admin"
         winrm_password: "{{ winrm_password }}"
 
-        # Step 3 (rename) — Administrator local account using the SE-Admin Delinea password
-        # Overridable via WORKFLOW_RENAME_USERNAME if the local admin has a different name
-        rename_winrm_username: "{{ rename_winrm_username | default('Administrator') }}"
-
-        # Step 4 — cpoe-automation domain account
+        # cpoe-automation domain account for domain join
         # domain_admin_username is read from manifest domainNameSetup.domain_admin_username
         # domain_admin_password comes from the DOMAIN_ADMIN_PASSWORD GitHub Secret
         domain_admin_password: "{{ domain_admin_password }}"

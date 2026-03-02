@@ -83,7 +83,7 @@ def compute_vmss_short_hostname(target_vm_name: str, os_disk_os_type: Optional[s
 
 
 def filter_vm_specs_by_names(
-    vm_specs: Optional[Iterable[Dict[str, Any]]],
+    vm_specs: Iterable[Dict[str, Any]],
     vm_names_input: Any,
 ) -> List[Dict[str, Any]]:
     """Filter a list of VM spec dicts by a names input.
@@ -95,7 +95,7 @@ def filter_vm_specs_by_names(
       - empty / None         — return empty list (no VMs selected)
       - named list           — return only specs whose 'name' exactly matches one of the given names
     """
-    specs_list: List[Dict[str, Any]] = list(vm_specs or [])
+    specs_list: List[Dict[str, Any]] = list(vm_specs)
     requested = _parse_names_input(vm_names_input)
 
     if not requested:
