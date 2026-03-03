@@ -202,7 +202,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: "{{ hostvars['localhost']['winrm_successful_username'] }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           when: (current_domain_status.domain | default('')) == 'WORKGROUP'
 
@@ -211,6 +211,14 @@
             msg: >-
               Step 3: Disjoin '{{ target_vm_name }}' from
               '{{ current_domain_status.domain | default('unknown') }}' → WORKGROUP.
+
+        # Show credentials being used for disjoin
+        - name: "Step 3: Debug disjoin credentials"
+          debug:
+            msg: |
+              Disjoin will authenticate as: {{ hostvars['localhost']['winrm_successful_username'] }}
+              Password source: winrm_value_{{ target_vm_name | lower }} from Delinea secret
+              This is the same account that successfully connected initially
 
         # Pre-check before committing
         - name: "Step 3: Pre-check disjoin permission (SE-Admin, no changes)"
@@ -232,7 +240,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: "{{ hostvars['localhost']['winrm_successful_username'] }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: disjoin_permission_precheck
           changed_when: false
@@ -266,7 +274,7 @@
                 ansible_winrm_server_cert_validation: ignore
                 ansible_winrm_connection_timeout: 60
                 ansible_winrm_read_timeout: 70
-                ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+                ansible_user: "{{ hostvars['localhost']['winrm_successful_username'] }}"
                 ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
               register: domain_disjoin_result
               no_log: true
@@ -647,15 +655,16 @@
             - not (hostname_after_reboot.skipped | default(false) | bool)
             - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
 
-        # Restore formatted_winrm_username to SE-Admin with the new hostname
-        # so Step 5 (domain join) connects with the correct credential format
-        - name: "Step 4: Restore formatted_winrm_username to SE-Admin after rename"
+        # Restore formatted_winrm_username after rename
+        # Preserve the successful authentication method (.\SE-Admin or hostname\SE-Admin)
+        - name: "Step 4: Preserve successful WinRM username format after rename"
           ansible.builtin.set_fact:
-            formatted_winrm_username: "{{ target_vm_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+            formatted_winrm_username: "{{ hostvars['localhost']['winrm_successful_username'] }}"
           when:
             - hostname_after_reboot is defined
             - not (hostname_after_reboot.skipped | default(false) | bool)
             - (hostname_after_reboot.stdout | default('') | trim | upper) == (target_vm_name | upper)
+            - hostvars['localhost']['winrm_successful_username'] is defined
 
     # ── Step 5: Join domain ───────────────────────────────────────────────────
     # Uses cpoe domain account credentials. SE-Admin is not involved here.

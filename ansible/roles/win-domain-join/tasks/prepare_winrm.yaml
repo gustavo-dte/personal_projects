@@ -244,6 +244,8 @@
       - Authenticated as: {{ winrm_successful_username }}
       - Actual hostname: {{ actual_vm_hostname }}
       - Connection: {{ target_vm_host }}:{{ winrm_port }}
+      - Password source: winrm_value_{{ target_vm_name | lower }} (from Delinea secret)
+      - This username and password will be used for all subsequent operations (disjoin, rename, join)
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
