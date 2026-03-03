@@ -32,9 +32,15 @@
       WinRM credentials are missing for {{ target_vm_name }} ({{ target_vm_host }})
       - Username: {{ 'PROVIDED' if (resolved_winrm_username | length > 0) else 'MISSING' }}
       - Password: {{ 'PROVIDED' if (resolved_winrm_value | length > 0) else 'MISSING' }}
-      Please ensure either:
-      1. vm_winrm_username and vm_winrm_value are set in the manifest for this VM, OR
-      2. winrm_username and winrm_value are passed as playbook variables/GitHub Secrets
+      
+      Expected environment variable: winrm_value_{{ target_vm_name | lower }}
+      
+      Please ensure:
+      1. The workflow step "Fetch WinRM passwords from Delinea" ran successfully, OR
+      2. vm_winrm_value is set in the manifest for this VM, OR
+      3. winrm_value is passed as a playbook variable
+      
+      Check the "Debug per-VM WinRM password lookup" task output above for details.
     quiet: false
 
 - name: Set placeholder facts for dry run or skip hostname setup

@@ -108,7 +108,9 @@
           VM: {{ item.name }}
           Target name: {{ item.target_vm_name | default(item.name) }}
           Env var name: winrm_value_{{ item.target_vm_name | default(item.name) | lower }}
-          Password found: {{ 'YES' if (vm_winrm_values[item.name] | default('') | length > 0) else 'NO' }}
+          Env var value from lookup: {{ 'YES (from environment)' if (lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') | length > 0) else 'NO (not in environment)' }}
+          Manifest vm_winrm_value: {{ 'YES (from manifest)' if (item.vm_winrm_value | default('') | length > 0) else 'NO (not in manifest)' }}
+          Final password found: {{ 'YES' if (vm_winrm_values[item.name] | default('') | length > 0) else 'NO' }}
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"

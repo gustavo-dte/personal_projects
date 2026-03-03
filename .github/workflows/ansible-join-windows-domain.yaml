@@ -135,6 +135,18 @@ jobs:
           fi
           echo "[OK] Delinea secrets fetched successfully"
 
+      - name: "Verify environment variables were written"  # pragma: allowlist secret
+        run: |
+          echo "[INFO] Checking environment variables written to GITHUB_ENV"
+          if [ -f "$GITHUB_ENV" ]; then
+            echo "[INFO] GITHUB_ENV contents:"
+            grep "^winrm_value_" "$GITHUB_ENV" | sed 's/=.*/=***MASKED***/' || echo "[WARN] No winrm_value_* variables found"
+          else
+            echo "[WARN] GITHUB_ENV file not found"
+          fi
+          echo "[INFO] Current environment variables:"
+          env | grep "^winrm_value_" | sed 's/=.*/=***MASKED***/' || echo "[WARN] No winrm_value_* in current environment"
+
       - name: "Prepare Ansible extra-vars"
         env:
           WORKFLOW_MANIFEST:            ${{ inputs.manifest }}
@@ -150,8 +162,23 @@ jobs:
             || (echo "JSON invalid" && exit 1)
 
       - name: "Run join playbook"
+        env:
+          # Inherit all environment variables from previous steps (including winrm_value_* from Python script)
+          # GitHub Actions automatically loads vars written to $GITHUB_ENV, but we need to ensure they're
+          # available in the ansible-playbook subprocess environment
+          ANSIBLE_LOAD_CALLBACK_PLUGINS: "true"
         run: |
           mkdir -p ansible/logs
+          # Export all current environment variables so ansible-playbook inherits them
+          # Using set -a to auto-export all sourced variables
+          set -a
+          source <(cat $GITHUB_ENV | sed 's/^/export /')
+          set +a
+          
+          echo "=== Environment variables available to ansible-playbook ==="
+          env | grep "^winrm_value_" | sed 's/=.*/=***MASKED***/' || echo "No winrm_value_* variables found"
+          echo "==========================================================="
+          
           ansible-playbook ansible/playbooks/join-windows-domain.yaml \
             -e @ansible_extra_vars.json 2>&1 | tee ansible/logs/join.log
           rc=${PIPESTATUS[0]}
