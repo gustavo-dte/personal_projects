@@ -13,8 +13,8 @@ name: Ansible-Join-Windows-Domain
 #
 # Required GitHub Secrets:
 #   DELINEA_USERNAME          Service account that authenticates to Delinea
-#   DELINEA_PASSWORD          Password for the Delinea service account
-#   DOMAIN_ADMIN_PASSWORD     Password for the cpoe-automation domain account
+#   DELINEA_VALUE             Secret value for the Delinea service account
+#   DOMAIN_ADMIN_VALUE        Secret value for the cpoe-automation domain account
 #   AZURE_TENANT_ID           Azure tenant for managed-identity login
 #   VM_MIGRATE_MI_CLIENT_ID   Client ID of the user-assigned managed identity
 #
@@ -65,7 +65,7 @@ jobs:
       ANSIBLE_CONFIG: ansible/ansible.cfg
       DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
-      DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
+      DELINEA_VALUE: ${{ secrets.DELINEA_VALUE }}
       DELINEA_SECRET_ID: ${{ vars.DELINEA_SECRET_ID }}
       DELINEA_SECRET_PATH: ${{ vars.DELINEA_SECRET_PATH != '' && vars.DELINEA_SECRET_PATH || 'SE-Admin' }}
       DELINEA_SECRET_MACHINE: ${{ vars.DELINEA_SECRET_MACHINE }}
@@ -108,9 +108,9 @@ jobs:
           echo "  Dry run         : ${{ inputs.dry_run }}"
           echo "  Force rejoin    : ${{ inputs.force_rejoin }}"
           echo ""
-          echo "  Step 1 - Fetch SE-Admin password from Delinea (WinRM connectivity)"
+          echo "  Step 1 - Fetch SE-Admin value from Delinea (WinRM connectivity)"
           echo "           URL             : ${DELINEA_BASE_URL}"
-          echo "           Auth user       : ${DELINEA_USERNAME}"
+          echo "           Config user     : ${DELINEA_USERNAME}"
           echo "           Machine filter  : ${DELINEA_SECRET_MACHINE:-<not set>}"
           echo "           Account filter  : ${DELINEA_SECRET_ACCOUNT}"
           echo ""
@@ -144,7 +144,7 @@ jobs:
           WORKFLOW_MANIFEST:            ${{ inputs.manifest }}
           WORKFLOW_DRY_RUN:             ${{ inputs.dry_run }}
           WORKFLOW_FORCE_REJOIN:        ${{ inputs.force_rejoin }}
-          SECRET_DOMAIN_ADMIN_PASSWORD: ${{ secrets.DOMAIN_ADMIN_PASSWORD }}
+          SECRET_DOMAIN_ADMIN_VALUE:    ${{ secrets.DOMAIN_ADMIN_VALUE }}
           SECRET_DOMAIN_OU_PATH:        ${{ secrets.DOMAIN_OU_PATH }}
         run: |
           python3 ansible/roles/python_scripts/json_builder.py join

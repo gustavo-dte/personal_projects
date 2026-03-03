@@ -12,7 +12,7 @@ Usage:
 Actions:
   join     — Build extra_vars for the join-windows-domain workflow.
              Reads: WORKFLOW_MANIFEST, WORKFLOW_DRY_RUN, WORKFLOW_FORCE_REJOIN,
-                    WORKFLOW_SKIP_HOSTNAME_SETUP, SECRET_DOMAIN_ADMIN_PASSWORD,
+                    WORKFLOW_SKIP_HOSTNAME_SETUP, SECRET_DOMAIN_ADMIN_VALUE,
                     SECRET_DOMAIN_OU_PATH, WORKFLOW_RENAME_USERNAME
 
   disjoin  — Build extra_vars for the disjoin-windows-domain workflow.
@@ -22,12 +22,12 @@ Output:
   ansible_extra_vars.json — written to the current working directory.
 
 Note:
-  The SE-Admin WinRM password is intentionally excluded from both extra_vars.
+  The SE-Admin WinRM value is intentionally excluded from both extra_vars.
   It is fetched live from Delinea inside the Ansible playbook pre_tasks so it
   is always current and never cached in the extra-vars file.
 
   The rename step (change VM hostname) runs as Administrator using the SE-Admin
-  Delinea password. WORKFLOW_RENAME_USERNAME defaults to 'Administrator' and
+  Delinea value. WORKFLOW_RENAME_USERNAME defaults to 'Administrator' and
   can be overridden per workflow if the local admin account has a different name.
 """
 
@@ -112,19 +112,19 @@ def _build_join_vars() -> Dict[str, Any]:
 
     Raises:
         ConfigurationError: If WORKFLOW_MANIFEST is not set or if
-                          SECRET_DOMAIN_ADMIN_PASSWORD is missing in non-dry-run mode.
+                          SECRET_DOMAIN_ADMIN_VALUE is missing in non-dry-run mode.
     """
     dry_run = _env_bool("WORKFLOW_DRY_RUN", default="true")
-    domain_admin_password = _env("SECRET_DOMAIN_ADMIN_PASSWORD")
+    domain_admin_value = _env("SECRET_DOMAIN_ADMIN_VALUE")
     
-    if not domain_admin_password:
+    if not domain_admin_value:
         if dry_run:
             log.warning(
-                "SECRET_DOMAIN_ADMIN_PASSWORD is not set — domain join will fail at runtime"
+                "SECRET_DOMAIN_ADMIN_VALUE is not set — domain join will fail at runtime"
             )
         else:
             raise ConfigurationError(
-                "SECRET_DOMAIN_ADMIN_PASSWORD is required for production domain join operations"
+                "SECRET_DOMAIN_ADMIN_VALUE is required for production domain join operations"
             )
 
     return {
@@ -134,7 +134,7 @@ def _build_join_vars() -> Dict[str, Any]:
         "skip_hostname_setup": _env_bool("WORKFLOW_SKIP_HOSTNAME_SETUP"),
         "winrm_username": WINRM_USERNAME,
         "rename_winrm_username": _env("WORKFLOW_RENAME_USERNAME") or RENAME_USERNAME,
-        "domain_admin_password": domain_admin_password,
+        "domain_admin_value": domain_admin_value,
         "domain_ou_path": _env("SECRET_DOMAIN_OU_PATH"),
     }
 

@@ -1,7 +1,7 @@
 ---
 # ansible/playbooks/disjoin-windows-domain.yaml
 #
-# Step 1 - Fetch SE-Admin local-admin password from Delinea Secret Server
+# Step 1 - Fetch SE-Admin local-admin value from Delinea Secret Server
 # Step 2 - Connect to the Azure VM as SE-Admin (WinRM), disjoin from domain -> WORKGROUP, reboot
 # Step 3 - Re-probe actual hostname after post-disjoin reboot
 # Step 4 - Rename hostname to target_vm_name (from manifest), reboot, verify
@@ -19,7 +19,7 @@
 # Required environment variables (injected by the workflow):
 #   DELINEA_BASE_URL      Delinea Secret Server base URL
 #   DELINEA_USERNAME      Service account used to authenticate to Delinea
-#   DELINEA_PASSWORD      Password for the Delinea service account
+#   DELINEA_VALUE         Secret value for the Delinea service account
 #   DELINEA_SECRET_ID     Numeric ID of the SE-Admin secret  (preferred)
 #   DELINEA_SECRET_PATH   Name/path search term              (fallback when ID not set)
 #
@@ -36,7 +36,7 @@
   vars:
     ss_url_raw:         "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
     ss_username_raw:    "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
-    ss_password:        "{{ lookup('ansible.builtin.env', 'DELINEA_PASSWORD', default='') }}"
+    ss_value:           "{{ lookup('ansible.builtin.env', 'DELINEA_VALUE', default='') }}"
     ss_secret_id_raw:   "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
     ss_secret_path_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_PATH', default='') }}"
     ss_url:         "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
@@ -46,10 +46,10 @@
 
   pre_tasks:
 
-    - name: "Validate: DELINEA_PASSWORD is set"
+    - name: "Validate: DELINEA_VALUE is set"
       ansible.builtin.assert:
-        that: ss_password | length > 0
-        fail_msg: "DELINEA_PASSWORD environment variable is missing or empty."
+        that: ss_value | length > 0
+        fail_msg: "DELINEA_VALUE environment variable is missing or empty."
 
     - name: "Validate: Delinea URL and at least one secret reference are set"
       ansible.builtin.assert:
@@ -69,8 +69,8 @@
           Connecting to Delinea at {{ ss_url }} as {{ ss_username }}.
           Secret ref: {{ 'ID=' ~ ss_secret_id if ss_secret_id | length > 0 else 'Path=' ~ ss_secret_path }}
 
-    # ── Step 1: Fetch SE-Admin password from Delinea ───────────────────────────
-    - name: "Step 1: Fetch SE-Admin password from Delinea Secret Server"
+    # ── Step 1: Fetch SE-Admin value from Delinea ───────────────────────────
+    - name: "Step 1: Fetch SE-Admin value from Delinea Secret Server"
       block:
 
         - name: "Step 1a: Fetch secret by numeric ID"
@@ -81,7 +81,7 @@
                 ss_secret_id | int,
                 base_url=ss_url,
                 username=ss_username,
-                password=ss_password
+                password=ss_value
               ) }}
           when: ss_secret_id | length > 0
           no_log: true
@@ -95,47 +95,47 @@
                 secret_path=ss_secret_path,
                 base_url=ss_url,
                 username=ss_username,
-                password=ss_password
+                password=ss_value
               ) }}
           when: ss_secret_id | length == 0
           no_log: true
 
-        - name: "Step 1c: Extract SE-Admin password from retrieved secret"
+        - name: "Step 1c: Extract SE-Admin value from retrieved secret"
           ansible.builtin.set_fact:
-            winrm_password: >-
+            winrm_value: >
               {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['password'] }}
           no_log: true
 
-        - name: "Step 1d: Audit log — password retrieved (non-sensitive)"
+        - name: "Step 1d: Audit log — value retrieved (non-sensitive)"
           ansible.builtin.debug:
-            msg: >-
-              [AUDIT] SE-Admin password retrieved from Delinea.
+            msg: >
+              [AUDIT] SE-Admin value retrieved from Delinea.
               ref={{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
               url={{ ss_url }} user={{ ss_username }}
 
       rescue:
         # Catches: server not found, DNS failure, network error,
-        #          bad credentials, secret not found, unexpected API error
-        - name: "Step 1 FAILED: could not retrieve SE-Admin password from Delinea"
+        #          bad configuration, secret not found, unexpected API error
+        - name: "Step 1 FAILED: could not retrieve SE-Admin value from Delinea"
           ansible.builtin.fail:
             msg: |
-              ERROR: Step 1 failed - could not retrieve SE-Admin password from Delinea Secret Server.
+              ERROR: Step 1 failed - could not retrieve SE-Admin value from Delinea Secret Server.
 
               Common causes:
                 - Server not found / DNS resolution failure -> {{ ss_url }} unreachable
                 - Network connectivity issue between the runner and Delinea
-                - Invalid service-account credentials -> check DELINEA_USERNAME / DELINEA_PASSWORD
+                - Invalid service-account configuration -> check DELINEA_USERNAME / DELINEA_VALUE
                 - Secret not found -> check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
                 - Unexpected Delinea API error -> review Delinea audit logs
 
               Configuration:
                 URL       : {{ ss_url }}
-                Auth user : {{ ss_username }}
+                Config user : {{ ss_username }}
                 Secret ref: {{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
 
               Remediation:
                 1. Confirm the runner can reach {{ ss_url }}  (e.g. curl -I {{ ss_url }})
-                2. Confirm DELINEA_USERNAME / DELINEA_PASSWORD are correct in GitHub Secrets
+                2. Confirm DELINEA_USERNAME / DELINEA_VALUE are correct in GitHub Secrets
                 3. Confirm the secret exists and the service account has read permission
                 4. Check Delinea audit logs for the failed access attempt
 
@@ -144,13 +144,13 @@
   #   Per VM the role executes disjoin_and_rename_vm.yaml which calls:
   #     prepare_winrm.yaml   — connect as SE-Admin, read actual hostname from VM
   #     disjoin_domain.yaml  — Remove-Computer → WORKGROUP → reboot → wait
-  #     (re-probe)           — re-read hostname post-reboot for correct WinRM auth
+  #     (re-probe)           — re-read hostname post-reboot for correct WinRM config
   #     rename_computer.yaml — compare current hostname to manifest target_vm_name;
   #                            rename (Azure RunCommand primary / WinRM fallback)
   #                            → reboot → verify
   #
   # target_vm_name comes from manifest vms[*].target_vm_name.
-  # SE-Admin password is fetched live in Step 1 above — never stored in extra-vars.
+  # SE-Admin value is fetched live in Step 1 above — never stored in extra-vars.
   roles:
     - role: common
 
@@ -158,8 +158,8 @@
       vars:
         manifest:           "{{ manifest }}"
         winrm_username:     "SE-Admin"
-        winrm_password:     "{{ winrm_password }}"
-        # Step 4 (rename) — Administrator local account using the SE-Admin Delinea password
+        winrm_password:     "{{ winrm_value }}"
+        # Step 4 (rename) — Administrator local account using the SE-Admin Delinea value
         # Overridable via WORKFLOW_RENAME_USERNAME if the local admin has a different name
         rename_winrm_username: "{{ lookup('ansible.builtin.env', 'WORKFLOW_RENAME_USERNAME', default='Administrator') }}"
         disjoin_and_rename: true

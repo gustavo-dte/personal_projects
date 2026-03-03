@@ -9,7 +9,7 @@ name: Ansible-Disjoin-Windows-Domain
 #
 # Required GitHub Secrets:
 #   DELINEA_USERNAME          Service account that authenticates to Delinea
-#   DELINEA_PASSWORD          Password for the Delinea service account
+#   DELINEA_VALUE             Secret value for the Delinea service account
 #   AZURE_TENANT_ID           Azure tenant for managed-identity login
 #   VM_MIGRATE_MI_CLIENT_ID   Client ID of the user-assigned managed identity
 #
@@ -55,7 +55,7 @@ jobs:
       ANSIBLE_CONFIG: ansible/ansible.cfg
       DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
-      DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
+      DELINEA_VALUE: ${{ secrets.DELINEA_VALUE }}
       DELINEA_SECRET_ID: ${{ vars.DELINEA_SECRET_ID }}
       DELINEA_SECRET_PATH: ${{ vars.DELINEA_SECRET_PATH != '' && vars.DELINEA_SECRET_PATH || 'SE-Admin' }}
       DELINEA_SECRET_MACHINE: ${{ vars.DELINEA_SECRET_MACHINE }}
