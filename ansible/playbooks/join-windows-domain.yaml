@@ -4,26 +4,25 @@
 # Joins Windows VMs to Active Directory domain.
 # Assumes VMs have already been disjoined and renamed by the disjoin-windows-domain playbook.
 #
-# Step 1 - Fetch SE-Admin local-admin password from Delinea Secret Server (for WinRM)  # pragma: allowlist secret
+# Step 1 - WinRM passwords are pre-fetched by workflow using ansible/roles/python_scripts/resolve_delinea_secret_id.py  # pragma: allowlist secret
+#          and passed as environment variables: winrm_value_{target_vm_name_lowercase}  # pragma: allowlist secret
 # Step 2 - Join the VM to the domain using the cpoe-automation domain account
 #
 # Required extra-vars:
 #   manifest              Directory name under ansible/vars/ describing the target VMs
-#   domain_admin_value    Secret value for the cpoe-automation domain account (Step 2)
+#   domain_admin_value    Secret value for the cpoe-automation domain account (Step 2)  # pragma: allowlist secret
 #
 # Optional extra-vars:
 #   dry_run               true -> preview only, no changes applied  (default: false)
 #   force_rejoin          true -> forces disjoin before join (default: false; use with caution)
 #
-# Required environment variables (injected by the workflow):
-#   DELINEA_BASE_URL      Delinea Secret Server base URL
-#   DELINEA_USERNAME      Service account used to authenticate to Delinea
-#   DELINEA_VALUE         Secret value for the Delinea service account
-#   DELINEA_SECRET_ID     Numeric ID of the SE-Admin secret  (preferred)
-#   DELINEA_SECRET_PATH   Name/path search term              (fallback when ID not set)
+# Required environment variables (set by workflow's fetch_delinea_multi_vm.py script):
+#   winrm_value_{target_vm_name_lowercase}    Per-VM SE-Admin password from Delinea  # pragma: allowlist secret
 #
 # Required manifest keys:
 #   vms[*].target_vm_name                   Target hostname for each VM (must match current hostname)
+#   vms[*].vm_winrm_connect_hostname        Hostname used to resolve Delinea secret
+#   vms[*].vm_winrm_username                WinRM username (typically se-admin)
 #   domainNameSetup.domain                  AD domain FQDN  (e.g. dtenet.com)
 #   domainNameSetup.domain_admin_username   cpoe-automation domain account
 #   domainNameSetup.domain_ou_path          (Optional) OU path for the computer object
@@ -33,30 +32,7 @@
   connection: local
   gather_facts: false
 
-  vars:
-    ss_url_raw:         "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
-    ss_username_raw:    "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
-    ss_value:           "{{ lookup('ansible.builtin.env', 'DELINEA_VALUE', default='') }}"
-    ss_secret_id_raw:   "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
-    ss_secret_path_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_PATH', default='') }}"
-    ss_url:         "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
-    ss_username:    "{{ (ss_username_raw | trim) if (ss_username_raw | trim | length > 0) else 'SVC_VM_Migration' }}"
-    ss_secret_id:   "{{ ss_secret_id_raw | replace('\\n', '') | replace('\\r', '') | trim }}"
-    ss_secret_path: "{{ (ss_secret_path_raw | trim) if (ss_secret_path_raw | trim | length > 0) else 'SE-Admin' }}"
-
   pre_tasks:
-
-    - name: "Validate: DELINEA_VALUE is set"
-      ansible.builtin.assert:
-        that: ss_value | length > 0
-        fail_msg: "DELINEA_VALUE environment variable is missing or empty."
-
-    - name: "Validate: Delinea URL and at least one secret reference are set"
-      ansible.builtin.assert:
-        that:
-          - ss_url | trim | length > 0
-          - (ss_secret_id | length > 0) or (ss_secret_path | trim | length > 0)
-        fail_msg: "DELINEA_BASE_URL is empty, or neither DELINEA_SECRET_ID nor DELINEA_SECRET_PATH is set."
 
     - name: "Validate: manifest extra-var is provided"
       ansible.builtin.assert:
@@ -66,103 +42,15 @@
     - name: "Validate: domain_admin_value is provided"
       ansible.builtin.assert:
         that: domain_admin_value is defined and domain_admin_value | length > 0
-        fail_msg: "The 'domain_admin_value' extra-var is required for domain join (Step 4)."
+        fail_msg: "The 'domain_admin_value' extra-var is required for domain join (Step 2)."  # pragma: allowlist secret
       no_log: true
 
-    - name: "Debug: Delinea connection config (non-sensitive)"
+    - name: "Info: Per-VM WinRM passwords pre-fetched"  # pragma: allowlist secret
       ansible.builtin.debug:
         msg: >-
-          Connecting to Delinea at {{ ss_url }} as {{ ss_username }}.
-          Secret ref: {{ 'ID=' ~ ss_secret_id if ss_secret_id | length > 0 else 'Path=' ~ ss_secret_path }}
-
-    # ── Step 1: Fetch SE-Admin value from Delinea Secret Server ──
-    - name: "Step 1: Fetch SE-Admin value from Delinea Secret Server"
-      block:
-
-        - name: "Step 1a: Set Delinea connection parameters"
-          ansible.builtin.set_fact:
-            delinea_conn_params:
-              base_url: "{{ ss_url }}"
-              username: "{{ ss_username }}"
-              password: "{{ ss_value }}"  # pragma: allowlist secret
-          when: ss_secret_id | length > 0
-          no_log: true
-
-        - name: "Step 1a: Fetch secret by numeric ID"
-          ansible.builtin.set_fact:
-            delinea_secret: >
-              {{ lookup(
-                'delinea.platform_secretserver.tss',
-                ss_secret_id | int,
-                base_url=delinea_conn_params.base_url,
-                username=delinea_conn_params.username,
-                password=delinea_conn_params.password  # pragma: allowlist secret
-              ) }}
-          when: ss_secret_id | length > 0
-          no_log: true
-
-        - name: "Step 1b: Set Delinea connection parameters for path lookup"
-          ansible.builtin.set_fact:
-            delinea_conn_params:
-              base_url: "{{ ss_url }}"
-              username: "{{ ss_username }}"
-              password: "{{ ss_value }}"  # pragma: allowlist secret
-              secret_path: "{{ ss_secret_path }}"
-          when: ss_secret_id | length == 0
-          no_log: true
-
-        - name: "Step 1b: Fetch secret by path (fallback when DELINEA_SECRET_ID is not set)"
-          ansible.builtin.set_fact:
-            delinea_secret: >  # pragma: allowlist secret
-              {{ lookup(
-                'delinea.platform_secretserver.tss',
-                0,
-                secret_path=delinea_conn_params.secret_path,
-                base_url=delinea_conn_params.base_url,
-                username=delinea_conn_params.username,
-                password=delinea_conn_params.password  # pragma: allowlist secret
-              ) }}
-          when: ss_secret_id | length == 0
-          no_log: true
-
-        - name: "Step 1c: Extract SE-Admin value from retrieved secret"
-          ansible.builtin.set_fact:
-            winrm_value: >
-              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['se-password'] }}  # pragma: allowlist secret
-          no_log: true
-
-        - name: "Step 1d: Audit log — value retrieved (non-sensitive)"
-          ansible.builtin.debug:
-            msg: >
-              [AUDIT] SE-Admin value retrieved from Delinea.
-              ref={{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
-              url={{ ss_url }} user={{ ss_username }}
-
-      rescue:
-        # Catches: server not found, DNS failure, network error,
-        #          bad configuration, secret not found, unexpected API error
-        - name: "Step 1 FAILED: could not retrieve SE-Admin value from Delinea"
-          ansible.builtin.fail:
-            msg: |
-              ERROR: Step 1 failed - could not retrieve SE-Admin value from Delinea Secret Server.
-
-              Common causes:
-                - Server not found / DNS resolution failure -> {{ ss_url }} unreachable
-                - Network connectivity issue between the runner and Delinea
-                - Invalid service-account configuration -> check DELINEA_USERNAME / DELINEA_VALUE
-                - Secret not found -> check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
-                - Unexpected Delinea API error -> review Delinea audit logs
-
-              Configuration:
-                URL       : {{ ss_url }}
-                Config user : {{ ss_username }}
-                Secret ref: {{ 'id=' ~ ss_secret_id if ss_secret_id | length > 0 else 'path=' ~ ss_secret_path }}
-
-              Remediation:
-                1. Confirm the runner can reach {{ ss_url }}  (e.g. curl -I {{ ss_url }})
-                2. Confirm DELINEA_USERNAME / DELINEA_VALUE are correct in GitHub Secrets
-                3. Confirm the secret exists and the service account has read permission
-                4. Check Delinea audit logs for the failed access attempt
+          [INFO] Per-VM WinRM passwords were pre-fetched from Delinea by the workflow.  # pragma: allowlist secret
+          Environment variables: winrm_value_{target_vm_name_lowercase}  # pragma: allowlist secret
+          The win-domain-join role will automatically resolve these per VM.
 
   # Step 2: handled by the win-domain-join role
   #   join.yml → domain join using cpoe-automation domain account

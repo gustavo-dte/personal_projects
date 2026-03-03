@@ -3,36 +3,48 @@
 """
 resolve_delinea_secret_id.py
 ============================
-Resolves the numeric Delinea Secret Server secret ID for the SE-Admin account
-and writes it to GITHUB_ENV so subsequent workflow steps can use it.
+Resolves Delinea Secret Server secrets for SE-Admin accounts and writes them to GITHUB_ENV.
+
+Supports two modes:
+  1. Single-VM mode (LEGACY): Resolves one secret ID using DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE
+  2. Multi-VM mode (DEFAULT): Loads manifest, resolves per-VM passwords from Delinea  # pragma: allowlist secret
 
 Exits with code 1 on:
   - Missing Delinea credentials
-  - Neither DELINEA_SECRET_PATH nor DELINEA_SECRET_MACHINE is set
+  - Multi-VM: Missing MANIFEST env var
+  - Multi-VM: Cannot load manifest YAML
+  - Single-VM: Neither DELINEA_SECRET_PATH nor DELINEA_SECRET_MACHINE is set
   - DELINEA_SECRET_MACHINE set without DELINEA_SECRET_NAME or DELINEA_SECRET_ACCOUNT
   - No records returned by the Delinea API
   - No secret matched the applied filters
   - Multiple secrets matched and cannot be disambiguated
 
 Exits with code 0 on:
-  - Secret ID successfully resolved and written to GITHUB_ENV
+  - Secret ID/passwords successfully resolved and written to GITHUB_ENV  # pragma: allowlist secret
 
 Resolution strategy (in order):
-  1. Exact name match against DELINEA_SECRET_PATH
+  1. Exact name match against DELINEA_SECRET_PATH or constructed FQDN\\Account pattern
   2. Machine-based filtering using DELINEA_SECRET_MACHINE + NAME/ACCOUNT
 
 Environment variables read:
+  MANIFEST                (Multi-VM mode) Manifest directory name under ansible/vars/
   DELINEA_BASE_URL        Base URL of the Delinea Secret Server instance
   DELINEA_USERNAME        Service account used to authenticate  # pragma: allowlist secret
-  DELINEA_VALUE           Value for the service account
-  DELINEA_SECRET_PATH     Name / path search term (used as search seed and exact-match target)
-  DELINEA_SECRET_MACHINE  (Optional) Machine FQDN to narrow matching
+  DELINEA_PASSWORD        Password for the service account (multi-VM mode)  # pragma: allowlist secret
+  DELINEA_VALUE           Value for the service account (single-VM legacy mode)
+  DELINEA_DOMAIN_SUFFIX   Domain suffix to append to hostnames (default: .dtenet.com)
+  DELINEA_SECRET_PATH     (Single-VM) Name / path search term
+  DELINEA_SECRET_MACHINE  (Single-VM) Machine FQDN to narrow matching
   DELINEA_SECRET_NAME     (Optional) Secret name filter (preferred over ACCOUNT)
   DELINEA_SECRET_ACCOUNT  (Optional) Account name filter (fallback if NAME not set)
   GITHUB_ENV              Path to the GitHub Actions env file (set automatically by the runner)
 
 Usage:
-  python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+  # Multi-VM mode (reads manifest)
+  MANIFEST=domain_join_test python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+  
+  # Single-VM mode (legacy - backward compatible)
+  DELINEA_SECRET_PATH="path" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 """
 
 import logging
@@ -40,10 +52,16 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
 from requests.exceptions import HTTPError, RequestException
+
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -90,6 +108,9 @@ class Config:
     secret_name_filter: str
     account_filter: str
     github_env: Optional[str]
+    manifest: str
+    domain_suffix: str
+    multi_vm_mode: bool
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -104,20 +125,27 @@ class Config:
         """
         base_url = _env("DELINEA_BASE_URL").rstrip("/")
         username = _env("DELINEA_USERNAME")
-        value = _env("DELINEA_VALUE")
+        
+        # Support both DELINEA_PASSWORD (new) and DELINEA_VALUE (legacy)  # pragma: allowlist secret
+        value = _env("DELINEA_PASSWORD") or _env("DELINEA_VALUE")  # pragma: allowlist secret
 
         if not all([base_url, username, value]):
             raise ConfigurationError(
                 "Missing Delinea configuration — set DELINEA_BASE_URL, "  # pragma: allowlist secret
-                "DELINEA_USERNAME, and DELINEA_VALUE"
+                "DELINEA_USERNAME, and DELINEA_PASSWORD (or DELINEA_VALUE)"  # pragma: allowlist secret
             )
 
+        manifest = _env("MANIFEST")
+        multi_vm_mode = bool(manifest)
+        
+        # Single-VM mode validation (backward compatible)
         search_text = _env("DELINEA_SECRET_PATH")
         machine_filter = _env("DELINEA_SECRET_MACHINE").lower()
 
-        if not search_text and not machine_filter:
+        if not multi_vm_mode and not search_text and not machine_filter:
             raise ConfigurationError(
-                "No search criteria — set DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE"
+                "No search criteria — set MANIFEST for multi-VM mode, or "
+                "set DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE for single-VM mode"
             )
 
         return cls(
@@ -128,10 +156,10 @@ class Config:
             machine_filter=machine_filter,
             secret_name_filter=_env("DELINEA_SECRET_NAME").lower(),
             account_filter=_env("DELINEA_SECRET_ACCOUNT").lower(),
-            # os.getenv used directly here — _env() returns "" for unset vars,
-            # but github_env must be None (not "") when absent so callers can
-            # distinguish "not in Actions" from "set to empty string".
             github_env=os.getenv("GITHUB_ENV"),
+            manifest=manifest,
+            domain_suffix=_env("DELINEA_DOMAIN_SUFFIX") or ".dtenet.com",
+            multi_vm_mode=multi_vm_mode,
         )
 
 
@@ -304,6 +332,27 @@ def _fetch_detail(
 
     result: Dict[str, Any] = resp.json()
     return result
+
+
+def _extract_password(detail: Dict[str, Any]) -> str:  # pragma: allowlist secret
+    """Extract the password field value from a secret detail response.  # pragma: allowlist secret
+
+    Args:
+        detail: Full secret detail dict as returned by _fetch_detail.
+
+    Returns:
+        The password string.  # pragma: allowlist secret
+
+    Raises:
+        DelineaError: If no password field is found.  # pragma: allowlist secret
+    """
+    items: List[Dict[str, Any]] = detail.get("items") or []
+    password = _item_val(items, "password")  # pragma: allowlist secret
+    
+    if not password:  # pragma: allowlist secret
+        raise DelineaError("No password field found in secret")  # pragma: allowlist secret
+    
+    return password  # pragma: allowlist secret
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +562,189 @@ def resolve(cfg: Config) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Multi-VM mode
+# ---------------------------------------------------------------------------
+
+
+def _load_manifest(manifest_name: str) -> Dict[str, Any]:
+    """Load and parse the manifest YAML file.
+
+    Args:
+        manifest_name: Directory name under ansible/vars/ (e.g., 'domain_join_test')
+
+    Returns:
+        Parsed manifest dict.
+
+    Raises:
+        ConfigurationError: If PyYAML is not installed or manifest cannot be loaded.
+    """
+    if yaml is None:
+        raise ConfigurationError(
+            "PyYAML is required for multi-VM mode. Install: pip install PyYAML"
+        )
+
+    manifest_path = Path("ansible/vars") / manifest_name / "manifest.yml"
+    
+    if not manifest_path.exists():
+        raise ConfigurationError(
+            "Manifest file not found: %s" % manifest_path
+        )
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except Exception as ex:
+        raise ConfigurationError(
+            "Failed to load manifest %s: %s" % (manifest_path, ex)
+        ) from ex
+
+
+def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
+    """Resolve passwords for all VMs in the manifest and write to GITHUB_ENV.  # pragma: allowlist secret
+
+    Args:
+        cfg: Configuration with manifest and Delinea credentials.
+
+    Raises:
+        ConfigurationError: If manifest loading fails.
+        DelineaError: If password resolution fails for any VM.  # pragma: allowlist secret
+    """
+    log.info("[Multi-VM Mode] Loading manifest: %s", cfg.manifest)
+    manifest = _load_manifest(cfg.manifest)
+    
+    vms = manifest.get("vms") or []
+    if not vms:
+        raise ConfigurationError(
+            "No VMs found in manifest: %s" % cfg.manifest
+        )
+
+    log.info("[Multi-VM Mode] Found %d VM(s) in manifest", len(vms))
+    
+    # Acquire token once and reuse for all VMs
+    token = _acquire_token(cfg.base_url, cfg.username, cfg.value)
+    auth: Dict[str, str] = {"Authorization": "Bearer %s" % token}
+    
+    success_count = 0
+    
+    for idx, vm in enumerate(vms, start=1):
+        target_vm_name = vm.get("target_vm_name", "")
+        vm_hostname = vm.get("vm_winrm_connect_hostname", "")
+        vm_username = vm.get("vm_winrm_username", "")
+        
+        if not all([target_vm_name, vm_hostname, vm_username]):
+            log.warning(
+                "[VM %d/%d] Skipping - missing required fields (target_vm_name, vm_winrm_connect_hostname, vm_winrm_username)",
+                idx, len(vms)
+            )
+            continue
+        
+        log.info(
+            "[VM %d/%d] Processing: %s (hostname=%s, username=%s)",
+            idx, len(vms), target_vm_name, vm_hostname, vm_username
+        )
+        
+        try:
+            # Build FQDN: hostname + domain_suffix
+            machine_fqdn = (vm_hostname + cfg.domain_suffix).lower()
+            account_name = vm_username.lower()
+            
+            log.info(
+                "[VM %d/%d] Searching Delinea: %s\\%s",
+                idx, len(vms), machine_fqdn, account_name
+            )
+            
+            # Search Delinea for this VM's secret
+            records = _search_secrets(cfg.base_url, auth, machine_fqdn)
+            
+            if not records:
+                raise DelineaError(
+                    "No records returned for machine: %s" % machine_fqdn
+                )
+            
+            # Strategy 1: Match by name pattern "FQDN\\Account"
+            secret_id = None
+            search_pattern = "%s\\%s" % (machine_fqdn, account_name)
+            
+            for rec in records:
+                rec_name = str(rec.get("name") or "").strip().lower()
+                if rec_name == search_pattern:
+                    secret_id = rec.get("id")
+                    log.info(
+                        "[VM %d/%d] Matched by name: %s (ID=%s)",
+                        idx, len(vms), rec_name, secret_id
+                    )
+                    break
+            
+            # Strategy 2: Match by items (machine + username fields)
+            if not secret_id:
+                for rec in records:
+                    rec_id = rec.get("id")
+                    if not rec_id:
+                        continue
+                    
+                    try:
+                        detail = _fetch_detail(cfg.base_url, auth, rec_id)
+                        items = detail.get("items") or []
+                        
+                        if _matches_by_items(items, machine_fqdn, account_name):
+                            secret_id = rec_id
+                            log.info(
+                                "[VM %d/%d] Matched by items: ID=%s",
+                                idx, len(vms), secret_id
+                            )
+                            break
+                    except DelineaError as ex:
+                        log.warning(
+                            "[VM %d/%d] Failed to fetch details for ID=%s: %s",
+                            idx, len(vms), rec_id, ex
+                        )
+                        continue
+            
+            if not secret_id:
+                raise DelineaError(
+                    "No matching secret found for %s\\%s" % (machine_fqdn, account_name)
+                )
+            
+            # Fetch full details to extract password  # pragma: allowlist secret
+            detail = _fetch_detail(cfg.base_url, auth, int(secret_id))
+            password = _extract_password(detail)  # pragma: allowlist secret
+            
+            # Mask password in logs  # pragma: allowlist secret
+            print("::add-mask::%s" % password)  # pragma: allowlist secret
+            
+            # Write per-VM environment variable: winrm_value_{target_vm_name_lowercase}  # pragma: allowlist secret
+            env_var_name = "winrm_value_%s" % target_vm_name.lower()  # pragma: allowlist secret
+            _write_github_env(cfg.github_env, env_var_name, password)  # pragma: allowlist secret
+            
+            log.info(
+                "[VM %d/%d] ✓ Password written to: %s",  # pragma: allowlist secret
+                idx, len(vms), env_var_name
+            )
+            success_count += 1
+            
+        except (DelineaError, ConfigurationError) as ex:
+            log.error(
+                "[VM %d/%d] ✗ Failed to resolve password for %s: %s",  # pragma: allowlist secret
+                idx, len(vms), target_vm_name, ex
+            )
+            # Continue processing other VMs instead of failing completely
+            continue
+    
+    if success_count == 0:
+        raise DelineaError(
+            "Failed to resolve passwords for all VMs in manifest"  # pragma: allowlist secret
+        )
+    
+    log.info(
+        "[Multi-VM Mode] ✓ Successfully resolved %d/%d VM password(s)",  # pragma: allowlist secret
+        success_count, len(vms)
+    )
+    
+    # Write success indicator
+    _write_github_env(cfg.github_env, "DELINEA_FETCH_SUCCESS", "true")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -520,8 +752,16 @@ def resolve(cfg: Config) -> str:
 def main() -> None:
     try:
         cfg = Config.from_env()
-        secret_id = resolve(cfg)
-        _write_github_env(cfg.github_env, "DELINEA_SECRET_ID", secret_id)
+        
+        if cfg.multi_vm_mode:
+            # Multi-VM mode: Load manifest and resolve passwords for all VMs  # pragma: allowlist secret
+            _resolve_multi_vm(cfg)
+        else:
+            # Single-VM mode (legacy): Resolve secret ID only
+            secret_id = resolve(cfg)
+            _write_github_env(cfg.github_env, "DELINEA_SECRET_ID", secret_id)
+            log.info("[Single-VM Mode] ✓ DELINEA_SECRET_ID=%s", secret_id)
+            
     except ConfigurationError as ex:
         log.error("Configuration error: %s", ex)
         sys.exit(1)
