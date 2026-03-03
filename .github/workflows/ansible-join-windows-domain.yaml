@@ -62,11 +62,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install python-tss-sdk PyYAML requests
-        shell: bash
-
-      - name: Upgrade Ansible to required version
-        run: pip install --upgrade 'ansible>=2.15.0'
+          pip install -r requirements.txt
         shell: bash
 
       - name: Install Delinea Platform Secret Server Ansible Collection
