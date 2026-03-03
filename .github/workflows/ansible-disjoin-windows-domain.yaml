@@ -9,7 +9,7 @@ name: Ansible-Disjoin-Windows-Domain
 #
 # Required GitHub Secrets:
 #   DELINEA_USERNAME          Service account that authenticates to Delinea
-#   DELINEA_VALUE             Secret value for the Delinea service account
+#   DELINEA_PASSWORD          Secret value for the Delinea service account  # pragma: allowlist secret
 #   AZURE_TENANT_ID           Azure tenant for managed-identity login
 #   VM_MIGRATE_MI_CLIENT_ID   Client ID of the user-assigned managed identity
 #
@@ -53,9 +53,9 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
-      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
+      DELINEA_BASE_URL: ${{ secrets.DELINEA_BASE_URL != '' && secrets.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
-      DELINEA_VALUE: ${{ secrets.DELINEA_VALUE }}
+      DELINEA_VALUE: ${{ secrets.DELINEA_PASSWORD }}  # pragma: allowlist secret
       DELINEA_SECRET_ID: ${{ vars.DELINEA_SECRET_ID }}
       DELINEA_SECRET_PATH: ${{ vars.DELINEA_SECRET_PATH != '' && vars.DELINEA_SECRET_PATH || 'SE-Admin' }}
       DELINEA_SECRET_MACHINE: ${{ vars.DELINEA_SECRET_MACHINE }}
@@ -91,9 +91,9 @@ jobs:
           echo "========================================================"
           echo "  Dry run         : ${{ inputs.dry_run }}"
           echo ""
-          echo "  Step 1 - Fetch SE-Admin password from Delinea"
+          echo "  Step 1 - Fetch SE-Admin value from Delinea"  # pragma: allowlist secret
           echo "           URL             : ${DELINEA_BASE_URL}"
-          echo "           Auth user       : ${DELINEA_USERNAME}"
+          echo "           Config user     : ${DELINEA_USERNAME}"
           echo "           Machine filter  : ${DELINEA_SECRET_MACHINE:-<not set>}"
           echo "           Account filter  : ${DELINEA_SECRET_ACCOUNT}"
           echo ""
