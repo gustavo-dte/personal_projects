@@ -9,7 +9,7 @@ azure_migrate_project_name: azure-migrate-automation-private
 azure_migrate_project_resource_group: DTE-CU-PROD-VMMIGRATESR-RG
 azure_migrate_subscription_id: 002b1877-7a58-4845-bc1f-37a6588bb95d
 target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
-target_resource_group: rg-cu-CorpApps-MigrationTest-Dev
+target_resource_group: RG-CU-CORPAPPS-MIGRATIONTEST-DEV
 os_disk_scsi_id: scsi0:0
 
 # Azure Update Manager / Patch scheduling defaults

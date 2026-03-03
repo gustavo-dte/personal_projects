@@ -119,6 +119,11 @@ jobs:
               print("[ERROR] target_resource_group not found in manifest")
               sys.exit(1)
           
+          target_subscription_id = manifest.get('target_subscription_id', '')
+          if target_subscription_id:
+              print(f"[INFO] Setting Azure subscription context: {target_subscription_id}")
+              subprocess.run(['az', 'account', 'set', '--subscription', target_subscription_id], check=True)
+          
           for vm in vms:
               # name = Azure VM resource name
               # target_vm_name = Windows hostname (may differ, used for WinRM after firewall configured)
@@ -230,6 +235,11 @@ jobs:
               print("[ERROR] target_resource_group not found in manifest")
               sys.exit(1)
           
+          target_subscription_id = manifest.get('target_subscription_id', '')
+          if target_subscription_id:
+              print(f"[INFO] Setting Azure subscription context: {target_subscription_id}")
+              subprocess.run(['az', 'account', 'set', '--subscription', target_subscription_id], check=True)
+          
           # PowerShell script to configure Windows Firewall for WinRM
           ps_script = """
           # Enable WinRM through Windows Firewall
@@ -269,6 +279,17 @@ jobs:
                   continue
               
               print(f"[INFO] Configuring Windows Firewall on Azure VM: {azure_vm_name} (target hostname: {target_vm_name})")
+              
+              # Verify VM exists
+              verify_result = subprocess.run(
+                  ['az', 'vm', 'show', '--resource-group', target_rg, '--name', azure_vm_name, '--query', 'name', '-o', 'tsv'],
+                  capture_output=True, text=True, check=False
+              )
+              
+              if verify_result.returncode != 0:
+                  print(f"[ERROR] VM '{azure_vm_name}' not found in resource group '{target_rg}'")
+                  print(f"        Verify VM exists with: az vm show --resource-group {target_rg} --name {azure_vm_name}")
+                  sys.exit(1)
               
               # Use Azure Run Command to execute PowerShell on VM (works regardless of firewall/NSG)
               result = subprocess.run(
