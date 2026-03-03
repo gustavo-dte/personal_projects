@@ -1,6 +1,6 @@
 {
     "apiVersion": "2025-04-01",
-    "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/RG-CU-CORPAPPS-MIGRATIONTEST-DEV/providers/Microsoft.Compute/virtualMachines/VMCUWINWEBD10",
+    "id": "/subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-MigrationTest-Dev/providers/Microsoft.Compute/virtualMachines/VMCUWINWEBD10",
     "name": "VMCUWINWEBD10",
     "type": "microsoft.compute/virtualmachines",
     "location": "centralus",
@@ -20,7 +20,7 @@
         "hardwareProfile": {
             "vmSize": "Standard_D2s_v5"
         },
-        "provisioningState": "Updating",
+        "provisioningState": "Succeeded",
         "vmId": "62db196f-0a46-4687-8d8b-eebae16a23c3",
         "storageProfile": {
             "osDisk": {
@@ -69,5 +69,5 @@
         "licenseType": "Windows_Server",
         "timeCreated": "2026-03-03T12:54:41.496Z"
     },
-    "etag": "\"2\""
+    "etag": "\"4\""
 }
