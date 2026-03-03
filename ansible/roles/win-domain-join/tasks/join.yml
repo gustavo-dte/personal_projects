@@ -132,7 +132,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_value'] }}"  # pragma: allowlist secret
 
         - name: "Step 2: Create AD computer object for {{ target_vm_name }}"
@@ -152,7 +152,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: precreate_computer_result
           no_log: true
@@ -314,7 +314,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: domain_status_after_disjoin
           when:
@@ -374,7 +374,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: reboot_after_disjoin
           failed_when: false
@@ -421,15 +421,15 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           when:
             - domain_disjoin_result is defined
             - not (domain_disjoin_result.skipped | default(false) | bool)
             - not (domain_disjoin_result.failed | default(false) | bool)
 
-        # Re-probe hostname after disjoin reboot so rename uses the correct credential format
-        - name: 'Step 3: Re-probe hostname after disjoin reboot (.\SE-Admin)'
+        # Update hostname info after disjoin reboot for rename step
+        - name: 'Step 3: Re-probe hostname after disjoin reboot (.\\Administrator)'
           ansible.windows.win_shell: |
             $env:COMPUTERNAME
           delegate_to: "{{ target_vm_host }}"
@@ -441,7 +441,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: post_disjoin_hostname_result
           retries: 6
@@ -462,11 +462,6 @@
           when:
             - post_disjoin_hostname_result is defined
             - not (skip_hostname_setup | default(false) | bool)
-
-        - name: "Step 3: Update formatted_winrm_username to post-disjoin hostname"
-          ansible.builtin.set_fact:
-            formatted_winrm_username: "{{ current_hostname_info.old_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
-          when: not (skip_hostname_setup | default(false) | bool)
 
     # ── Step 4: Rename hostname ───────────────────────────────────────────────
     # Skipped entirely when skip_hostname_setup=true.
@@ -655,19 +650,12 @@
             - not (hostname_after_reboot.skipped | default(false) | bool)
             - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
 
-        # Restore formatted_winrm_username after rename
-        # Preserve the successful authentication method (.\SE-Admin or hostname\SE-Admin)
-        - name: "Step 4: Preserve successful WinRM username format after rename"
-          ansible.builtin.set_fact:
-            formatted_winrm_username: "{{ hostvars['localhost']['winrm_successful_username'] }}"
-          when:
-            - hostname_after_reboot is defined
-            - not (hostname_after_reboot.skipped | default(false) | bool)
-            - (hostname_after_reboot.stdout | default('') | trim | upper) == (target_vm_name | upper)
-            - hostvars['localhost']['winrm_successful_username'] is defined
+        # Note: SE-Admin is only used for disjoin. Join uses .\Administrator
+        # No need to preserve winrm_successful_username for join operations
 
     # ── Step 5: Join domain ───────────────────────────────────────────────────
-    # Uses cpoe domain account credentials. SE-Admin is not involved here.
+    # Uses .\Administrator for WinRM + cpoe domain account credentials for join.
+    # SE-Admin is only used for disjoin operations.
 
     - name: "Step 5: Join '{{ target_vm_name }}' to domain '{{ domain_name }}'"
       block:
@@ -689,7 +677,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: domain_join_result
           no_log: true
@@ -823,7 +811,7 @@
             ansible_winrm_server_cert_validation: ignore
             ansible_winrm_connection_timeout: 60
             ansible_winrm_read_timeout: 70
-            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: reboot_result
           failed_when: false
@@ -882,18 +870,6 @@
             - (az_restart_succeeded | default(false))
               or (winrm_reboot_succeeded | default(false))
 
-        - name: "Step 5: Update formatted_winrm_username to SE-Admin@new hostname after join reboot"
-          ansible.builtin.set_fact:
-            formatted_winrm_username: "{{ target_vm_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
-          when:
-            - domain_join_result is defined
-            - not (domain_join_result.failed | default(false) | bool)
-            - effective_reboot_required | default(false) | bool
-            - restart_on_success | bool
-            - wait_for_reboot | bool
-            - (az_restart_succeeded | default(false))
-              or (winrm_reboot_succeeded | default(false))
-
     # ── Step 6: Verify domain membership ─────────────────────────────────────
 
     - name: "Step 6: Verify domain membership after reboot"
@@ -917,7 +893,7 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
-        ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+        ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
         ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
       register: post_reboot_domain_status_raw
       when:
@@ -1015,7 +991,7 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
-        ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+        ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
         ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
       changed_when: false
       when: name_check_failed | default(false) | bool

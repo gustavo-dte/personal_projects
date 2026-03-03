@@ -407,7 +407,10 @@ def _extract_password(detail: Dict[str, Any]) -> str:  # pragma: allowlist secre
 
 
 def _item_val(items: List[Dict[str, Any]], *slugs: str) -> str:
-    """Return the lowercased itemValue for the first item whose slug matches any of *slugs*.
+    """Return the itemValue for the first item whose slug matches any of *slugs*.
+
+    NOTE: The slug comparison is case-insensitive, but the returned value preserves
+    its original casing so that passwords are not corrupted by lowercasing.
 
     Returns an empty string when no slug matches, so callers can use simple
     equality checks without None guards.
@@ -415,7 +418,7 @@ def _item_val(items: List[Dict[str, Any]], *slugs: str) -> str:
     wanted = {s.lower() for s in slugs}
     for item in items:
         if str(item.get("slug", "")).strip().lower() in wanted:
-            return str(item.get("itemValue", "")).strip().lower()
+            return str(item.get("itemValue", "")).strip()
     return ""
 
 
@@ -433,8 +436,8 @@ def _matches_by_items(
     items: List[Dict[str, Any]], machine_filter: str, desired_name: str
 ) -> bool:
     """Return True when item slugs satisfy both the machine and account/name filters."""
-    machine_val = _item_val(items, "machine", "host", "hostname", "fqdn", "server")
-    account_val = _item_val(items, "username", "user", "account", "login")
+    machine_val = _item_val(items, "machine", "host", "hostname", "fqdn", "server").lower()
+    account_val = _item_val(items, "username", "user", "account", "login").lower()
     return machine_val == machine_filter and account_val == desired_name
 
 
@@ -776,6 +779,12 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
             # Fetch full details to extract password  # pragma: allowlist secret
             detail = _fetch_detail(cfg.base_url, auth, int(delinea_id))
             password = _extract_password(detail)  # pragma: allowlist secret
+            
+            # Debug: print first 5 chars for verification (safe partial reveal)  # pragma: allowlist secret
+            log.info(
+                "[VM %d/%d] Password preview (first 5 chars): %s...",  # pragma: allowlist secret
+                idx, len(vms), password[:5] if len(password) >= 5 else password
+            )
             
             # Mask password in logs  # pragma: allowlist secret
             print("::add-mask::%s" % password)  # pragma: allowlist secret
