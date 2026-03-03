@@ -1,6 +1,10 @@
-# TODO: Code is not tested yet, needs to be tested against actual vms.
+# TODO: Code is not tested yet, needs to be tested against actual VMs.
 
 name: Ansible-Windows-VM-Enable-Monitoring-Dynatrace
+
+# Enables Dynatrace monitoring on Azure VMs.
+# Calls: ansible/roles/python_scripts/read_manifest_value.py to read subscription ID from manifest
+# Calls: ansible/playbooks/enable-dynatrace-for-vm.yml
 
 on:
   workflow_dispatch:
@@ -34,34 +38,48 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
+
     steps:
-      - name: 📥 Checkout repository
+      - name: "Checkout repository"
         uses: actions/checkout@v4
 
-      - name: 🔐 Azure Login with user-assigned managed identity
+      - name: "Install PyYAML for manifest parsing"
+        run: pip install PyYAML
+
+      - name: "Validate manifest"
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      - name: "Read subscription ID from manifest"
+        if: ${{ !inputs.dry_run }}
+        id: manifest_sub
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+          MANIFEST_KEY: target_subscription_id
+        run: |
+          SUB_ID=$(python3 ansible/roles/python_scripts/read_manifest_value.py)
+          echo "subscription_id=${SUB_ID}" >> $GITHUB_OUTPUT
+          echo "[INFO] Target subscription: ${SUB_ID}"
+
+      - name: "Azure Login"
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          allow-no-subscriptions: true
+          subscription-id: ${{ steps.manifest_sub.outputs.subscription_id }}
           enable-AzPSSession: true
 
-      - name: 📊 Display workflow configuration
+      - name: "Display configuration"
         run: |
-          echo "✅ Workflow configuration:"
-          echo "📄 Using manifest: ${{ inputs.manifest }}"
-          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
-          echo "🗂️  Output directory: ansible/output"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "🧪 Running in DRY RUN mode - Azure lookups will be skipped"
-          fi
+          echo "[INFO] Manifest  : ${{ inputs.manifest }}"
+          echo "[INFO] Dry run   : ${{ inputs.dry_run }}"
 
-      - name: 🧱 Prepare extra vars file to maintain variable types (secrets injected)
+      - name: "Prepare extra vars"
         run: |
-          # Write extra-vars JSON for Ansible. Secrets are injected from GitHub Actions secrets
-          cat > ansible_extra_vars.json <<'JSON'
+          cat > ansible_extra_vars.json <<JSON
           {
             "manifest": "${{ inputs.manifest }}",
             "dry_run": ${{ inputs.dry_run }},
@@ -69,7 +87,10 @@ jobs:
           }
           JSON
 
-      - name: Run playbook - enable dynatrace
+      - name: "Run playbook - enable Dynatrace"
         run: |
           ansible-playbook ansible/playbooks/enable-dynatrace-for-vm.yml \
-          -e @ansible_extra_vars.json
+            -e @ansible_extra_vars.json
+          rc=$?
+          rm -f ansible_extra_vars.json
+          exit $rc

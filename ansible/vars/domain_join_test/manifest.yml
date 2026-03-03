@@ -131,7 +131,7 @@ vms:
     vm_winrm_port: 5985   # WinRM HTTP port (Windows Firewall configured via Azure Run Command)
     vm_winrm_username: se-admin  # WinRM user for VM; password from Delinea
     vm_winrm_connect_hostname: dca-tst1856  # Current Windows hostname inside VM (from VMware source)
-    vm_delinea_secret_id: 3459  # Delinea secret ID to use (bypasses search)
+    # vm_delinea_secret_id: 3459  # Delinea secret ID to use (bypasses search)
     description: "Server created to test migration pipeline"
     target_vm_size: Standard_D2s_v5
     target_license_type: WindowsServer

@@ -1,10 +1,12 @@
 name: Ansible-Disjoin-Windows-Domain
 
 # Disjoins Windows VMs from Active Directory and moves them to WORKGROUP.
+# Calls: ansible/roles/python_scripts/resolve_delinea_secret_id.py for per-VM password retrieval  # pragma: allowlist secret
+# Calls: ansible/roles/python_scripts/read_manifest_value.py to read subscription ID from manifest
 # Calls: ansible/playbooks/disjoin-windows-domain.yaml
 #
 # Steps executed:
-#   1 - Fetch SE-Admin password from Delinea Secret Server
+#   1 - Fetch SE-Admin password from Delinea Secret Server (per-VM multi-VM mode)
 #   2 - Connect to each Azure VM as SE-Admin (WinRM) and disjoin from domain -> WORKGROUP
 #
 # Required GitHub Secrets:
@@ -14,11 +16,8 @@ name: Ansible-Disjoin-Windows-Domain
 #   VM_MIGRATE_MI_CLIENT_ID   Client ID of the user-assigned managed identity
 #
 # Required GitHub Variables (vars.*):
-#   DELINEA_BASE_URL          Delinea Secret Server base URL (or defaults to https://dte.secretservercloud.com)
-#   DELINEA_SECRET_ID         Numeric ID of the SE-Admin secret  (preferred)
-#   DELINEA_SECRET_PATH       Name/path search term              (fallback when ID not set)
-#   DELINEA_SECRET_MACHINE    (Optional) Machine FQDN to narrow secret matching
-#   DELINEA_SECRET_ACCOUNT    (Optional) Account filter - defaults to SE-Admin
+#   DELINEA_BASE_URL          Delinea Secret Server base URL (defaults to https://dte.secretservercloud.com)
+#   DELINEA_DOMAIN_SUFFIX     Domain suffix appended to hostnames (defaults to .dtenet.com)
 
 on:
   workflow_dispatch:
@@ -55,11 +54,8 @@ jobs:
       ANSIBLE_CONFIG: ansible/ansible.cfg
       DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
-      DELINEA_VALUE: ${{ secrets.DELINEA_PASSWORD }}  # pragma: allowlist secret
-      DELINEA_SECRET_ID: ${{ vars.DELINEA_SECRET_ID }}
-      DELINEA_SECRET_PATH: ${{ vars.DELINEA_SECRET_PATH != '' && vars.DELINEA_SECRET_PATH || 'SE-Admin' }}
-      DELINEA_SECRET_MACHINE: ${{ vars.DELINEA_SECRET_MACHINE }}
-      DELINEA_SECRET_ACCOUNT: ${{ vars.DELINEA_SECRET_ACCOUNT != '' && vars.DELINEA_SECRET_ACCOUNT || 'SE-Admin' }}
+      DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}  # pragma: allowlist secret
+      DELINEA_DOMAIN_SUFFIX: ${{ vars.DELINEA_DOMAIN_SUFFIX != '' && vars.DELINEA_DOMAIN_SUFFIX || '.dtenet.com' }}
 
     steps:
 
@@ -69,10 +65,24 @@ jobs:
       - name: "Setup Ansible environment"
         uses: ./.github/actions/setup-ansible-environment
 
+      - name: "Install PyYAML for manifest parsing"
+        run: pip install PyYAML
+
       - name: "Validate manifest"
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
+
+      - name: "Read subscription ID from manifest"
+        if: ${{ !inputs.dry_run }}
+        id: manifest_sub
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+          MANIFEST_KEY: target_subscription_id
+        run: |
+          SUB_ID=$(python3 ansible/roles/python_scripts/read_manifest_value.py)
+          echo "subscription_id=${SUB_ID}" >> $GITHUB_OUTPUT
+          echo "[INFO] Target subscription: ${SUB_ID}"
 
       - name: "Azure Login"
         if: ${{ !inputs.dry_run }}
@@ -81,7 +91,7 @@ jobs:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          allow-no-subscriptions: true
+          subscription-id: ${{ steps.manifest_sub.outputs.subscription_id }}
           enable-AzPSSession: true
 
       - name: "Display configuration"
@@ -91,11 +101,10 @@ jobs:
           echo "========================================================"
           echo "  Dry run         : ${{ inputs.dry_run }}"
           echo ""
-          echo "  Step 1 - Fetch SE-Admin value from Delinea"  # pragma: allowlist secret
+          echo "  Step 1 - Fetch per-VM SE-Admin values from Delinea (WinRM connectivity)"
           echo "           URL             : ${DELINEA_BASE_URL}"
           echo "           Config user     : ${DELINEA_USERNAME}"
-          echo "           Machine filter  : ${DELINEA_SECRET_MACHINE:-<not set>}"
-          echo "           Account filter  : ${DELINEA_SECRET_ACCOUNT}"
+          echo "           Domain suffix   : ${DELINEA_DOMAIN_SUFFIX}"
           echo ""
           echo "  Step 2 - Disjoin VM from domain -> WORKGROUP  [SE-Admin via WinRM]"
           echo "========================================================"
@@ -103,14 +112,17 @@ jobs:
             && echo "DRY RUN - no changes will be made." \
             || echo "LIVE RUN - changes will be applied."
 
-      - name: "Resolve Delinea secret ID"
-        shell: bash
+      - name: "Fetch WinRM passwords from Delinea for all VMs"  # pragma: allowlist secret
+        env:
+          MANIFEST: ${{ inputs.manifest }}
         run: |
-          if [ -n "${DELINEA_SECRET_ID}" ]; then
-            echo "DELINEA_SECRET_ID already set: ${DELINEA_SECRET_ID}"
-            exit 0
-          fi
+          echo "[INFO] Fetching Delinea secrets for VMs in manifest: ${MANIFEST}"
           python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+          if [ $? -ne 0 ]; then
+            echo "[FAIL] Failed to fetch Delinea secrets"
+            exit 1
+          fi
+          echo "[OK] Delinea secrets fetched successfully"
 
       - name: "Prepare Ansible extra-vars"
         env:
@@ -126,6 +138,9 @@ jobs:
       - name: "Run disjoin playbook"
         run: |
           mkdir -p ansible/logs
+          set -a
+          source <(cat $GITHUB_ENV | sed 's/^/export /')
+          set +a
           ansible-playbook ansible/playbooks/disjoin-windows-domain.yaml \
             -e @ansible_extra_vars.json 2>&1 | tee ansible/logs/disjoin.log
           rc=${PIPESTATUS[0]}

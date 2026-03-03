@@ -4,6 +4,9 @@ name: Ansible-Join-Windows-Domain
 # When force_rejoin=true (default): Disjoins -> Renames -> Rejoins (recommended for migrated VMs with stale trust)
 # When force_rejoin=false: Only joins if VM is not already in the domain
 # Calls: ansible/roles/python_scripts/resolve_delinea_secret_id.py for per-VM password retrieval  # pragma: allowlist secret
+# Calls: ansible/roles/python_scripts/ensure_nsg_winrm_rule.py to ensure NSG WinRM rule exists
+# Calls: ansible/roles/python_scripts/configure_winrm_firewall.py to configure Windows Firewall via Azure Run Command
+# Calls: ansible/roles/python_scripts/read_manifest_value.py to read subscription ID from manifest
 # Calls: ansible/playbooks/join-windows-domain.yaml
 #
 # Steps executed when force_rejoin=true:
@@ -84,6 +87,17 @@ jobs:
         with:
           manifest: ${{ inputs.manifest }}
 
+      - name: "Read subscription ID from manifest"
+        if: ${{ !inputs.dry_run }}
+        id: manifest_sub
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+          MANIFEST_KEY: target_subscription_id
+        run: |
+          SUB_ID=$(python3 ansible/roles/python_scripts/read_manifest_value.py)
+          echo "subscription_id=${SUB_ID}" >> $GITHUB_OUTPUT
+          echo "[INFO] Target subscription: ${SUB_ID}"
+
       - name: "Azure Login"
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
@@ -91,7 +105,7 @@ jobs:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          allow-no-subscriptions: true
+          subscription-id: ${{ steps.manifest_sub.outputs.subscription_id }}
           enable-AzPSSession: true
 
       - name: "Ensure WinRM NSG rule exists for VM connectivity"
@@ -100,112 +114,7 @@ jobs:
           MANIFEST: ${{ inputs.manifest }}
         run: |
           echo "[INFO] Checking WinRM NSG rules for VMs in manifest: ${MANIFEST}"
-          
-          # Load manifest to get VM details
-          python3 << 'EOF'
-          import yaml
-          import os
-          import subprocess
-          import sys
-          
-          manifest_path = f"ansible/vars/{os.environ['MANIFEST']}/manifest.yml"
-          with open(manifest_path, 'r') as f:
-              manifest = yaml.safe_load(f)
-          
-          vms = manifest.get('vms', [])
-          target_rg = manifest.get('target_resource_group', '')
-          
-          if not target_rg:
-              print("[ERROR] target_resource_group not found in manifest")
-              sys.exit(1)
-          
-          target_subscription_id = manifest.get('target_subscription_id', '')
-          if target_subscription_id:
-              print(f"[INFO] Setting Azure subscription context: {target_subscription_id}")
-              subprocess.run(['az', 'account', 'set', '--subscription', target_subscription_id], check=True)
-          
-          for vm in vms:
-              # name = Azure VM resource name
-              # target_vm_name = Windows hostname (may differ, used for WinRM after firewall configured)
-              azure_vm_name = vm.get('name', '')
-              target_vm_name = vm.get('target_vm_name', azure_vm_name)
-              
-              if not azure_vm_name:
-                  print("[WARN] VM has no 'name' field, skipping")
-                  continue
-              
-              print(f"[INFO] Checking NSG for Azure VM: {azure_vm_name} (target hostname: {target_vm_name})")
-              
-              # Get NIC name for VM
-              nic_result = subprocess.run(
-                  ['az', 'vm', 'nic', 'list', '--resource-group', target_rg, '--vm-name', azure_vm_name, '--query', '[0].id', '-o', 'tsv'],
-                  capture_output=True, text=True, check=False
-              )
-              
-              if nic_result.returncode != 0:
-                  print(f"[WARN] Could not get NIC for Azure VM {azure_vm_name}")
-                  continue
-              
-              nic_id = nic_result.stdout.strip()
-              if not nic_id:
-                  print(f"[WARN] No NIC found for Azure VM {azure_vm_name}")
-                  continue
-              
-              nic_name = nic_id.split('/')[-1]
-              
-              # Get NSG attached to NIC
-              nsg_result = subprocess.run(
-                  ['az', 'network', 'nic', 'show', '--ids', nic_id, '--query', 'networkSecurityGroup.id', '-o', 'tsv'],
-                  capture_output=True, text=True, check=False
-              )
-              
-              if nsg_result.returncode != 0:
-                  print(f"[WARN] Could not get NSG for NIC {nic_name}")
-                  continue
-              
-              nsg_id = nsg_result.stdout.strip()
-              if not nsg_id:
-                  print(f"[WARN] No NSG attached to NIC {nic_name}")
-                  continue
-              
-              nsg_name = nsg_id.split('/')[-1]
-              nsg_rg = nsg_id.split('/')[4]
-              
-              print(f"[INFO] Found NSG: {nsg_name} in RG: {nsg_rg}")
-              
-              # Check if WinRM rule exists
-              rule_check = subprocess.run(
-                  ['az', 'network', 'nsg', 'rule', 'show', '--resource-group', nsg_rg, '--nsg-name', nsg_name, '--name', 'allow-winrm'],
-                  capture_output=True, text=True, check=False
-              )
-              
-              if rule_check.returncode == 0:
-                  print(f"[OK] WinRM NSG rule already exists for Azure VM {azure_vm_name}")
-              else:
-                  print(f"[INFO] Creating WinRM HTTP NSG rule for Azure VM {azure_vm_name}")
-                  create_result = subprocess.run(
-                      [
-                          'az', 'network', 'nsg', 'rule', 'create',
-                          '--resource-group', nsg_rg,
-                          '--nsg-name', nsg_name,
-                          '--name', 'allow-winrm',
-                          '--priority', '1001',
-                          '--direction', 'Inbound',
-                          '--access', 'Allow',
-                          '--protocol', 'Tcp',
-                          '--destination-port-ranges', '5985',
-                          '--source-address-prefixes', '10.0.0.0/8',
-                          '--description', 'Allow WinRM HTTP from internal network for GitHub Actions runner'
-                      ],
-                      capture_output=True, text=True, check=False
-                  )
-                  
-                  if create_result.returncode == 0:
-                      print(f"[OK] WinRM NSG rule created for Azure VM {azure_vm_name}")
-                  else:
-                      print(f"[ERROR] Failed to create WinRM NSG rule for Azure VM {azure_vm_name}: {create_result.stderr}")
-                      sys.exit(1)
-          EOF
+          python3 ansible/roles/python_scripts/ensure_nsg_winrm_rule.py
 
       - name: "Configure Windows Firewall on VMs for WinRM (Azure Run Command)"
         if: ${{ !inputs.dry_run }}
@@ -213,169 +122,7 @@ jobs:
           MANIFEST: ${{ inputs.manifest }}
         run: |
           echo "[INFO] Configuring Windows Firewall on VMs to allow WinRM"
-          python3 << 'EOF'
-          import yaml, os, subprocess, sys, json, time
-          
-          manifest_path = f"ansible/vars/{os.environ['MANIFEST']}/manifest.yml"
-          
-          try:
-              with open(manifest_path, 'r') as f:
-                  manifest = yaml.safe_load(f)
-          except Exception as e:
-              print(f"[ERROR] Failed to load manifest: {e}")
-              sys.exit(1)
-          
-          vms = manifest.get('vms', [])
-          if not vms:
-              print("[WARNING] No VMs found in manifest")
-              sys.exit(0)
-          
-          target_rg = manifest.get('target_resource_group', '')
-          if not target_rg:
-              print("[ERROR] target_resource_group not found in manifest")
-              sys.exit(1)
-          
-          target_subscription_id = manifest.get('target_subscription_id', '')
-          if target_subscription_id:
-              print(f"[INFO] Setting Azure subscription context: {target_subscription_id}")
-              subprocess.run(['az', 'account', 'set', '--subscription', target_subscription_id], check=True)
-          
-          # PowerShell script to configure Windows Firewall for WinRM and RDP
-          ps_script = """
-          # Configure Windows Firewall to allow WinRM and RDP traffic
-          Write-Output "Configuring Windows Firewall rules for WinRM and RDP..."
-          
-          # Ensure firewall is enabled for all profiles
-          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
-          Write-Output "Windows Firewall is enabled"
-          
-          # Allow WinRM HTTP (port 5985) from any source
-          $winrmHttpRule = Get-NetFirewallRule -Name "WINRM-HTTP-In-TCP-Custom" -ErrorAction SilentlyContinue
-          if (-not $winrmHttpRule) {
-              New-NetFirewallRule -Name "WINRM-HTTP-In-TCP-Custom" `
-                                  -DisplayName "Windows Remote Management (HTTP-In) - Custom" `
-                                  -Enabled True `
-                                  -Direction Inbound `
-                                  -Protocol TCP `
-                                  -LocalPort 5985 `
-                                  -Action Allow `
-                                  -Profile Any
-              Write-Output "Created WinRM HTTP (5985) allow rule"
-          } else {
-              Set-NetFirewallRule -Name "WINRM-HTTP-In-TCP-Custom" -Enabled True -Action Allow
-              Write-Output "Enabled existing WinRM HTTP (5985) rule"
-          }
-          
-          # Allow WinRM HTTPS (port 5986) from any source
-          $winrmHttpsRule = Get-NetFirewallRule -Name "WINRM-HTTPS-In-TCP-Custom" -ErrorAction SilentlyContinue
-          if (-not $winrmHttpsRule) {
-              New-NetFirewallRule -Name "WINRM-HTTPS-In-TCP-Custom" `
-                                  -DisplayName "Windows Remote Management (HTTPS-In) - Custom" `
-                                  -Enabled True `
-                                  -Direction Inbound `
-                                  -Protocol TCP `
-                                  -LocalPort 5986 `
-                                  -Action Allow `
-                                  -Profile Any
-              Write-Output "Created WinRM HTTPS (5986) allow rule"
-          } else {
-              Set-NetFirewallRule -Name "WINRM-HTTPS-In-TCP-Custom" -Enabled True -Action Allow
-              Write-Output "Enabled existing WinRM HTTPS (5986) rule"
-          }
-          
-          # Allow RDP (port 3389) from any source
-          $rdpRule = Get-NetFirewallRule -Name "RDP-In-TCP-Custom" -ErrorAction SilentlyContinue
-          if (-not $rdpRule) {
-              New-NetFirewallRule -Name "RDP-In-TCP-Custom" `
-                                  -DisplayName "Remote Desktop (RDP-In) - Custom" `
-                                  -Enabled True `
-                                  -Direction Inbound `
-                                  -Protocol TCP `
-                                  -LocalPort 3389 `
-                                  -Action Allow `
-                                  -Profile Any
-              Write-Output "Created RDP (3389) allow rule"
-          } else {
-              Set-NetFirewallRule -Name "RDP-In-TCP-Custom" -Enabled True -Action Allow
-              Write-Output "Enabled existing RDP (3389) rule"
-          }
-          
-          # Enable default WinRM firewall rules (if they exist)
-          Enable-NetFirewallRule -DisplayGroup "Windows Remote Management" -ErrorAction SilentlyContinue
-          Write-Output "Enabled default WinRM firewall rules"
-          
-          # Enable default RDP firewall rules (if they exist)
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          Write-Output "Enabled default RDP firewall rules"
-          
-          # Ensure WinRM service is enabled and running
-          Set-Service -Name WinRM -StartupType Automatic -ErrorAction SilentlyContinue
-          Start-Service -Name WinRM -ErrorAction SilentlyContinue
-          Write-Output "WinRM service is running"
-          
-          # Configure WinRM to allow connections
-          Enable-PSRemoting -Force -SkipNetworkProfileCheck -ErrorAction SilentlyContinue
-          Write-Output "PSRemoting enabled"
-          
-          Write-Output "Windows Firewall configured successfully - WinRM and RDP traffic allowed"
-          """
-          
-          for vm in vms:
-              # name = Azure VM resource name
-              # target_vm_name = Windows hostname (may differ after rename)
-              azure_vm_name = vm.get('name', '')
-              target_vm_name = vm.get('target_vm_name', azure_vm_name)
-              
-              if not azure_vm_name:
-                  print("[WARN] VM has no 'name' field, skipping")
-                  continue
-              
-              print(f"[INFO] Configuring Windows Firewall on Azure VM: {azure_vm_name} (target hostname: {target_vm_name})")
-              
-              # Verify VM exists
-              verify_result = subprocess.run(
-                  ['az', 'vm', 'show', '--resource-group', target_rg, '--name', azure_vm_name, '--query', 'name', '-o', 'tsv'],
-                  capture_output=True, text=True, check=False
-              )
-              
-              if verify_result.returncode != 0:
-                  print(f"[ERROR] VM '{azure_vm_name}' not found in resource group '{target_rg}'")
-                  print(f"        Verify VM exists with: az vm show --resource-group {target_rg} --name {azure_vm_name}")
-                  sys.exit(1)
-              
-              # Use Azure Run Command to execute PowerShell on VM (works regardless of firewall/NSG)
-              result = subprocess.run(
-                  [
-                      'az', 'vm', 'run-command', 'invoke',
-                      '--resource-group', target_rg,
-                      '--name', azure_vm_name,
-                      '--command-id', 'RunPowerShellScript',
-                      '--scripts', ps_script
-                  ],
-                  capture_output=True, text=True, check=False
-              )
-              
-              if result.returncode == 0:
-                  print(f"[OK] Windows Firewall configured on Azure VM {azure_vm_name}")
-                  # Parse and display output
-                  try:
-                      output = json.loads(result.stdout)
-                      if 'value' in output and len(output['value']) > 0:
-                          messages = output['value'][0].get('message', '')
-                          if messages:
-                              print(f"     Output: {messages[:200]}")
-                  except:
-                      pass
-              else:
-                  print(f"[ERROR] Failed to configure Windows Firewall on Azure VM {azure_vm_name}")
-                  print(f"        {result.stderr[:300]}")
-                  sys.exit(1)
-              
-              # Small delay between VMs
-              time.sleep(2)
-          
-          print("[INFO] All VMs configured successfully")
-          EOF
+          python3 ansible/roles/python_scripts/configure_winrm_firewall.py
 
       - name: "Display configuration"
         run: |
@@ -446,22 +193,17 @@ jobs:
 
       - name: "Run join playbook"
         env:
-          # Inherit all environment variables from previous steps (including winrm_value_* from Python script)
-          # GitHub Actions automatically loads vars written to $GITHUB_ENV, but we need to ensure they're
-          # available in the ansible-playbook subprocess environment
           ANSIBLE_LOAD_CALLBACK_PLUGINS: "true"
         run: |
           mkdir -p ansible/logs
-          # Export all current environment variables so ansible-playbook inherits them
-          # Using set -a to auto-export all sourced variables
           set -a
           source <(cat $GITHUB_ENV | sed 's/^/export /')
           set +a
-          
+
           echo "=== Environment variables available to ansible-playbook ==="
           env | grep "^winrm_value_" | sed 's/=.*/=***MASKED***/' || echo "No winrm_value_* variables found"
           echo "==========================================================="
-          
+
           ansible-playbook ansible/playbooks/join-windows-domain.yaml \
             -e @ansible_extra_vars.json 2>&1 | tee ansible/logs/join.log
           rc=${PIPESTATUS[0]}
