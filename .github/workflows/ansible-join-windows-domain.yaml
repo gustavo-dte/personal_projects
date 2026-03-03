@@ -94,6 +94,105 @@ jobs:
           allow-no-subscriptions: true
           enable-AzPSSession: true
 
+      - name: "Ensure WinRM NSG rule exists for VM connectivity"
+        if: ${{ !inputs.dry_run }}
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          echo "[INFO] Checking WinRM NSG rules for VMs in manifest: ${MANIFEST}"
+          
+          # Load manifest to get VM details
+          python3 << 'EOF'
+          import yaml
+          import os
+          import subprocess
+          import sys
+          
+          manifest_path = f"ansible/vars/{os.environ['MANIFEST']}/manifest.yml"
+          with open(manifest_path, 'r') as f:
+              manifest = yaml.safe_load(f)
+          
+          vms = manifest.get('vms', [])
+          target_rg = manifest.get('target_resource_group', '')
+          
+          for vm in vms:
+              target_vm_name = vm.get('target_vm_name', '')
+              if not target_vm_name:
+                  continue
+              
+              print(f"[INFO] Checking NSG for VM: {target_vm_name}")
+              
+              # Get NIC name for VM
+              nic_result = subprocess.run(
+                  ['az', 'vm', 'nic', 'list', '--resource-group', target_rg, '--vm-name', target_vm_name, '--query', '[0].id', '-o', 'tsv'],
+                  capture_output=True, text=True, check=False
+              )
+              
+              if nic_result.returncode != 0:
+                  print(f"[WARN] Could not get NIC for {target_vm_name}")
+                  continue
+              
+              nic_id = nic_result.stdout.strip()
+              if not nic_id:
+                  print(f"[WARN] No NIC found for {target_vm_name}")
+                  continue
+              
+              nic_name = nic_id.split('/')[-1]
+              
+              # Get NSG attached to NIC
+              nsg_result = subprocess.run(
+                  ['az', 'network', 'nic', 'show', '--ids', nic_id, '--query', 'networkSecurityGroup.id', '-o', 'tsv'],
+                  capture_output=True, text=True, check=False
+              )
+              
+              if nsg_result.returncode != 0:
+                  print(f"[WARN] Could not get NSG for NIC {nic_name}")
+                  continue
+              
+              nsg_id = nsg_result.stdout.strip()
+              if not nsg_id:
+                  print(f"[WARN] No NSG attached to NIC {nic_name}")
+                  continue
+              
+              nsg_name = nsg_id.split('/')[-1]
+              nsg_rg = nsg_id.split('/')[4]
+              
+              print(f"[INFO] Found NSG: {nsg_name} in RG: {nsg_rg}")
+              
+              # Check if WinRM rule exists
+              rule_check = subprocess.run(
+                  ['az', 'network', 'nsg', 'rule', 'show', '--resource-group', nsg_rg, '--nsg-name', nsg_name, '--name', 'allow-winrm'],
+                  capture_output=True, text=True, check=False
+              )
+              
+              if rule_check.returncode == 0:
+                  print(f"[OK] WinRM NSG rule already exists for {target_vm_name}")
+              else:
+                  print(f"[INFO] Creating WinRM NSG rule for {target_vm_name}")
+                  create_result = subprocess.run(
+                      [
+                          'az', 'network', 'nsg', 'rule', 'create',
+                          '--resource-group', nsg_rg,
+                          '--nsg-name', nsg_name,
+                          '--name', 'allow-winrm',
+                          '--priority', '1001',
+                          '--direction', 'Inbound',
+                          '--access', 'Allow',
+                          '--protocol', 'Tcp',
+                          '--destination-port-ranges', '5985',
+                          '--source-address-prefixes', '10.0.0.0/8',
+                          '--description', 'Allow WinRM HTTP from internal network for GitHub Actions runner'
+                      ],
+                      capture_output=True, text=True, check=False
+                  )
+                  
+                  if create_result.returncode == 0:
+                      print(f"[OK] WinRM NSG rule created for {target_vm_name}")
+                  else:
+                      print(f"[ERROR] Failed to create WinRM NSG rule for {target_vm_name}: {create_result.stderr}")
+                      sys.exit(1)
+          EOF
+
       - name: "Display configuration"
         run: |
           echo "========================================================"
