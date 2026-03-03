@@ -115,6 +115,10 @@ jobs:
           vms = manifest.get('vms', [])
           target_rg = manifest.get('target_resource_group', '')
           
+          if not target_rg:
+              print("[ERROR] target_resource_group not found in manifest")
+              sys.exit(1)
+          
           for vm in vms:
               target_vm_name = vm.get('target_vm_name', '')
               if not target_vm_name:
@@ -216,6 +220,11 @@ jobs:
               print("[WARNING] No VMs found in manifest")
               sys.exit(0)
           
+          target_rg = manifest.get('target_resource_group', '')
+          if not target_rg:
+              print("[ERROR] target_resource_group not found in manifest")
+              sys.exit(1)
+          
           # PowerShell script to configure Windows Firewall for WinRM
           ps_script = """
           # Enable WinRM through Windows Firewall
@@ -246,7 +255,6 @@ jobs:
           
           for vm in vms:
               target_vm_name = vm.get('target_vm_name', vm.get('name'))
-              rg = manifest.get('azure', {}).get('resource_group_name', '')
               
               print(f"[INFO] Configuring Windows Firewall on VM: {target_vm_name}")
               
@@ -254,7 +262,7 @@ jobs:
               result = subprocess.run(
                   [
                       'az', 'vm', 'run-command', 'invoke',
-                      '--resource-group', rg,
+                      '--resource-group', target_rg,
                       '--name', target_vm_name,
                       '--command-id', 'RunPowerShellScript',
                       '--scripts', ps_script
