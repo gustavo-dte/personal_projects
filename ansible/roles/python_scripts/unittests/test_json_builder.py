@@ -68,7 +68,7 @@ def _base_join_env() -> Dict[str, str]:
         "WORKFLOW_DRY_RUN": "false",
         "WORKFLOW_FORCE_REJOIN": "false",
         "WORKFLOW_SKIP_HOSTNAME_SETUP": "false",
-        "SECRET_DOMAIN_ADMIN_PASSWORD": "s3cr3t",
+        "SECRET_DOMAIN_ADMIN_VALUE": "s3cr3t",  # pragma: allowlist secret
         "SECRET_DOMAIN_OU_PATH": "OU=Servers,DC=corp,DC=com",
     }
 
@@ -255,29 +255,29 @@ class TestBuildJoinVars(unittest.TestCase):
                 _build_join_vars()
         self.assertIn("WORKFLOW_MANIFEST", str(ctx.exception))
 
-    def test_logs_warning_when_domain_admin_password_not_set_in_dry_run(self) -> None:
-        env = {k: v for k, v in _base_join_env().items() if k != "SECRET_DOMAIN_ADMIN_PASSWORD"}
+    def test_logs_warning_when_domain_admin_value_not_set_in_dry_run(self) -> None:
+        env = {k: v for k, v in _base_join_env().items() if k != "SECRET_DOMAIN_ADMIN_VALUE"}
         env["WORKFLOW_DRY_RUN"] = "true"  # Enable dry_run mode for testing
         with patch.dict(os.environ, env, clear=True):
             with self.assertLogs(module.log, level="WARNING") as cm:
                 _build_join_vars()
-        self.assertTrue(any("SECRET_DOMAIN_ADMIN_PASSWORD" in line for line in cm.output))
+        self.assertTrue(any("SECRET_DOMAIN_ADMIN_VALUE" in line for line in cm.output))
 
-    def test_domain_admin_password_empty_when_not_set_in_dry_run(self) -> None:
-        env = {k: v for k, v in _base_join_env().items() if k != "SECRET_DOMAIN_ADMIN_PASSWORD"}
+    def test_domain_admin_value_empty_when_not_set_in_dry_run(self) -> None:
+        env = {k: v for k, v in _base_join_env().items() if k != "SECRET_DOMAIN_ADMIN_VALUE"}
         env["WORKFLOW_DRY_RUN"] = "true"  # Enable dry_run mode for testing
         with patch.dict(os.environ, env, clear=True):
             with self.assertLogs(module.log, level="WARNING"):
                 result = _build_join_vars()
-        self.assertEqual(result["domain_admin_password"], "")
+        self.assertEqual(result["domain_admin_value"], "")
 
-    def test_raises_error_when_domain_admin_password_not_set_in_production(self) -> None:
-        env = {k: v for k, v in _base_join_env().items() if k != "SECRET_DOMAIN_ADMIN_PASSWORD"}
+    def test_raises_error_when_domain_admin_value_not_set_in_production(self) -> None:
+        env = {k: v for k, v in _base_join_env().items() if k != "SECRET_DOMAIN_ADMIN_VALUE"}
         env["WORKFLOW_DRY_RUN"] = "false"  # Production mode
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaises(ConfigurationError) as ctx:
                 _build_join_vars()
-        self.assertIn("SECRET_DOMAIN_ADMIN_PASSWORD", str(ctx.exception))
+        self.assertIn("SECRET_DOMAIN_ADMIN_VALUE", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------

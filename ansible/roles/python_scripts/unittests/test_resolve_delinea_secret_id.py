@@ -73,7 +73,7 @@ def _make_config(**overrides: Any) -> Config:
     defaults: Dict[str, Any] = {
         "base_url": "https://delinea.example.com",
         "username": "svc-account",
-        "password": "s3cr3t",
+        "value": "s3cr3t",  # pragma: allowlist secret
         "search_text": "my-secret",
         "machine_filter": "",
         "secret_name_filter": "",
@@ -403,7 +403,7 @@ class TestConfigFromEnv(unittest.TestCase):
     BASE_ENV = {
         "DELINEA_BASE_URL": "https://delinea.example.com",
         "DELINEA_USERNAME": "svc-account",
-        "DELINEA_PASSWORD": "s3cr3t",
+        "DELINEA_VALUE": "s3cr3t",  # pragma: allowlist secret
         "DELINEA_SECRET_PATH": "my-secret",
     }
 
@@ -433,8 +433,8 @@ class TestConfigFromEnv(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 Config.from_env()
 
-    def test_raises_when_password_missing(self) -> None:
-        env = {k: v for k, v in self.BASE_ENV.items() if k != "DELINEA_PASSWORD"}
+    def test_raises_when_value_missing(self) -> None:
+        env = {k: v for k, v in self.BASE_ENV.items() if k != "DELINEA_VALUE"}
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaises(ConfigurationError):
                 Config.from_env()

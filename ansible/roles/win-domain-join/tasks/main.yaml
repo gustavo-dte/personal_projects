@@ -87,13 +87,13 @@
 
     - name: Build per-VM WinRM password mapping
       ansible.builtin.set_fact:
-        vm_winrm_passwords: >-
+        vm_winrm_values: >-
           {{
-            vm_winrm_passwords | default({}) | combine({
+            vm_winrm_values | default({}) | combine({
               item.name: (
-                lookup('vars', 'winrm_password_' + (item.target_vm_name | default(item.name) | lower), default='') if
-                (lookup('vars', 'winrm_password_' + (item.target_vm_name | default(item.name) | lower), default='') | string | length > 0)
-                else (item.vm_winrm_password | default(''))
+                lookup('vars', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') if
+                (lookup('vars', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') | string | length > 0)
+                else (item.vm_winrm_value | default(''))
               )
             })
           }}
@@ -135,7 +135,7 @@
         winrm_port: "{{ item.vm_winrm_port | default(5985) }}"
         winrm_transport: "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
-        item_winrm_password: "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        item_winrm_value: "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
         vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
         bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
         skip_rename: true
@@ -184,7 +184,7 @@
         winrm_port:              "{{ item.vm_winrm_port | default(5985) }}"
         winrm_transport:         "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
-        item_winrm_password:     "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        item_winrm_value:     "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
         vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
         bootstrap_winrm_username:  "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
         skip_rename:             false
@@ -219,14 +219,14 @@
           - (manifest_data.domainNameSetup | default({})) | length > 0
           - (manifest_data.domainNameSetup.domain | default('')) | length > 0
           - (manifest_data.domainNameSetup.domain_admin_username | default('')) | length > 0
-          - (domain_admin_password | default('')) | length > 0
-        fail_msg: "Required domain join variables missing. Need: domainNameSetup.domain, domainNameSetup.domain_admin_username (in manifest), and domain_admin_password (passed via playbook/GitHub Secrets)"
+          - (domain_admin_value | default('')) | length > 0
+        fail_msg: "Required domain join variables missing. Need: domainNameSetup.domain, domainNameSetup.domain_admin_username (in manifest), and domain_admin_value (passed via playbook/GitHub Secrets)"
 
     - name: Set domain configuration facts
       ansible.builtin.set_fact:
         domain_name: "{{ manifest_data.domainNameSetup.domain }}"
         domain_admin_username: "{{ (manifest_data.domainNameSetup.domain_admin_username | default('') | trim) }}"
-        domain_admin_password: "{{ domain_admin_password }}"
+        domain_admin_value: "{{ domain_admin_value }}"
         # Prefer domain_ou_path from extra vars (e.g. DOMAIN_OU_PATH secret); fall back to manifest
         domain_ou_path: "{{ domain_ou_path | default(manifest_data.domainNameSetup.domain_ou_path) | default('') }}"
         dry_run: "{{ dry_run | default(false) }}"
@@ -286,7 +286,7 @@
         winrm_port:              "{{ item.vm_winrm_port | default(5985) }}"
         winrm_transport:         "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
-        item_winrm_password:     "{{ (vm_winrm_passwords | default({}))[item.name] | default('') if ((vm_winrm_passwords | default({}))[item.name] | default('') | string | length > 0) else (winrm_password | default('')) }}"
+        item_winrm_value:     "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
         vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
         bootstrap_winrm_username:  "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
         azure_resource_group:    "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"

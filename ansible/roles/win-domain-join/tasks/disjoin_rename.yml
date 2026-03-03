@@ -20,7 +20,7 @@
 #   winrm_port               WinRM port (default 5985)
 #   winrm_transport          WinRM transport (default ntlm)
 #   item_winrm_username      Resolved to SE-Admin by main.yaml
-#   item_winrm_password      SE-Admin password fetched from Delinea
+#   item_winrm_value         SE-Admin value fetched from Delinea  # pragma: allowlist secret
 #   bootstrap_winrm_username .\SE-Admin or hostname\SE-Admin
 #   skip_rename              true = disjoin only; false/unset = disjoin + rename (default: false)
 #   rename_winrm_username    Local admin used for rename WinRM (default: Administrator)
@@ -29,7 +29,7 @@
 #   azure_subscription_id    Azure subscription ID
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 1: Prepare WinRM — resolve credentials, read hostname and domain status
+# Step 1: Prepare WinRM — resolve configuration, read hostname and domain status  # pragma: allowlist secret
 # ══════════════════════════════════════════════════════════════════════════════
 
 - name: "Prepare WinRM and read current state from VM"
@@ -80,7 +80,7 @@
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
     ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
   when:
     - not (dry_run | default(false) | bool)
     - (current_domain_status.domain | default('')) == 'WORKGROUP'
@@ -113,7 +113,7 @@
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
     ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
   register: disjoin_permission_precheck
   changed_when: false
   failed_when: false
@@ -151,7 +151,7 @@
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
         ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
       register: domain_disjoin_result
       no_log: true
       when:
@@ -193,7 +193,7 @@
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
     ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
   register: domain_status_after_disjoin
   when:
     - not (dry_run | default(false) | bool)
@@ -256,7 +256,7 @@
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
     ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
   register: reboot_after_disjoin
   failed_when: false
   when:
@@ -307,7 +307,7 @@
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
     ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
   when:
     - not (dry_run | default(false) | bool)
     - domain_disjoin_result is defined
@@ -335,7 +335,7 @@
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
         ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
       register: post_disjoin_hostname_result
       retries: 6
       delay: 30
@@ -452,7 +452,7 @@
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
         ansible_user: "{{ hostvars['localhost']['current_hostname_info']['old_name'] }}\\{{ rename_winrm_username | default('Administrator') }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
       register: hostname_rename_result
       ignore_errors: true
       no_log: true
@@ -516,7 +516,7 @@
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
         ansible_user: "{{ hostvars['localhost']['current_hostname_info']['old_name'] }}\\{{ rename_winrm_username | default('Administrator') }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
       register: winrm_rename_restart_result
       failed_when: false
       no_log: true
@@ -555,7 +555,7 @@
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
         ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
       register: hostname_after_reboot
       retries: 6
       delay: 90

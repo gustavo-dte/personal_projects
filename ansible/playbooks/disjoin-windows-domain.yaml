@@ -78,7 +78,7 @@
             delinea_conn_params:
               base_url: "{{ ss_url }}"
               username: "{{ ss_username }}"
-              password: "{{ ss_value }}"
+              password: "{{ ss_value }}"  # pragma: allowlist secret
           when: ss_secret_id | length > 0
           no_log: true
 
@@ -90,7 +90,7 @@
                 ss_secret_id | int,
                 base_url=delinea_conn_params.base_url,
                 username=delinea_conn_params.username,
-                password=delinea_conn_params.password
+                password=delinea_conn_params.password  # pragma: allowlist secret
               ) }}
           when: ss_secret_id | length > 0
           no_log: true
@@ -100,21 +100,21 @@
             delinea_conn_params:
               base_url: "{{ ss_url }}"
               username: "{{ ss_username }}"
-              password: "{{ ss_value }}"
+              password: "{{ ss_value }}"  # pragma: allowlist secret
               secret_path: "{{ ss_secret_path }}"
           when: ss_secret_id | length == 0
           no_log: true
 
         - name: "Step 1b: Fetch secret by path (fallback when DELINEA_SECRET_ID is not set)"
           ansible.builtin.set_fact:
-            delinea_secret: >
+            delinea_secret: >  # pragma: allowlist secret
               {{ lookup(
                 'delinea.platform_secretserver.tss',
                 0,
                 secret_path=delinea_conn_params.secret_path,
                 base_url=delinea_conn_params.base_url,
                 username=delinea_conn_params.username,
-                password=delinea_conn_params.password
+                password=delinea_conn_params.password  # pragma: allowlist secret
               ) }}
           when: ss_secret_id | length == 0
           no_log: true
@@ -122,7 +122,7 @@
         - name: "Step 1c: Extract SE-Admin value from retrieved secret"
           ansible.builtin.set_fact:
             winrm_value: >
-              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['se-password'] }}
+              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['se-password'] }}  # pragma: allowlist secret
           no_log: true
 
         - name: "Step 1d: Audit log — value retrieved (non-sensitive)"
