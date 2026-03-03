@@ -50,7 +50,7 @@ domainNameSetup:
 
 vms:
   - name: dca-dev7048                    # List key (e.g. current hostname or logical name)
-    target_vm_name: vmcuwinwebd06       # Name after rename and for domain join
+    target_vm_name: vmcuwinwebd01       # Name after rename and for domain join
     vm_ip: 10.0.0.10                    # Or omit and use Azure lookup via target_vm_name
     vm_winrm_port: 5985                 # 5985 (HTTP) or 5986 (HTTPS)
     vm_winrm_username: cpoeadmin         # Username only; role uses computername\username
@@ -65,16 +65,16 @@ vms:
 - **Pre-create AD object (when `domain_ou_path` is set)**: Creates the AD computer object for the target name in the target OU *before* disjoin. Stops the playbook if creation or verification fails. Used to avoid delete-by-name (which could affect the source VM). Pre-create runs only when `domain_ou_path` is set in the manifest.
 - **Domain migration flow**: (Pre-create if `domain_ou_path` set) → Disjoin (if VM is in a domain and not already in target) → Rename (if hostname ≠ target) → Join. Step 2 (Rename) and Step 3 (Join) run only when hostname or domain differ from target (or `force_rejoin=true`).
 - **WinRM and firewall**: The role turns off the Windows Firewall **Public** profile early so WinRM remains reachable when the NIC is in Public profile; when the VM is in WORKGROUP it also turns off **Private** (before rename/join).
-- **Azure Run Command fallback**: When the initial WinRM authentication completely fails, the role invokes Azure Run Command to disable firewall profiles so WinRM can recover.
 - **Idempotent**: Skips Disjoin if already in WORKGROUP or target domain (unless `force_rejoin=true`). Skips Rename if hostname already matches target. Skips Join when already in target domain (unless `force_rejoin=true`).
 - **Reboot handling**: Reboots after disjoin (when disjoin ran), after rename (when rename ran), and after join; configurable via `restart_on_success`. For both **post-disjoin** and **post-join** reboots on Azure VMs, uses **Azure CLI restart as primary** (more reliable); falls back to `win_reboot` (WinRM) when Azure is skipped or fails. Waits for WinRM to come back after each reboot.
 - **Verification**: Verifies domain membership after the final reboot and displays final domain/computer name.
 - **Dry-run**: When `dry_run: true`, sets placeholder facts and shows what would be done without connecting to VMs.
-- **Disjoin-only mode**: The role still supports `disjoin_only: true` internally (routes to `disjoin_vm.yaml`), but there is no separate workflow for it. If needed, pass `disjoin_only=true` as an extra var to the join workflow.
+- **Disjoin-only mode**: When `disjoin_only: true`, the playbook only disjoins VMs from the domain (move to WORKGROUP) using the same manifest; use the disjoin playbook/workflow for that path.
 
 ### Playbook & CI
 
 - **Join playbook**: `ansible/playbooks/join-windows-domain.yaml` — full flow (pre-create → disjoin → rename → join). Pass `manifest=...` and `domain_admin_password` (e.g. via GitHub Secrets).
+- **Disjoin-only playbook**: `ansible/playbooks/disjoin-windows-domain.yaml` — passes `disjoin_only: true` so the role only disjoins VMs (move to WORKGROUP). Use when you need to disjoin without rename/join.
 - **Workflow**: `.github/workflows/ansible-join-windows-domain.yaml` — GitHub Actions workflow for the join playbook. Requires repository secrets: `DOMAIN_ADMIN_PASSWORD`, and `WINRM_PASSWORD` (optional: `WINRM_USERNAME`, default `SE-Admin`).  # pragma: allowlist secret
 
 ## Parameters
@@ -94,10 +94,11 @@ vms:
 
 **Playbook variables:**
 - `dry_run` (default: `false`) - If `true`, shows what would be done without making changes
-- `force_rejoin` (default: `true`) - Disjoin → Rename → Rejoin cycle. Recommended for migrated VMs with stale domain trust. Set to `false` to skip disjoin when already in target domain
+- `force_rejoin` (default: `false`) - If `true`, forces disjoin and rejoin even if VM is already in the target domain
 - `use_azure_restart` (default: `true`) - If `true`, uses Azure CLI `az vm restart` as primary for post-disjoin and post-join reboots (more reliable for Azure VMs); falls back to WinRM `win_reboot` when Azure is skipped or fails. Set to `false` to use WinRM only.
 - `winrm_username` (default: `SE-Admin`) - Local Windows admin username for WinRM authentication
 - `winrm_password` (default: empty) - Local Windows admin password for WinRM authentication
+
 **Per-VM manifest variables:**
 - `target_vm_name` - Computer name after rename and for domain join (required when `name` is a logical/key different from final name)
 - `vm_winrm_port` (default: `5985`) - WinRM port (5985 HTTP or 5986 HTTPS)
@@ -117,14 +118,14 @@ ansible-playbook ansible/playbooks/join-windows-domain.yaml \
   -e "dry_run=false"
 ```
 
-### Skip Disjoin (When Already in Target Domain)
+### Force Rejoin (Testing)
 
 ```bash
-# Skip disjoin when VM is already in correct domain (e.g. re-running after success)
+# Force disjoin and rejoin even if already in target domain
 ansible-playbook ansible/playbooks/join-windows-domain.yaml \
   -e "manifest=test_vm_migration" \
   -e "dry_run=false" \
-  -e "force_rejoin=false"
+  -e "force_rejoin=true"
 ```
 
 ### With Command-Line Credentials
@@ -151,8 +152,8 @@ ansible-playbook ansible/playbooks/join-windows-domain.yaml \
 
 - **Pre-create flow**: The role creates the AD computer object in the target OU *before* disjoining. This avoids delete-by-name (which could kick the source VM off the domain). Set `domain_ou_path` in the manifest (e.g. `OU=Azure,OU=DCA,OU=Servers,DC=dtenet,DC=com` for dtenet.com/Servers/DCA/Azure). The playbook stops if create or verify fails.
 - **"The account already exists"**: The pre-create flow creates a new object with the target name. Delete-by-name is disabled to protect the source VM. If you hit "account already exists", the object may exist from a previous run—ensure it is in the correct OU or coordinate with the AD team.
-- **Already in domain**: `force_rejoin=true` (the default) ensures a clean disjoin → rename → rejoin cycle for migrated VMs. Set `force_rejoin=false` to skip disjoin when the VM is already in the correct domain
-- **Idempotency**: When `force_rejoin=false`, the role checks domain membership before joining and skips if already in target domain
+- **Already in domain**: Use `force_rejoin=true` to force disjoin and rejoin
+- **Idempotency**: The role checks domain membership before joining. If a server is already in the target domain, it will skip the join operation (unless `force_rejoin=true`)
 - **Domain credentials**: For security, use Azure Key Vault (via managed identity in GitHub Actions) or Ansible Vault for storing domain admin credentials
 - **OU path format**: Must be in distinguished name format, leaf-to-root. For dtenet.com/Servers/DCA/Azure use `OU=Azure,OU=DCA,OU=Servers,DC=dtenet,DC=com`.
 
@@ -167,22 +168,6 @@ ansible-playbook ansible/playbooks/join-windows-domain.yaml \
 - The role reboots after disjoin (when disjoin ran), after rename (when rename ran), and after join. Both post-disjoin and post-join reboots use Azure CLI restart as primary when `use_azure_restart` is true. Controlled via `restart_on_success` (default `true`) and `wait_for_reboot` (default `true`).
 - After each reboot it waits for WinRM to come back; after the final (post-join) reboot it verifies domain membership.
 - **Post-rename reboot**: After the rename reboot, the role waits an extra `post_rename_reboot_settle_seconds` (default 90) before the first WinRM connection, and retries the hostname verification up to 3 times with 60s delay. This prevents "credentials rejected" when Windows is not fully ready to accept auth immediately after the hostname change.
-
-### Partial Failure and Recovery
-
-The role processes each VM independently. A failure on one VM does not prevent the remaining VMs from being processed.
-
-| Failure point | VM state after failure | Recovery action |
-|---|---|---|
-| Pre-create AD object fails | VM is unchanged (still in source domain). | Fix OU path / AD permissions and re-run. |
-| Disjoin succeeds, rename fails | VM is in WORKGROUP with original hostname. | Re-run with `force_rejoin=true` (default). |
-| Rename succeeds, join fails | VM is in WORKGROUP with new hostname. | Re-run. Existing pre-created AD object is reused. |
-| Join succeeds, post-join reboot fails | VM is in the target domain but has not rebooted. | Manually reboot or re-run (role is idempotent). |
-| WinRM unreachable during join | Indeterminate; join may or may not have completed. | Check domain membership manually, then re-run with `force_rejoin=true`. |
-
-**There is no automatic rollback.** Each re-run is idempotent: the role detects the current state and resumes from the correct step. When `force_rejoin=true` (the default), the role always cycles through disjoin, rename, and join regardless of current domain membership, ensuring a clean end state.
-
-After a partial failure, check the **per-VM summary** at the end of the Ansible output to identify which VMs succeeded and which need attention.
 
 ### Testing Workflow
 

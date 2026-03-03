@@ -1,0 +1,1056 @@
+---
+# join.yml
+#
+# Per-VM orchestrator for the full domain join workflow.
+# All join logic consolidated into a single file.
+#
+# Called from main.yaml for the domain join path.
+#
+# Steps:
+#   Step 1 — prepare_winrm     : connect as SE-Admin, read hostname and domain status
+#   Step 2 — Pre-create        : create AD computer object in target OU (when domain_ou_path set)
+#   Step 3 — Disjoin           : Remove-Computer → WORKGROUP → verify → reboot → wait
+#                                (only when needs_disjoin is true)
+#   Step 4 — Rename            : Azure RunCommand (primary) or WinRM fallback
+#                                (only when hostname differs from target)
+#   Step 5 — Join              : microsoft.ad.membership → domain → reboot → wait
+#   Step 6 — Verify membership : confirm PartOfDomain after reboot
+#   Step 7 — Verify DNS        : TCP reachability by IP and name from runner
+#
+# Required vars (set per-VM by the loop in main.yaml):
+#   target_vm_name           Target hostname from manifest
+#   target_vm_host           IP or FQDN
+#   winrm_port               WinRM port (default 5985)
+#   winrm_transport          WinRM transport (default ntlm)
+#   item_winrm_username      Resolved to SE-Admin by main.yaml
+#   item_winrm_value         SE-Admin value fetched from Delinea  # pragma: allowlist secret
+#   bootstrap_winrm_username .\SE-Admin or hostname\SE-Admin
+#   rename_winrm_username    Local admin used for rename WinRM (default: Administrator)
+#   domain_name              AD domain FQDN
+#   domain_admin_username    cpoe domain account (from manifest domainNameSetup)
+#   domain_admin_value       cpoe value (from GitHub Secret)  # pragma: allowlist secret
+#   domain_ou_path           Target OU path (optional)
+#   azure_resource_group     Azure resource group
+#   azure_vm_name            Azure VM name (defaults to target_vm_name)
+#   azure_subscription_id    Azure subscription ID
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 1: Prepare WinRM — resolve configuration, read hostname and domain status  # pragma: allowlist secret
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: "Prepare WinRM and validate connectivity"
+  ansible.builtin.include_tasks: prepare_winrm.yaml
+
+# Compute workflow conditions once so every subsequent block can reference them cleanly
+- name: "Set domain migration workflow conditions"
+  ansible.builtin.set_fact:
+    force_rejoin_requested: "{{ force_rejoin | default(false) | bool }}"
+    domain_differs_from_target: "{{ (current_domain_status.domain | default('')) != domain_name }}"
+    hostname_differs_from_target: >-
+      {{ (current_hostname_info is defined
+          and current_hostname_info.old_name is defined
+          and target_vm_name is defined
+          and (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
+         ) | default(false) }}
+    needs_disjoin: >-
+      {{ (force_rejoin | default(false) | bool)
+         or (((current_domain_status.domain | default('')) != domain_name)
+             and ((current_domain_status.domain | default('')) not in ['', 'WORKGROUP']))
+         or ((current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
+             and (current_domain_status.domain | default('')) not in ['', 'WORKGROUP']) }}
+    domain_migration_needed: >-
+      {{ (force_rejoin | default(false) | bool)
+         or ((current_domain_status.domain | default('')) != domain_name)
+         or ((current_hostname_info is defined
+              and current_hostname_info.old_name is defined
+              and target_vm_name is defined)
+             and (current_hostname_info.old_name | default('')) != target_vm_name) }}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Dry-run short-circuit
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: "[DRY RUN] Preview domain migration for {{ target_vm_name }}"
+  ansible.builtin.debug:
+    msg: |
+      [DRY RUN] Domain migration workflow for {{ target_vm_host }}:
+      {% if force_rejoin_requested %}
+        Force rejoin enabled — will disjoin and rejoin even if already in target domain.
+      {% endif %}
+      {% if needs_disjoin %}
+        Step 3: Would disjoin from '{{ current_domain_status.domain | default('WORKGROUP') }}' → WORKGROUP
+      {% endif %}
+      {% if hostname_differs_from_target %}
+        Step 4: Would rename '{{ current_hostname_info.old_name | default('UNKNOWN') }}' → '{{ target_vm_name }}'
+      {% endif %}
+      {% if force_rejoin_requested or domain_differs_from_target %}
+        Step 5: Would join domain '{{ domain_name }}'
+                Computer name : {{ target_vm_name }}
+                Domain OU     : {{ domain_ou_path | default('Default OU') }}
+                Restart       : {{ restart_on_success | bool }}
+      {% endif %}
+  when:
+    - dry_run | default(false) | bool
+    - domain_migration_needed | bool
+
+- name: "Skip — domain migration not needed for {{ target_vm_name }}"
+  ansible.builtin.debug:
+    msg: >-
+      VM '{{ target_vm_name }}' is already in domain '{{ domain_name }}'
+      with the correct hostname. No changes required.
+  when:
+    - not (dry_run | default(false) | bool)
+    - not domain_migration_needed | bool
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Steps 2–7: domain migration block (skipped entirely on dry run or when
+# the VM is already correctly configured)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: "Domain migration workflow for {{ target_vm_name }}"
+  when:
+    - domain_migration_needed | bool
+    - not (dry_run | default(false) | bool)
+  block:
+
+    # ── Step 2: Pre-create AD computer object ─────────────────────────────────
+    # Creates the computer object in the target OU before disjoin so the join
+    # step can bind to the pre-staged object. Only runs when domain_ou_path is set.
+
+    - name: "Step 2: Pre-create AD computer object in target OU"
+      block:
+        - name: "Step 2: Ensure RSAT-AD-PowerShell is installed on VM"
+          ansible.windows.win_feature:
+            name: RSAT-AD-PowerShell
+            state: present
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_value'] }}"  # pragma: allowlist secret
+
+        - name: "Step 2: Create AD computer object for {{ target_vm_name }}"
+          microsoft.ad.computer:
+            name: "{{ target_vm_name }}"
+            path: "{{ domain_ou_path | trim }}"
+            state: present
+            domain_server: "{{ domain_name }}"
+            domain_username: "{{ domain_admin_username }}"
+            domain_password: "{{ domain_admin_value }}"  # pragma: allowlist secret
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: precreate_computer_result
+          no_log: true
+
+        - name: "Step 2: Fail — pre-create AD computer object failed"
+          ansible.builtin.fail:
+            msg: |
+              Pre-create AD computer object failed for {{ target_vm_name }}.
+              Error: {{ precreate_computer_result.msg | default('Unknown error') | string }}
+          when:
+            - precreate_computer_result is defined
+            - precreate_computer_result.failed | default(false) | bool
+
+        - name: "Step 2: AD computer object created in OU '{{ domain_ou_path | trim }}'"
+          ansible.builtin.debug:
+            msg: >-
+              AD computer object '{{ target_vm_name }}$' created in OU
+              '{{ domain_ou_path | trim }}'. Proceeding to disjoin/rename/join.
+          when:
+            - precreate_computer_result is defined
+            - not (precreate_computer_result.failed | default(false) | bool)
+      when: (domain_ou_path | default('')) | trim | length > 0
+
+    # ── Step 3: Disjoin from current domain ──────────────────────────────────
+
+    - name: "Step 3: Disjoin — skipped (VM already in WORKGROUP or target domain)"
+      ansible.builtin.debug:
+        msg: >-
+          Step 3: Disjoin — skipped.
+          Current domain: '{{ current_domain_status.domain | default('WORKGROUP') }}'
+          (force_rejoin={{ force_rejoin | default(false) }}).
+      when: not (needs_disjoin | bool)
+
+    - name: "Step 3: Disjoin from domain (SE-Admin, Remove-Computer -Force)"
+      when: needs_disjoin | bool
+      block:
+        # When in WORKGROUP already, disable firewall before proceeding
+        - name: "Step 3: Disable Windows Firewall (Public and Private) — VM already in WORKGROUP"
+          ansible.windows.win_shell: |
+            Set-NetFirewallProfile -Profile Public, Private -Enabled False
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          when: (current_domain_status.domain | default('')) == 'WORKGROUP'
+
+        - name: "Step 3: Display disjoin plan"
+          ansible.builtin.debug:
+            msg: >-
+              Step 3: Disjoin '{{ target_vm_name }}' from
+              '{{ current_domain_status.domain | default('unknown') }}' → WORKGROUP.
+
+        # Pre-check before committing
+        - name: "Step 3: Pre-check disjoin permission (SE-Admin, no changes)"
+          ansible.windows.win_shell: |
+            try {
+              Remove-Computer -WorkgroupName "WORKGROUP" -Force -WhatIf -ErrorAction Stop | Out-Null
+              Write-Output "OK"
+            }
+            catch {
+              Write-Output ($_.Exception.Message)
+              exit 1
+            }
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: disjoin_permission_precheck
+          changed_when: false
+          failed_when: false
+          no_log: true
+          when: (current_domain_status.domain | default('')) not in ['', 'WORKGROUP']
+
+        - name: "Step 3: Fail — SE-Admin cannot perform disjoin"
+          ansible.builtin.fail:
+            msg: |
+              Pre-check failed: SE-Admin cannot perform disjoin for {{ target_vm_name }}.
+              Ensure SE-Admin has local administrator rights on the VM.
+              Error: {{ disjoin_permission_precheck.stdout | default(disjoin_permission_precheck.msg) | default('Unknown') }}
+          when:
+            - disjoin_permission_precheck is defined
+            - (disjoin_permission_precheck.rc | default(0) | int) != 0
+
+        - name: "Step 3: Remove-Computer → WORKGROUP"
+          block:
+            - name: "Step 3: Disjoin via Remove-Computer -Force"
+              ansible.windows.win_shell: |
+                $ErrorActionPreference = 'Stop'
+                Remove-Computer -WorkgroupName "WORKGROUP" -Force -ErrorAction Stop
+                Write-Output "DISJOIN_OK"
+              delegate_to: "{{ target_vm_host }}"
+              vars:
+                ansible_connection: winrm
+                ansible_winrm_transport: "{{ winrm_transport }}"
+                ansible_winrm_port: "{{ winrm_port }}"
+                ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+                ansible_winrm_server_cert_validation: ignore
+                ansible_winrm_connection_timeout: 60
+                ansible_winrm_read_timeout: 70
+                ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+                ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+              register: domain_disjoin_result
+              no_log: true
+              when: (current_domain_status.domain | default('')) not in ['', 'WORKGROUP']
+          rescue:
+            - name: "Step 3: Fail — Access is denied during disjoin"
+              ansible.builtin.fail:
+                msg: |
+                  Disjoin failed for {{ target_vm_name }}: Access is denied.
+                  Ensure SE-Admin is in the local Administrators group on the VM.
+                  Error: {{ domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('Unknown') }}
+              when: "'access is denied' in ((domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('')) | string | lower)"
+
+            - name: "Step 3: Fail — disjoin error"
+              ansible.builtin.fail:
+                msg: "Disjoin failed for {{ target_vm_name }}: {{ domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('Unknown error') | string }}"
+
+        # Verify before rebooting
+        - name: "Step 3: Verify domain status after disjoin"
+          ansible.windows.win_shell: |
+            $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Domain, PartOfDomain, Workgroup
+            $domainName = if ($cs.PartOfDomain) {
+              try { [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().Name }
+              catch { $cs.Domain }
+            } else { $null }
+            @{
+              domain         = if ($domainName) { $domainName } else { 'WORKGROUP' }
+              part_of_domain = $cs.PartOfDomain
+              workgroup_name = $cs.Workgroup
+            } | ConvertTo-Json
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: domain_status_after_disjoin
+          when:
+            - domain_disjoin_result is defined
+            - not (domain_disjoin_result.skipped | default(false) | bool)
+            - not (domain_disjoin_result.failed | default(false) | bool)
+
+        - name: "Step 3: Fail — VM still in domain after disjoin"
+          ansible.builtin.fail:
+            msg: |
+              Disjoin did not succeed: '{{ target_vm_name }}' is still in domain
+              '{{ (domain_status_after_disjoin.stdout | from_json).domain | default('unknown') }}'.
+              Fix: reset computer account in AD or run Test-ComputerSecureChannel -Repair on the VM.
+          when:
+            - domain_status_after_disjoin is defined
+            - not (domain_status_after_disjoin.skipped | default(false) | bool)
+            - domain_status_after_disjoin.stdout is defined
+            - (domain_status_after_disjoin.stdout | from_json).part_of_domain | default(false) | bool
+              or ((domain_status_after_disjoin.stdout | from_json).domain | default('')) != 'WORKGROUP'
+
+        # Reboot: Azure CLI primary, WinRM fallback
+        - name: "Step 3: Restart VM via Azure CLI after disjoin (primary)"
+          ansible.builtin.shell: >-
+            az vm restart
+            --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
+            --name "{{ target_vm_name }}"
+            --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+            --no-wait
+          delegate_to: localhost
+          register: az_restart_disjoin_result
+          failed_when: false
+          when:
+            - domain_disjoin_result is defined
+            - not (domain_disjoin_result.skipped | default(false) | bool)
+            - not (domain_disjoin_result.failed | default(false) | bool)
+            - use_azure_restart | default(true) | bool
+
+        - name: "Step 3: Set fact az_disjoin_restart_succeeded"
+          ansible.builtin.set_fact:
+            az_disjoin_restart_succeeded: >-
+              {{ (az_restart_disjoin_result is defined
+                  and az_restart_disjoin_result.rc is defined
+                  and az_restart_disjoin_result.rc == 0) | bool }}
+          when: use_azure_restart | default(true) | bool
+
+        - name: "Step 3: Restart VM via WinRM after disjoin (fallback)"
+          ansible.windows.win_reboot:
+            reboot_timeout: 600
+            pre_reboot_delay: 30
+            post_reboot_delay: 30
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: reboot_after_disjoin
+          failed_when: false
+          when:
+            - domain_disjoin_result is defined
+            - not (domain_disjoin_result.skipped | default(false) | bool)
+            - not (domain_disjoin_result.failed | default(false) | bool)
+            - not (az_disjoin_restart_succeeded | default(false))
+
+        - name: "Step 3: Warn — reboot after disjoin failed"
+          ansible.builtin.debug:
+            msg: |
+              Reboot after disjoin failed. VM may be in an inconsistent state.
+              Reboot {{ target_vm_host }} manually, then re-run.
+          when:
+            - domain_disjoin_result is defined
+            - not (domain_disjoin_result.skipped | default(false) | bool)
+            - not (domain_disjoin_result.failed | default(false) | bool)
+            - not (az_disjoin_restart_succeeded | default(false))
+            - not (reboot_after_disjoin.rebooted | default(false) | bool)
+
+        - name: "Step 3: Wait for WinRM after disjoin reboot"
+          ansible.builtin.wait_for:
+            port: "{{ winrm_port }}"
+            host: "{{ target_vm_host }}"
+            delay: 60
+            timeout: 600
+          when:
+            - domain_disjoin_result is defined
+            - not (domain_disjoin_result.skipped | default(false) | bool)
+            - not (domain_disjoin_result.failed | default(false) | bool)
+            - (az_disjoin_restart_succeeded | default(false))
+              or (reboot_after_disjoin.rebooted | default(false) | bool)
+
+        - name: "Step 3: Disable Windows Firewall (Public and Private) after disjoin reboot"
+          ansible.windows.win_shell: |
+            Set-NetFirewallProfile -Profile Public, Private -Enabled False
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          when:
+            - domain_disjoin_result is defined
+            - not (domain_disjoin_result.skipped | default(false) | bool)
+            - not (domain_disjoin_result.failed | default(false) | bool)
+
+        # Re-probe hostname after disjoin reboot so rename uses the correct credential format
+        - name: 'Step 3: Re-probe hostname after disjoin reboot (.\SE-Admin)'
+          ansible.windows.win_shell: |
+            $env:COMPUTERNAME
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: post_disjoin_hostname_result
+          retries: 6
+          delay: 30
+          until: post_disjoin_hostname_result is succeeded
+          changed_when: false
+          failed_when: false
+          no_log: true
+          when: not (skip_hostname_setup | default(false) | bool)
+
+        - name: "Step 3: Update current_hostname_info from post-disjoin probe"
+          ansible.builtin.set_fact:
+            current_hostname_info:
+              old_name: >-
+                {{ (post_disjoin_hostname_result.stdout | default('') | trim)
+                   if (post_disjoin_hostname_result.stdout | default('') | trim | length > 0)
+                   else (current_hostname_info.old_name | default(target_vm_name)) }}
+          when:
+            - post_disjoin_hostname_result is defined
+            - not (skip_hostname_setup | default(false) | bool)
+
+        - name: "Step 3: Update formatted_winrm_username to post-disjoin hostname"
+          ansible.builtin.set_fact:
+            formatted_winrm_username: "{{ current_hostname_info.old_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+          when: not (skip_hostname_setup | default(false) | bool)
+
+    # ── Step 4: Rename hostname ───────────────────────────────────────────────
+    # Skipped entirely when skip_hostname_setup=true.
+    # Primary: Azure RunCommand as SYSTEM. Fallback: WinRM as Administrator.
+
+    - name: "Step 4: Rename hostname to '{{ target_vm_name }}'"
+      when:
+        - not (skip_hostname_setup | default(false) | bool)
+        - hostname_differs_from_target | bool
+      block:
+        - name: "Step 4: Rename via Azure RunCommand (SYSTEM, primary)"
+          ansible.builtin.shell: |
+            script_file="$(mktemp)"
+            cat > "$script_file" <<'PS'
+            $ErrorActionPreference = "Stop"
+            try {
+              Rename-Computer -NewName "{{ target_vm_name }}" -Force -ErrorAction Stop
+            }
+            catch {
+              Write-Output ("RENAME_EXCEPTION:" + $_.Exception.Message)
+              exit 1
+            }
+            $pending = (Get-ItemProperty `
+              -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName" `
+              -Name ComputerName).ComputerName
+            $active = (Get-ItemProperty `
+              -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName" `
+              -Name ComputerName).ComputerName
+            if (($pending -ieq "{{ target_vm_name }}") -or ($active -ieq "{{ target_vm_name }}")) {
+              Write-Output ("RENAME_CONFIRMED:pending=" + $pending + ";active=" + $active)
+              exit 0
+            }
+            Write-Output ("RENAME_NOT_CONFIRMED:pending=" + $pending + ";active=" + $active)
+            exit 2
+            PS
+            az vm run-command invoke \
+              --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
+              --name "{{ azure_vm_name | default(target_vm_name) }}" \
+              --command-id RunPowerShellScript \
+              --scripts @"$script_file" \
+              --query "value[0].message" -o tsv \
+              --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+            rc=$?
+            rm -f "$script_file"
+            exit $rc
+          delegate_to: localhost
+          register: az_rename_result
+          failed_when: false
+          changed_when: az_rename_result.rc is defined and az_rename_result.rc == 0
+          when: use_azure_run_command | default(true) | bool
+
+        - name: "Step 4: Set fact az_rename_succeeded"
+          ansible.builtin.set_fact:
+            az_rename_succeeded: >-
+              {{ (az_rename_result is defined
+                  and az_rename_result.rc is defined
+                  and az_rename_result.rc == 0
+                  and 'RENAME_CONFIRMED:' in
+                    ((az_rename_result.stdout | default('')) ~ '\n' ~ (az_rename_result.stderr | default('')))
+                 ) | bool }}
+          when: az_rename_result is defined
+
+        # Fallback: WinRM as Administrator using the SE-Admin Delinea password
+        - name: "Step 4: Rename via WinRM fallback (Administrator)"
+          ansible.windows.win_shell: |
+            $ErrorActionPreference = 'Stop'
+            Rename-Computer -NewName "{{ target_vm_name }}" -Force -ErrorAction Stop
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['current_hostname_info']['old_name'] }}\\{{ rename_winrm_username | default('Administrator') }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: hostname_rename_result
+          ignore_errors: true
+          no_log: true
+          when: not (az_rename_succeeded | default(false))
+
+        - name: "Step 4: Fail — rename not confirmed by Azure or WinRM"
+          ansible.builtin.fail:
+            msg: |
+              Hostname rename was not confirmed for {{ target_vm_name }} ({{ target_vm_host }}).
+              Fix: ensure Administrator has local admin rights on {{ target_vm_host }}.
+              Azure output: {{ (az_rename_result.stdout | default('') ~ ' ' ~ az_rename_result.stderr | default('')) | trim }}
+              WinRM output: {{ (hostname_rename_result.msg | default('N/A')) | string }}
+          when:
+            - not (az_rename_succeeded | default(false))
+            - hostname_rename_result is not defined
+              or (hostname_rename_result.failed | default(false) | bool)
+              or ((hostname_rename_result.rc | default(0) | int) != 0)
+
+        # Mark that a reboot is needed so join_domain logic can account for it
+        - name: "Step 4: Set hostname_reboot_required"
+          ansible.builtin.set_fact:
+            hostname_reboot_required: true
+
+        # Reboot to apply rename before domain join
+        - name: "Step 4: Restart VM via Azure CLI after rename (primary)"
+          ansible.builtin.shell: >-
+            az vm restart
+            --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
+            --name "{{ azure_vm_name | default(target_vm_name) }}"
+            --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+            --no-wait
+          delegate_to: localhost
+          register: az_rename_restart_result
+          failed_when: false
+          when: use_azure_restart | default(true) | bool
+
+        - name: "Step 4: Set fact az_rename_restart_succeeded"
+          ansible.builtin.set_fact:
+            az_rename_restart_succeeded: >-
+              {{ (az_rename_restart_result is defined
+                  and az_rename_restart_result.rc is defined
+                  and az_rename_restart_result.rc == 0) | bool }}
+          when: az_rename_restart_result is defined
+
+        - name: "Step 4: Restart VM via WinRM after rename (fallback)"
+          ansible.windows.win_shell: |
+            Restart-Computer -Force
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['current_hostname_info']['old_name'] }}\\{{ rename_winrm_username | default('Administrator') }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: winrm_rename_restart_result
+          failed_when: false
+          no_log: true
+          when: not (az_rename_restart_succeeded | default(false))
+
+        - name: "Step 4: Wait for WinRM after rename reboot"
+          ansible.builtin.wait_for:
+            port: "{{ winrm_port }}"
+            host: "{{ target_vm_host }}"
+            delay: "{{ post_rename_reboot_settle_seconds | default(300) | int }}"
+            timeout: 900
+          when:
+            - (az_rename_restart_succeeded | default(false))
+              or (winrm_rename_restart_result is defined
+                  and not (winrm_rename_restart_result.failed | default(true) | bool))
+
+        # Verify the rename took effect before joining the domain
+        - name: 'Step 4: Verify hostname after rename reboot (.\\Administrator)'
+          ansible.windows.win_shell: |
+            (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: hostname_after_reboot
+          retries: 6
+          delay: 90
+          until: hostname_after_reboot is succeeded
+          when:
+            - (az_rename_restart_succeeded | default(false))
+              or (winrm_rename_restart_result is defined
+                  and not (winrm_rename_restart_result.failed | default(true) | bool))
+
+        - name: "Step 4: Fail — hostname did not change after rename reboot"
+          ansible.builtin.fail:
+            msg: |
+              Hostname on {{ target_vm_host }} is still
+              '{{ hostname_after_reboot.stdout | default('') | trim }}' after reboot;
+              expected '{{ target_vm_name }}'.
+              Reboot the VM manually and re-run, or check WinRM/reboot permissions.
+          when:
+            - hostname_after_reboot is defined
+            - not (hostname_after_reboot.skipped | default(false) | bool)
+            - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
+
+        # Restore formatted_winrm_username to SE-Admin with the new hostname
+        # so Step 5 (domain join) connects with the correct credential format
+        - name: "Step 4: Restore formatted_winrm_username to SE-Admin after rename"
+          ansible.builtin.set_fact:
+            formatted_winrm_username: "{{ target_vm_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+          when:
+            - hostname_after_reboot is defined
+            - not (hostname_after_reboot.skipped | default(false) | bool)
+            - (hostname_after_reboot.stdout | default('') | trim | upper) == (target_vm_name | upper)
+
+    # ── Step 5: Join domain ───────────────────────────────────────────────────
+    # Uses cpoe domain account credentials. SE-Admin is not involved here.
+
+    - name: "Step 5: Join '{{ target_vm_name }}' to domain '{{ domain_name }}'"
+      block:
+        - name: "Step 5: microsoft.ad.membership → domain"
+          microsoft.ad.membership:
+            dns_domain_name: "{{ domain_name }}"
+            domain_admin_user: "{{ domain_admin_username }}"
+            domain_admin_password: "{{ domain_admin_value }}"
+            domain_ou_path: "{{ domain_ou_path | default(omit) }}"
+            hostname: "{{ target_vm_name }}"
+            state: domain
+            reboot: false
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: domain_join_result
+          no_log: true
+          failed_when: false
+
+        - name: "Step 5: Fail — Access is denied during domain join (rename race)"
+          ansible.builtin.fail:
+            msg: |
+              Domain join failed for {{ target_vm_name }}: Access is denied while renaming.
+              The computer is still named '{{ current_hostname_info.old_name | default('unknown') }}'.
+              Fix: reboot {{ target_vm_host }} after disjoin, then re-run so Step 4 (rename)
+              completes before Step 5. Or run on the VM as Administrator:
+                Rename-Computer -NewName "{{ target_vm_name }}" -Restart
+              then re-run this playbook to complete the domain join.
+              Error: {{ domain_join_result.msg | default('Unknown') | string }}
+          when:
+            - domain_join_result is defined
+            - domain_join_result.failed | default(false) | bool
+            - "'access is denied' in ((domain_join_result.msg | default('')) | string | lower)"
+            - "'rename' in ((domain_join_result.msg | default('')) | string | lower)"
+
+        - name: "Step 5: Fail — domain join error"
+          ansible.builtin.fail:
+            msg: |
+              Domain join failed for {{ target_vm_name }}.
+              Error: {{ domain_join_result.msg | default('Unknown') | string }}
+              Possible causes: invalid domain credentials, DC unreachable, insufficient permissions.
+          when:
+            - domain_join_result is defined
+            - domain_join_result.failed | default(false) | bool
+            - not ('access is denied' in ((domain_join_result.msg | default('')) | string | lower)
+                   and 'rename' in ((domain_join_result.msg | default('')) | string | lower))
+
+        - name: "Step 5: Fail — domain join did not complete"
+          ansible.builtin.fail:
+            msg: |
+              Domain join did not complete for {{ target_vm_name }}.
+              Current domain: '{{ current_domain_status.domain | default('WORKGROUP') }}'
+              Target domain : '{{ domain_name }}'
+              (changed={{ domain_join_result.changed | default(false) }},
+               failed={{ domain_join_result.failed | default(false) }})
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - not (domain_join_result.changed | default(false) | bool)
+            - (current_domain_status.domain | default('')) != domain_name
+
+        - name: "Step 5: Determine effective reboot requirement"
+          ansible.builtin.set_fact:
+            effective_reboot_required: >-
+              {{ (domain_join_result.reboot_required | default(false) | bool)
+                 or (hostname_reboot_required | default(false) | bool) }}
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+
+        # Reboot: Azure CLI primary, WinRM fallback
+        - name: "Step 5: Verify Azure CLI can access VM (pre-restart)"
+          ansible.builtin.shell: >-
+            az vm show
+            --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
+            --name "{{ target_vm_name }}"
+            --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+            --query id -o tsv
+          delegate_to: localhost
+          register: az_vm_access_check
+          changed_when: false
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - use_azure_restart | default(true) | bool
+
+        - name: "Step 5: Fail — Azure CLI cannot access VM for restart"
+          ansible.builtin.fail:
+            msg: |
+              Azure CLI cannot access VM {{ target_vm_name }}.
+              Resource group : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
+              Subscription   : {{ azure_subscription_id | default(manifest_data.target_subscription_id) }}
+              Error          : {{ az_vm_access_check.stderr | default(az_vm_access_check.msg) | default('Unknown') | truncate(300) }}
+              Fix: ensure the runner has Contributor or Microsoft.Compute/virtualMachines/restart/action on the VM.
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - use_azure_restart | default(true) | bool
+            - az_vm_access_check is defined
+            - az_vm_access_check.rc | default(-1) != 0
+
+        - name: "Step 5: Restart VM via Azure CLI after join (primary)"
+          ansible.builtin.shell: >-
+            az vm restart
+            --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
+            --name "{{ target_vm_name }}"
+            --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+            --no-wait
+          delegate_to: localhost
+          register: az_restart_result
+          failed_when: false
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - use_azure_restart | default(true) | bool
+
+        - name: "Step 5: Set fact az_restart_succeeded"
+          ansible.builtin.set_fact:
+            az_restart_succeeded: >-
+              {{ (az_restart_result is defined
+                  and az_restart_result.rc is defined
+                  and az_restart_result.rc == 0) | bool }}
+          when: use_azure_restart | default(true) | bool
+
+        - name: "Step 5: Restart VM via WinRM after join (fallback)"
+          ansible.windows.win_reboot:
+            reboot_timeout: 600
+            pre_reboot_delay: 30
+            post_reboot_delay: 30
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+          register: reboot_result
+          failed_when: false
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - not (az_restart_succeeded | default(false))
+
+        - name: "Step 5: Set fact winrm_reboot_succeeded"
+          ansible.builtin.set_fact:
+            winrm_reboot_succeeded: "{{ (reboot_result is defined and (reboot_result.rebooted | default(false))) | bool }}"
+          when: reboot_result is defined
+
+        - name: "Step 5: Warn — post-join reboot failed (manual reboot required)"
+          ansible.builtin.debug:
+            msg: |
+              WARNING: Automatic post-join reboot failed.
+              Domain join succeeded but a manual reboot is required for changes to take effect.
+              VM: {{ target_vm_name }}
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - not (az_restart_succeeded | default(false))
+            - not (winrm_reboot_succeeded | default(false))
+
+        - name: "Step 5: Wait for VM to come back online after join reboot"
+          ansible.builtin.wait_for:
+            port: "{{ winrm_port }}"
+            host: "{{ target_vm_host }}"
+            delay: 90
+            timeout: 900
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - (az_restart_succeeded | default(false))
+              or (winrm_reboot_succeeded | default(false))
+
+        - name: "Step 5: Stabilization pause after WinRM is reachable"
+          ansible.builtin.pause:
+            seconds: 45
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - (az_restart_succeeded | default(false))
+              or (winrm_reboot_succeeded | default(false))
+
+        - name: "Step 5: Update formatted_winrm_username to SE-Admin@new hostname after join reboot"
+          ansible.builtin.set_fact:
+            formatted_winrm_username: "{{ target_vm_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+          when:
+            - domain_join_result is defined
+            - not (domain_join_result.failed | default(false) | bool)
+            - effective_reboot_required | default(false) | bool
+            - restart_on_success | bool
+            - wait_for_reboot | bool
+            - (az_restart_succeeded | default(false))
+              or (winrm_reboot_succeeded | default(false))
+
+    # ── Step 6: Verify domain membership ─────────────────────────────────────
+
+    - name: "Step 6: Verify domain membership after reboot"
+      ansible.windows.win_shell: |
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Domain, PartOfDomain, Workgroup
+        $domainName = if ($cs.PartOfDomain) {
+          try { [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().Name }
+          catch { $cs.Domain }
+        } else { $null }
+        @{
+          domain         = if ($domainName) { $domainName } else { 'WORKGROUP' }
+          part_of_domain = $cs.PartOfDomain
+          workgroup_name = $cs.Workgroup
+        } | ConvertTo-Json
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_winrm_read_timeout: 70
+        ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+      register: post_reboot_domain_status_raw
+      when:
+        - domain_join_result is defined
+        - not (domain_join_result.failed | default(false) | bool)
+        - effective_reboot_required | default(false) | bool
+        - wait_for_reboot | bool
+        - (az_restart_succeeded | default(false))
+          or (winrm_reboot_succeeded | default(false))
+
+    - name: "Step 6: Parse post-reboot domain status"
+      ansible.builtin.set_fact:
+        post_reboot_domain_status: "{{ post_reboot_domain_status_raw.stdout | from_json }}"
+      when:
+        - post_reboot_domain_status_raw is defined
+        - post_reboot_domain_status_raw.stdout is defined
+
+    - name: "Step 6: Display final domain status"
+      ansible.builtin.debug:
+        msg: |
+          Domain join completed for '{{ target_vm_name }}'.
+          {% if post_reboot_domain_status is defined %}
+          Domain  : {{ post_reboot_domain_status.domain | default('N/A') }}
+          {% else %}
+          Domain  : {{ domain_name }} (reboot pending or not waited)
+          {% endif %}
+          Computer: {{ target_vm_name }}
+      when:
+        - domain_join_result is defined
+        - not (domain_join_result.failed | default(false) | bool)
+        - effective_reboot_required | default(false) | bool
+
+    # ── Step 7: Verify DNS reachability from runner ───────────────────────────
+
+    - name: "Step 7: Pause for AD DNS replication"
+      ansible.builtin.pause:
+        seconds: "{{ post_join_dns_settle_seconds | default(60) | int }}"
+      when: post_join_dns_settle_seconds | default(0) | int > 0
+
+    - name: "Step 7: Set post-join FQDN"
+      ansible.builtin.set_fact:
+        target_vm_fqdn: "{{ target_vm_name }}.{{ domain_name }}"
+
+    - name: "Step 7: Test TCP connectivity by IP (log-only on failure)"
+      ansible.builtin.wait_for:
+        host: "{{ target_vm_host }}"
+        port: "{{ winrm_port }}"
+        timeout: 10
+        state: started
+      register: tcp_check_by_ip_result
+      failed_when: false
+
+    - name: "Step 7: Warn — VM not reachable by IP from runner"
+      ansible.builtin.debug:
+        msg: |
+          WARNING: VM not reachable by IP from runner: {{ target_vm_host }}:{{ winrm_port }}
+          Investigate separately (NSG/routes/firewall/runner network path).
+      when: tcp_check_by_ip_result is failed
+
+    - name: "Step 7: Test TCP connectivity by FQDN"
+      ansible.builtin.wait_for:
+        host: "{{ target_vm_fqdn }}"
+        port: "{{ winrm_port }}"
+        timeout: 10
+        state: started
+      register: tcp_check_by_fqdn_result
+      failed_when: false
+
+    - name: "Step 7: Test TCP connectivity by short name (when FQDN failed)"
+      ansible.builtin.wait_for:
+        host: "{{ target_vm_name }}"
+        port: "{{ winrm_port }}"
+        timeout: 10
+        state: started
+      register: tcp_check_by_short_result
+      failed_when: false
+      when: tcp_check_by_fqdn_result is failed
+
+    - name: "Step 7: Set name_check_failed"
+      ansible.builtin.set_fact:
+        name_check_failed: >-
+          {{ (tcp_check_by_fqdn_result is failed)
+             and (tcp_check_by_short_result is not defined
+                  or (tcp_check_by_short_result.skipped | default(false))
+                  or tcp_check_by_short_result is failed) }}
+
+    - name: "Step 7: Run ipconfig /registerdns (name resolution failed)"
+      ansible.windows.win_shell: ipconfig /registerdns
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_winrm_read_timeout: 70
+        ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+      changed_when: false
+      when: name_check_failed | default(false) | bool
+
+    - name: "Step 7: Pause to allow DNS registration to propagate"
+      ansible.builtin.pause:
+        seconds: "{{ dns_retry_wait_seconds | default(60) | int }}"
+      when: name_check_failed | default(false) | bool
+
+    - name: "Step 7: Re-test TCP connectivity by FQDN after registerdns"
+      ansible.builtin.wait_for:
+        host: "{{ target_vm_fqdn }}"
+        port: "{{ winrm_port }}"
+        timeout: 10
+        state: started
+      register: tcp_check_retry_fqdn_result
+      failed_when: false
+      when: name_check_failed | default(false) | bool
+
+    - name: "Step 7: Re-test TCP connectivity by short name (FQDN retry failed)"
+      ansible.builtin.wait_for:
+        host: "{{ target_vm_name }}"
+        port: "{{ winrm_port }}"
+        timeout: 10
+        state: started
+      register: tcp_check_retry_short_result
+      failed_when: false
+      when:
+        - name_check_failed | default(false) | bool
+        - tcp_check_retry_fqdn_result is failed
+
+    - name: "Step 7: Warn — name-based reachability still failing after registerdns"
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Name-based reachability still failing after ipconfig /registerdns.
+          Runner may be outside AD DNS scope. Domain join succeeded.
+          Name : {{ target_vm_name }}
+          FQDN : {{ target_vm_fqdn }}
+          IP   : {{ target_vm_host }}
+          Port : {{ winrm_port }}
+      when:
+        - name_check_failed | default(false) | bool
+        - tcp_check_retry_fqdn_result is defined
+        - tcp_check_retry_fqdn_result is failed
+        - tcp_check_retry_short_result is not defined
+          or (tcp_check_retry_short_result.skipped | default(false))
+          or tcp_check_retry_short_result is failed
