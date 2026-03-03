@@ -168,7 +168,7 @@ jobs:
               if rule_check.returncode == 0:
                   print(f"[OK] WinRM NSG rule already exists for {target_vm_name}")
               else:
-                  print(f"[INFO] Creating WinRM NSG rule for {target_vm_name}")
+                  print(f"[INFO] Creating WinRM HTTP NSG rule for {target_vm_name}")
                   create_result = subprocess.run(
                       [
                           'az', 'network', 'nsg', 'rule', 'create',
@@ -191,6 +191,97 @@ jobs:
                   else:
                       print(f"[ERROR] Failed to create WinRM NSG rule for {target_vm_name}: {create_result.stderr}")
                       sys.exit(1)
+          EOF
+
+      - name: "Configure Windows Firewall on VMs for WinRM (Azure Run Command)"
+        if: ${{ !inputs.dry_run }}
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          echo "[INFO] Configuring Windows Firewall on VMs to allow WinRM"
+          python3 << 'EOF'
+          import yaml, os, subprocess, sys, json, time
+          
+          manifest_path = f"ansible/vars/{os.environ['MANIFEST']}/manifest.yml"
+          
+          try:
+              with open(manifest_path, 'r') as f:
+                  manifest = yaml.safe_load(f)
+          except Exception as e:
+              print(f"[ERROR] Failed to load manifest: {e}")
+              sys.exit(1)
+          
+          vms = manifest.get('vms', [])
+          if not vms:
+              print("[WARNING] No VMs found in manifest")
+              sys.exit(0)
+          
+          # PowerShell script to configure Windows Firewall for WinRM
+          ps_script = """
+          # Enable WinRM through Windows Firewall
+          Write-Output "Configuring Windows Firewall for WinRM..."
+          
+          # Enable WinRM HTTP (5985) rule
+          Enable-NetFirewallRule -DisplayGroup "Windows Remote Management" -ErrorAction SilentlyContinue
+          
+          # If default rule doesn't exist, create it
+          $existingRule = Get-NetFirewallRule -Name "WINRM-HTTP-In-TCP" -ErrorAction SilentlyContinue
+          if (-not $existingRule) {
+              New-NetFirewallRule -Name "WINRM-HTTP-In-TCP" -DisplayName "Windows Remote Management (HTTP-In)" -Enabled True -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow
+              Write-Output "Created WinRM HTTP firewall rule"
+          } else {
+              Set-NetFirewallRule -Name "WINRM-HTTP-In-TCP" -Enabled True
+              Write-Output "Enabled WinRM HTTP firewall rule"
+          }
+          
+          # Ensure WinRM service is enabled and running
+          Set-Service -Name WinRM -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name WinRM -ErrorAction SilentlyContinue
+          
+          # Configure WinRM to allow connections
+          Enable-PSRemoting -Force -SkipNetworkProfileCheck -ErrorAction SilentlyContinue
+          
+          Write-Output "Windows Firewall configured successfully for WinRM"
+          """
+          
+          for vm in vms:
+              target_vm_name = vm.get('target_vm_name', vm.get('name'))
+              rg = manifest.get('azure', {}).get('resource_group_name', '')
+              
+              print(f"[INFO] Configuring Windows Firewall on VM: {target_vm_name}")
+              
+              # Use Azure Run Command to execute PowerShell on VM (works regardless of firewall/NSG)
+              result = subprocess.run(
+                  [
+                      'az', 'vm', 'run-command', 'invoke',
+                      '--resource-group', rg,
+                      '--name', target_vm_name,
+                      '--command-id', 'RunPowerShellScript',
+                      '--scripts', ps_script
+                  ],
+                  capture_output=True, text=True, check=False
+              )
+              
+              if result.returncode == 0:
+                  print(f"[OK] Windows Firewall configured on {target_vm_name}")
+                  # Parse and display output
+                  try:
+                      output = json.loads(result.stdout)
+                      if 'value' in output and len(output['value']) > 0:
+                          messages = output['value'][0].get('message', '')
+                          if messages:
+                              print(f"     Output: {messages[:200]}")
+                  except:
+                      pass
+              else:
+                  print(f"[ERROR] Failed to configure Windows Firewall on {target_vm_name}")
+                  print(f"        {result.stderr[:300]}")
+                  sys.exit(1)
+              
+              # Small delay between VMs
+              time.sleep(2)
+          
+          print("[INFO] All VMs configured successfully")
           EOF
 
       - name: "Display configuration"
