@@ -4,8 +4,8 @@ name: Ansible-Disjoin-Windows-Domain
 # Calls: ansible/playbooks/disjoin-windows-domain.yaml
 #
 # Steps executed:
-#   1 — Fetch SE-Admin password from Delinea Secret Server
-#   2 — Connect to each Azure VM as SE-Admin (WinRM) and disjoin from domain → WORKGROUP
+#   1 - Fetch SE-Admin password from Delinea Secret Server
+#   2 - Connect to each Azure VM as SE-Admin (WinRM) and disjoin from domain -> WORKGROUP
 #
 # Required GitHub Secrets:
 #   DELINEA_USERNAME          Service account that authenticates to Delinea
@@ -18,7 +18,7 @@ name: Ansible-Disjoin-Windows-Domain
 #   DELINEA_SECRET_ID         Numeric ID of the SE-Admin secret  (preferred)
 #   DELINEA_SECRET_PATH       Name/path search term              (fallback when ID not set)
 #   DELINEA_SECRET_MACHINE    (Optional) Machine FQDN to narrow secret matching
-#   DELINEA_SECRET_ACCOUNT    (Optional) Account filter — defaults to SE-Admin
+#   DELINEA_SECRET_ACCOUNT    (Optional) Account filter - defaults to SE-Admin
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: "Dry run — no changes applied"
+        description: "Dry run - no changes applied"
         required: false
         type: boolean
         default: true
@@ -86,22 +86,22 @@ jobs:
 
       - name: "Display configuration"
         run: |
-          echo "════════════════════════════════════════════════════════"
-          echo "  Ansible-Disjoin-Windows-Domain — ${{ inputs.manifest }}"
-          echo "════════════════════════════════════════════════════════"
+          echo "========================================================"
+          echo "  Ansible-Disjoin-Windows-Domain - ${{ inputs.manifest }}"
+          echo "========================================================"
           echo "  Dry run         : ${{ inputs.dry_run }}"
           echo ""
-          echo "  Step 1 — Fetch SE-Admin password from Delinea"
+          echo "  Step 1 - Fetch SE-Admin password from Delinea"
           echo "           URL             : ${DELINEA_BASE_URL}"
           echo "           Auth user       : ${DELINEA_USERNAME}"
           echo "           Machine filter  : ${DELINEA_SECRET_MACHINE:-<not set>}"
           echo "           Account filter  : ${DELINEA_SECRET_ACCOUNT}"
           echo ""
-          echo "  Step 2 — Disjoin VM from domain → WORKGROUP  [SE-Admin via WinRM]"
-          echo "════════════════════════════════════════════════════════"
+          echo "  Step 2 - Disjoin VM from domain -> WORKGROUP  [SE-Admin via WinRM]"
+          echo "========================================================"
           [ "${{ inputs.dry_run }}" = "true" ] \
-            && echo "DRY RUN — no changes will be made." \
-            || echo "LIVE RUN — changes will be applied."
+            && echo "DRY RUN - no changes will be made." \
+            || echo "LIVE RUN - changes will be applied."
 
       - name: "Resolve Delinea secret ID"
         shell: bash

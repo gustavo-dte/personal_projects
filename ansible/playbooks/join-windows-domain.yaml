@@ -4,16 +4,16 @@
 # Joins Windows VMs to Active Directory domain.
 # Assumes VMs have already been disjoined and renamed by the disjoin-windows-domain playbook.
 #
-# Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server (for WinRM)
-# Step 2 — Join the VM to the domain using the cpoe-automation domain account
+# Step 1 - Fetch SE-Admin local-admin password from Delinea Secret Server (for WinRM)
+# Step 2 - Join the VM to the domain using the cpoe-automation domain account
 #
 # Required extra-vars:
 #   manifest              Directory name under ansible/vars/ describing the target VMs
 #   domain_admin_password Password for the cpoe-automation domain account (Step 2)
 #
 # Optional extra-vars:
-#   dry_run               true → preview only, no changes applied  (default: false)
-#   force_rejoin          true → forces disjoin before join (default: false; use with caution)
+#   dry_run               true -> preview only, no changes applied  (default: false)
+#   force_rejoin          true -> forces disjoin before join (default: false; use with caution)
 #
 # Required environment variables (injected by the workflow):
 #   DELINEA_BASE_URL      Delinea Secret Server base URL
@@ -28,10 +28,10 @@
 #   domainNameSetup.domain_admin_username   cpoe-automation domain account
 #   domainNameSetup.domain_ou_path          (Optional) OU path for the computer object
 
-- name: "Join Windows VMs to domain (Disjoin → Rename → Rejoin)"
+- name: "Join Windows VMs to domain (Disjoin -> Rename -> Rejoin)"
   hosts: localhost
   connection: local
-  gather_facts: no
+  gather_facts: false
 
   vars:
     ss_url_raw:         "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
@@ -125,14 +125,14 @@
         - name: "Step 1 FAILED: could not retrieve SE-Admin password from Delinea"
           ansible.builtin.fail:
             msg: |
-              ❌ Step 1 failed — could not retrieve SE-Admin password from Delinea Secret Server.
+              ERROR: Step 1 failed - could not retrieve SE-Admin password from Delinea Secret Server.
 
               Common causes:
-                • Server not found / DNS resolution failure  →  {{ ss_url }} unreachable
-                • Network connectivity issue between the runner and Delinea
-                • Invalid service-account credentials  →  check DELINEA_USERNAME / DELINEA_PASSWORD
-                • Secret not found  →  check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
-                • Unexpected Delinea API error  →  review Delinea audit logs
+                - Server not found / DNS resolution failure -> {{ ss_url }} unreachable
+                - Network connectivity issue between the runner and Delinea
+                - Invalid service-account credentials -> check DELINEA_USERNAME / DELINEA_PASSWORD
+                - Secret not found -> check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
+                - Unexpected Delinea API error -> review Delinea audit logs
 
               Configuration:
                 URL       : {{ ss_url }}

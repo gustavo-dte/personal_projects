@@ -1,20 +1,20 @@
 ---
 # ansible/playbooks/disjoin-windows-domain.yaml
 #
-# Step 1 — Fetch SE-Admin local-admin password from Delinea Secret Server
-# Step 2 — Connect to the Azure VM as SE-Admin (WinRM), disjoin from domain → WORKGROUP, reboot
-# Step 3 — Re-probe actual hostname after post-disjoin reboot
-# Step 4 — Rename hostname to target_vm_name (from manifest), reboot, verify
+# Step 1 - Fetch SE-Admin local-admin password from Delinea Secret Server
+# Step 2 - Connect to the Azure VM as SE-Admin (WinRM), disjoin from domain -> WORKGROUP, reboot
+# Step 3 - Re-probe actual hostname after post-disjoin reboot
+# Step 4 - Rename hostname to target_vm_name (from manifest), reboot, verify
 #
 # target_vm_name is read from the manifest (vms[*].target_vm_name).
-# The rename is ALWAYS applied — if the current hostname already matches
+# The rename is ALWAYS applied - if the current hostname already matches
 # target_vm_name the rename step skips gracefully with no changes.
 #
 # Required extra-vars:
 #   manifest          Directory name under ansible/vars/ describing the target VMs
 #
 # Optional extra-vars:
-#   dry_run           true → preview only, no changes applied  (default: false)
+#   dry_run           true -> preview only, no changes applied  (default: false)
 #
 # Required environment variables (injected by the workflow):
 #   DELINEA_BASE_URL      Delinea Secret Server base URL
@@ -31,7 +31,7 @@
 - name: "Disjoin Windows VMs from domain and rename to target hostname"
   hosts: localhost
   connection: local
-  gather_facts: no
+  gather_facts: false
 
   vars:
     ss_url_raw:         "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
@@ -119,14 +119,14 @@
         - name: "Step 1 FAILED: could not retrieve SE-Admin password from Delinea"
           ansible.builtin.fail:
             msg: |
-              ❌ Step 1 failed — could not retrieve SE-Admin password from Delinea Secret Server.
+              ERROR: Step 1 failed - could not retrieve SE-Admin password from Delinea Secret Server.
 
               Common causes:
-                • Server not found / DNS resolution failure  →  {{ ss_url }} unreachable
-                • Network connectivity issue between the runner and Delinea
-                • Invalid service-account credentials  →  check DELINEA_USERNAME / DELINEA_PASSWORD
-                • Secret not found  →  check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
-                • Unexpected Delinea API error  →  review Delinea audit logs
+                - Server not found / DNS resolution failure -> {{ ss_url }} unreachable
+                - Network connectivity issue between the runner and Delinea
+                - Invalid service-account credentials -> check DELINEA_USERNAME / DELINEA_PASSWORD
+                - Secret not found -> check DELINEA_SECRET_ID or DELINEA_SECRET_PATH
+                - Unexpected Delinea API error -> review Delinea audit logs
 
               Configuration:
                 URL       : {{ ss_url }}

@@ -1,15 +1,15 @@
 name: Ansible-Join-Windows-Domain
 
 # Joins Windows VMs to Active Directory with optional disjoin-rename-join cycle.
-# When force_rejoin=true (default): Disjoins → Renames → Rejoins (recommended for migrated VMs with stale trust)
+# When force_rejoin=true (default): Disjoins -> Renames -> Rejoins (recommended for migrated VMs with stale trust)
 # When force_rejoin=false: Only joins if VM is not already in the domain
 # Calls: ansible/playbooks/join-windows-domain.yaml
 #
 # Steps executed when force_rejoin=true:
-#   1 — Fetch SE-Admin password from Delinea Secret Server (for WinRM connectivity)
-#   2 — Disjoin from current domain (if joined)
-#   3 — Rename VM hostname (if needed)
-#   4 — Join to target domain using cpoe-automation domain account
+#   1 - Fetch SE-Admin password from Delinea Secret Server (for WinRM connectivity)
+#   2 - Disjoin from current domain (if joined)
+#   3 - Rename VM hostname (if needed)
+#   4 - Join to target domain using cpoe-automation domain account
 #
 # Required GitHub Secrets:
 #   DELINEA_USERNAME          Service account that authenticates to Delinea
@@ -23,7 +23,7 @@ name: Ansible-Join-Windows-Domain
 #   DELINEA_SECRET_ID         Numeric ID of the SE-Admin secret  (preferred)
 #   DELINEA_SECRET_PATH       Name/path search term              (fallback when ID not set)
 #   DELINEA_SECRET_MACHINE    (Optional) Machine FQDN to narrow secret matching
-#   DELINEA_SECRET_ACCOUNT    (Optional) Account filter — defaults to SE-Admin
+#   DELINEA_SECRET_ACCOUNT    (Optional) Account filter - defaults to SE-Admin
 
 on:
   workflow_dispatch:
@@ -33,12 +33,12 @@ on:
         required: true
         type: string
       dry_run:
-        description: "Dry run — no changes applied"
+        description: "Dry run - no changes applied"
         required: false
         type: boolean
         default: true
       force_rejoin:
-        description: "Disjoin → Rename → Rejoin cycle (recommended for migrated VMs with stale trust)"
+        description: "Disjoin -> Rename -> Rejoin cycle (recommended for migrated VMs with stale trust)"
         required: false
         type: boolean
         default: true
@@ -102,33 +102,33 @@ jobs:
 
       - name: "Display configuration"
         run: |
-          echo "════════════════════════════════════════════════════════"
-          echo "  Ansible-Join-Windows-Domain — ${{ inputs.manifest }}"
-          echo "════════════════════════════════════════════════════════"
+          echo "========================================================"
+          echo "  Ansible-Join-Windows-Domain - ${{ inputs.manifest }}"
+          echo "========================================================"
           echo "  Dry run         : ${{ inputs.dry_run }}"
           echo "  Force rejoin    : ${{ inputs.force_rejoin }}"
           echo ""
-          echo "  Step 1 — Fetch SE-Admin password from Delinea (WinRM connectivity)"
+          echo "  Step 1 - Fetch SE-Admin password from Delinea (WinRM connectivity)"
           echo "           URL             : ${DELINEA_BASE_URL}"
           echo "           Auth user       : ${DELINEA_USERNAME}"
           echo "           Machine filter  : ${DELINEA_SECRET_MACHINE:-<not set>}"
           echo "           Account filter  : ${DELINEA_SECRET_ACCOUNT}"
           echo ""
           if [ "${{ inputs.force_rejoin }}" = "true" ]; then
-            echo "  Step 2 — Disjoin from current domain (if joined)    [SE-Admin]"
-            echo "  Step 3 — Rename VM hostname (if needed)              [Administrator]"
-            echo "  Step 4 — Join VM to target domain                    [cpoe-automation]"
+            echo "  Step 2 - Disjoin from current domain (if joined)    [SE-Admin]"
+            echo "  Step 3 - Rename VM hostname (if needed)              [Administrator]"
+            echo "  Step 4 - Join VM to target domain                    [cpoe-automation]"
             echo ""
             echo "  Mode: Full disjoin-rename-join cycle (recommended for migrated VMs)"
           else
-            echo "  Step 2 — Join VM to domain (only if not already joined) [cpoe-automation]"
+            echo "  Step 2 - Join VM to domain (only if not already joined) [cpoe-automation]"
             echo ""
             echo "  Mode: Join only (skips disjoin/rename if VM is in target domain)"
           fi
-          echo "════════════════════════════════════════════════════════"
+          echo "========================================================"
           [ "${{ inputs.dry_run }}" = "true" ] \
-            && echo "DRY RUN — no changes will be made." \
-            || echo "LIVE RUN — changes will be applied."
+            && echo "DRY RUN - no changes will be made." \
+            || echo "LIVE RUN - changes will be applied."
 
       - name: "Resolve Delinea secret ID"
         shell: bash
