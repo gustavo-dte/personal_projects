@@ -352,8 +352,9 @@ def _checkin_secret(
         DelineaError: On any network or HTTP failure.
     """
     try:
+        # Use forceCheckIn=true to check in secrets checked out by other users (requires admin permission)
         resp = requests.post(
-            "%s/api/v1/secrets/%s/check-in" % (base_url, secret_id),
+            "%s/api/v1/secrets/%s/check-in?forceCheckIn=true" % (base_url, secret_id),
             headers=auth,
             timeout=30,
         )
@@ -371,10 +372,10 @@ def _checkin_secret(
         except Exception:
             pass
         raise DelineaError(
-            "Failed to check in secret %s (HTTP %s)%s" % (secret_id, ex.response.status_code, error_body)
+            "Failed to force check in secret %s (HTTP %s)%s" % (secret_id, ex.response.status_code, error_body)
         ) from ex
     except RequestException as ex:
-        raise DelineaError("Failed to check in secret %s: %s" % (secret_id, ex)) from ex
+        raise DelineaError("Failed to force check in secret %s: %s" % (secret_id, ex)) from ex
 
 
 def _extract_password(detail: Dict[str, Any]) -> str:  # pragma: allowlist secret
@@ -750,7 +751,7 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
             
             # Force check-in the secret if it's checked out  # pragma: allowlist secret
             log.info(
-                "[VM %d/%d] Checking in secret ID=%s (if checked out)",
+                "[VM %d/%d] Force checking in secret ID=%s (requires admin permission)",
                 idx, len(vms), secret_id
             )
             try:
