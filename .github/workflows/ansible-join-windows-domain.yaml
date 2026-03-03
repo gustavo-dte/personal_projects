@@ -120,25 +120,30 @@ jobs:
               sys.exit(1)
           
           for vm in vms:
-              target_vm_name = vm.get('target_vm_name', '')
-              if not target_vm_name:
+              # name = Azure VM resource name
+              # target_vm_name = Windows hostname (may differ, used for WinRM after firewall configured)
+              azure_vm_name = vm.get('name', '')
+              target_vm_name = vm.get('target_vm_name', azure_vm_name)
+              
+              if not azure_vm_name:
+                  print("[WARN] VM has no 'name' field, skipping")
                   continue
               
-              print(f"[INFO] Checking NSG for VM: {target_vm_name}")
+              print(f"[INFO] Checking NSG for Azure VM: {azure_vm_name} (target hostname: {target_vm_name})")
               
               # Get NIC name for VM
               nic_result = subprocess.run(
-                  ['az', 'vm', 'nic', 'list', '--resource-group', target_rg, '--vm-name', target_vm_name, '--query', '[0].id', '-o', 'tsv'],
+                  ['az', 'vm', 'nic', 'list', '--resource-group', target_rg, '--vm-name', azure_vm_name, '--query', '[0].id', '-o', 'tsv'],
                   capture_output=True, text=True, check=False
               )
               
               if nic_result.returncode != 0:
-                  print(f"[WARN] Could not get NIC for {target_vm_name}")
+                  print(f"[WARN] Could not get NIC for Azure VM {azure_vm_name}")
                   continue
               
               nic_id = nic_result.stdout.strip()
               if not nic_id:
-                  print(f"[WARN] No NIC found for {target_vm_name}")
+                  print(f"[WARN] No NIC found for Azure VM {azure_vm_name}")
                   continue
               
               nic_name = nic_id.split('/')[-1]
@@ -170,9 +175,9 @@ jobs:
               )
               
               if rule_check.returncode == 0:
-                  print(f"[OK] WinRM NSG rule already exists for {target_vm_name}")
+                  print(f"[OK] WinRM NSG rule already exists for Azure VM {azure_vm_name}")
               else:
-                  print(f"[INFO] Creating WinRM HTTP NSG rule for {target_vm_name}")
+                  print(f"[INFO] Creating WinRM HTTP NSG rule for Azure VM {azure_vm_name}")
                   create_result = subprocess.run(
                       [
                           'az', 'network', 'nsg', 'rule', 'create',
@@ -191,9 +196,9 @@ jobs:
                   )
                   
                   if create_result.returncode == 0:
-                      print(f"[OK] WinRM NSG rule created for {target_vm_name}")
+                      print(f"[OK] WinRM NSG rule created for Azure VM {azure_vm_name}")
                   else:
-                      print(f"[ERROR] Failed to create WinRM NSG rule for {target_vm_name}: {create_result.stderr}")
+                      print(f"[ERROR] Failed to create WinRM NSG rule for Azure VM {azure_vm_name}: {create_result.stderr}")
                       sys.exit(1)
           EOF
 
@@ -254,16 +259,23 @@ jobs:
           """
           
           for vm in vms:
-              target_vm_name = vm.get('target_vm_name', vm.get('name'))
+              # name = Azure VM resource name
+              # target_vm_name = Windows hostname (may differ after rename)
+              azure_vm_name = vm.get('name', '')
+              target_vm_name = vm.get('target_vm_name', azure_vm_name)
               
-              print(f"[INFO] Configuring Windows Firewall on VM: {target_vm_name}")
+              if not azure_vm_name:
+                  print("[WARN] VM has no 'name' field, skipping")
+                  continue
+              
+              print(f"[INFO] Configuring Windows Firewall on Azure VM: {azure_vm_name} (target hostname: {target_vm_name})")
               
               # Use Azure Run Command to execute PowerShell on VM (works regardless of firewall/NSG)
               result = subprocess.run(
                   [
                       'az', 'vm', 'run-command', 'invoke',
                       '--resource-group', target_rg,
-                      '--name', target_vm_name,
+                      '--name', azure_vm_name,
                       '--command-id', 'RunPowerShellScript',
                       '--scripts', ps_script
                   ],
@@ -271,7 +283,7 @@ jobs:
               )
               
               if result.returncode == 0:
-                  print(f"[OK] Windows Firewall configured on {target_vm_name}")
+                  print(f"[OK] Windows Firewall configured on Azure VM {azure_vm_name}")
                   # Parse and display output
                   try:
                       output = json.loads(result.stdout)
@@ -282,7 +294,7 @@ jobs:
                   except:
                       pass
               else:
-                  print(f"[ERROR] Failed to configure Windows Firewall on {target_vm_name}")
+                  print(f"[ERROR] Failed to configure Windows Firewall on Azure VM {azure_vm_name}")
                   print(f"        {result.stderr[:300]}")
                   sys.exit(1)
               
