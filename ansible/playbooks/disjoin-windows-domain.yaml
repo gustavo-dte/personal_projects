@@ -73,29 +73,48 @@
     - name: "Step 1: Fetch SE-Admin value from Delinea Secret Server"
       block:
 
+        - name: "Step 1a: Set Delinea connection parameters"
+          ansible.builtin.set_fact:
+            delinea_conn_params:
+              base_url: "{{ ss_url }}"
+              username: "{{ ss_username }}"
+              password: "{{ ss_value }}"
+          when: ss_secret_id | length > 0
+          no_log: true
+
         - name: "Step 1a: Fetch secret by numeric ID"
           ansible.builtin.set_fact:
-            delinea_secret: >-
+            delinea_secret: >
               {{ lookup(
                 'delinea.platform_secretserver.tss',
                 ss_secret_id | int,
-                base_url=ss_url,
-                username=ss_username,
-                password=ss_value
+                base_url=delinea_conn_params.base_url,
+                username=delinea_conn_params.username,
+                password=delinea_conn_params.password
               ) }}
           when: ss_secret_id | length > 0
           no_log: true
 
+        - name: "Step 1b: Set Delinea connection parameters for path lookup"
+          ansible.builtin.set_fact:
+            delinea_conn_params:
+              base_url: "{{ ss_url }}"
+              username: "{{ ss_username }}"
+              password: "{{ ss_value }}"
+              secret_path: "{{ ss_secret_path }}"
+          when: ss_secret_id | length == 0
+          no_log: true
+
         - name: "Step 1b: Fetch secret by path (fallback when DELINEA_SECRET_ID is not set)"
           ansible.builtin.set_fact:
-            delinea_secret: >-
+            delinea_secret: >
               {{ lookup(
                 'delinea.platform_secretserver.tss',
                 0,
-                secret_path=ss_secret_path,
-                base_url=ss_url,
-                username=ss_username,
-                password=ss_value
+                secret_path=delinea_conn_params.secret_path,
+                base_url=delinea_conn_params.base_url,
+                username=delinea_conn_params.username,
+                password=delinea_conn_params.password
               ) }}
           when: ss_secret_id | length == 0
           no_log: true
@@ -103,7 +122,7 @@
         - name: "Step 1c: Extract SE-Admin value from retrieved secret"
           ansible.builtin.set_fact:
             winrm_value: >
-              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['password'] }}
+              {{ (delinea_secret['items'] | items2dict(key_name='slug', value_name='itemValue'))['se-password'] }}
           no_log: true
 
         - name: "Step 1d: Audit log — value retrieved (non-sensitive)"

@@ -126,8 +126,8 @@ uninstall_tools_list:
 
 # List of VMs to replicate
 vms:
-  - name: dca-dev7048
-    target_vm_name: VMCUWINWEBD09
+  - name: dca-tst1856
+    target_vm_name: VMCUWINWEBD10
     vm_winrm_port: 5985   # VM has WinRM HTTP on 5985; ensure NSG allows inbound 5985 from runner
     vm_winrm_username: se-admin  # WinRM user for VM; password from GitHub secret DCA_DEV7048_ADMIN_PASSWORD
     vm_winrm_connect_hostname: dca-dev7048 # current hostname for first WinRM connection (avoids credential reject when target_vm_name differs)
@@ -218,7 +218,7 @@ load_balancers:
     # List of VM target_vm_names to associate with this load balancer
     # The template will automatically resolve these to NIC IDs
     vm_names:
-      - VMCUWINWEBD09
+      - VMCUWINWEBD10
 
     # Optional: Backend address pools configuration
     # If not specified, a default pool will be created with the VMs from vm_names
