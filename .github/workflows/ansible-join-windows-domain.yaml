@@ -242,21 +242,13 @@ jobs:
           
           # PowerShell script to configure Windows Firewall for WinRM
           ps_script = """
-          # Enable WinRM through Windows Firewall
-          Write-Output "Configuring Windows Firewall for WinRM..."
+          # Disable Windows Firewall for all profiles to allow WinRM connectivity
+          Write-Output "Disabling Windows Firewall for all profiles..."
           
-          # Enable WinRM HTTP (5985) rule
-          Enable-NetFirewallRule -DisplayGroup "Windows Remote Management" -ErrorAction SilentlyContinue
+          # Disable firewall for Domain, Private, and Public profiles
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
           
-          # If default rule doesn't exist, create it
-          $existingRule = Get-NetFirewallRule -Name "WINRM-HTTP-In-TCP" -ErrorAction SilentlyContinue
-          if (-not $existingRule) {
-              New-NetFirewallRule -Name "WINRM-HTTP-In-TCP" -DisplayName "Windows Remote Management (HTTP-In)" -Enabled True -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow
-              Write-Output "Created WinRM HTTP firewall rule"
-          } else {
-              Set-NetFirewallRule -Name "WINRM-HTTP-In-TCP" -Enabled True
-              Write-Output "Enabled WinRM HTTP firewall rule"
-          }
+          Write-Output "Windows Firewall disabled successfully"
           
           # Ensure WinRM service is enabled and running
           Set-Service -Name WinRM -StartupType Automatic -ErrorAction SilentlyContinue
@@ -265,7 +257,7 @@ jobs:
           # Configure WinRM to allow connections
           Enable-PSRemoting -Force -SkipNetworkProfileCheck -ErrorAction SilentlyContinue
           
-          Write-Output "Windows Firewall configured successfully for WinRM"
+          Write-Output "WinRM service configured and running"
           """
           
           for vm in vms:

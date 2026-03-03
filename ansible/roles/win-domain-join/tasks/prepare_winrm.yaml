@@ -14,6 +14,7 @@
   ansible.builtin.set_fact:
     resolved_winrm_username: "{{ item_winrm_username if (item_winrm_username is defined and item_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
     resolved_winrm_value: "{{ item_winrm_value if (item_winrm_value is defined and item_winrm_value | string | length > 0) else (winrm_value | default('')) }}"
+    resolved_winrm_password: "{{ item_winrm_value if (item_winrm_value is defined and item_winrm_value | string | length > 0) else (winrm_value | default('')) }}"
   no_log: true
 
 - name: Set WinRM credentials with proper format (current_hostname\username for initial connection)
@@ -80,6 +81,7 @@
   ansible.builtin.set_fact:
     winrm_initial_auth_result: "{{ winrm_probe_primary }}"
     actual_vm_hostname: "{{ winrm_probe_primary.stdout | default('') | trim }}"
+    winrm_successful_username: "{{ hostvars['localhost']['winrm_hostname_for_auth'] }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -87,26 +89,96 @@
     - not (winrm_probe_primary.unreachable | default(false) | bool)
     - not (winrm_probe_primary.failed | default(false) | bool)
 
-- name: Fail if SE-Admin WinRM authentication failed
+- name: Fallback - Try WinRM with local administrator (.\administrator)
+  ansible.windows.win_shell: |
+    $env:COMPUTERNAME
+  delegate_to: "{{ target_vm_host }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_initial_auth_result is not defined  # Primary auth failed
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: ".\\administrator"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_value'] }}"  # pragma: allowlist secret
+  register: winrm_probe_local_admin
+  changed_when: false
+  failed_when: false
+  ignore_unreachable: true
+
+- name: Record WinRM auth success with local administrator (.\administrator)
+  ansible.builtin.set_fact:
+    winrm_initial_auth_result: "{{ winrm_probe_local_admin }}"
+    actual_vm_hostname: "{{ winrm_probe_local_admin.stdout | default('') | trim }}"
+    winrm_successful_username: ".\\administrator"
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_probe_local_admin is defined
+    - not (winrm_probe_local_admin.unreachable | default(false) | bool)
+    - not (winrm_probe_local_admin.failed | default(false) | bool)
+
+- name: Fallback - Try WinRM with plain administrator account
+  ansible.windows.win_shell: |
+    $env:COMPUTERNAME
+  delegate_to: "{{ target_vm_host }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_initial_auth_result is not defined  # Both previous auth attempts failed
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: "administrator"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_value'] }}"  # pragma: allowlist secret
+  register: winrm_probe_plain_admin
+  changed_when: false
+  failed_when: false
+  ignore_unreachable: true
+
+- name: Record WinRM auth success with plain administrator
+  ansible.builtin.set_fact:
+    winrm_initial_auth_result: "{{ winrm_probe_plain_admin }}"
+    actual_vm_hostname: "{{ winrm_probe_plain_admin.stdout | default('') | trim }}"
+    winrm_successful_username: "administrator"
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_probe_plain_admin is defined
+    - not (winrm_probe_plain_admin.unreachable | default(false) | bool)
+    - not (winrm_probe_plain_admin.failed | default(false) | bool)
+
+- name: Fail if all WinRM authentication attempts failed
   ansible.builtin.fail:
     msg: |
-      ERROR: WinRM authentication with SE-Admin failed for {{ target_vm_name }} ({{ target_vm_host }}).
+      ERROR: All WinRM authentication attempts failed for {{ target_vm_name }} ({{ target_vm_host }}).
       
-      Tried: {{ hostvars['localhost']['winrm_hostname_for_auth'] | default(target_vm_name) }}\{{ hostvars['localhost']['resolved_winrm_username'] | default('SE-Admin') }}
+      Attempted usernames (with se-admin password from Delinea):
+        1. {{ hostvars['localhost']['winrm_hostname_for_auth'] | default(target_vm_name) }}\{{ hostvars['localhost']['resolved_winrm_username'] | default('SE-Admin') }} (domain account)
+        2. .\administrator (local administrator)
+        3. administrator (plain administrator)
+      
       Current hostname: {{ hostvars['localhost']['vm_winrm_connect_hostname'] | default('(not specified)') }}
       Target hostname: {{ target_vm_name }}
       
-      Note: This initial probe expects the VM to be domain-joined.
-      Local administrator accounts (.\administrator, administrator) are only used
-      AFTER the VM is disjoined and in WORKGROUP state (during hostname rename).
-      
       Possible causes:
-        - Wrong SE-Admin value retrieved from Delinea Secret Server (check field name: 'se-password')
+        - Wrong password retrieved from Delinea Secret Server (check field name: 'se-password')
         - WinRM not enabled on target VM
         - Firewall blocking port {{ winrm_port }}
         - VM is off or unreachable
-        - SE-Admin account does not exist or is disabled on the VM
-        - VM is already in WORKGROUP (not domain-joined)
+        - Administrator accounts are disabled on the VM
+        - Password does not match any of the attempted accounts
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -121,12 +193,25 @@
     - winrm_initial_auth_result is defined
     - (actual_vm_hostname is not defined or actual_vm_hostname | length == 0)
 
-- name: Set formatted WinRM username from actual hostname
+- name: Set formatted WinRM username from successful authentication
   ansible.builtin.set_fact:
-    formatted_winrm_username: "{{ actual_vm_hostname }}\\{{ resolved_winrm_username }}"
+    formatted_winrm_username: "{{ winrm_successful_username }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
+    - winrm_successful_username is defined
+
+- name: Display successful WinRM authentication method
+  ansible.builtin.debug:
+    msg: |
+      ✓ WinRM authentication successful for {{ target_vm_name }}:
+      - Authenticated as: {{ winrm_successful_username }}
+      - Actual hostname: {{ actual_vm_hostname }}
+      - Connection: {{ target_vm_host }}:{{ winrm_port }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_successful_username is defined
 
 - name: Display WinRM connection details
   ansible.builtin.debug:
@@ -137,7 +222,8 @@
       - Scheme: {{ 'https' if winrm_port | int == 5986 else 'http' }}
       - Transport: {{ winrm_transport }}
       - Actual hostname: {{ actual_vm_hostname }}
-      - Username: {{ formatted_winrm_username }} (format: computername\username)
+      - Successful username: {{ winrm_successful_username | default('not determined') }}
+      - Formatted username: {{ formatted_winrm_username }} (format: computername\username or .\username or username)
   when: debug_mode | default(false) | bool
 
 - name: Check current domain membership
