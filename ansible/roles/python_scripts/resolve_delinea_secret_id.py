@@ -728,8 +728,8 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
             
         except (DelineaError, ConfigurationError) as ex:
             log.error(
-                "[VM %d/%d] ✗ Failed to resolve password for %s: %s",  # pragma: allowlist secret
-                idx, len(vms), target_vm_name, ex
+                "[VM %d/%d] ✗ Failed to resolve password for %s (Azure VM: %s): %s",  # pragma: allowlist secret
+                idx, len(vms), vm_hostname, target_vm_name, ex
             )
             # Continue processing other VMs instead of failing completely
             continue
