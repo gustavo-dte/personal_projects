@@ -794,14 +794,14 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
             _write_github_env(cfg.github_env, env_var_name, password)  # pragma: allowlist secret
             
             log.info(
-                "[VM %d/%d] ✓ Password written to: %s",  # pragma: allowlist secret
+                "[VM %d/%d] Password written to: %s",  # pragma: allowlist secret
                 idx, len(vms), env_var_name
             )
             success_count += 1
             
         except (DelineaError, ConfigurationError) as ex:
             log.error(
-                "[VM %d/%d] ✗ Failed to resolve password for %s (Azure VM: %s): %s",  # pragma: allowlist secret
+                "[VM %d/%d] Failed to resolve password for %s (Azure VM: %s): %s",  # pragma: allowlist secret
                 idx, len(vms), vm_hostname, target_vm_name, ex
             )
             # Continue processing other VMs instead of failing completely
@@ -813,7 +813,7 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
         )
     
     log.info(
-        "[Multi-VM Mode] ✓ Successfully resolved %d/%d VM password(s)",  # pragma: allowlist secret
+        "[Multi-VM Mode] Successfully resolved %d/%d VM password(s)",  # pragma: allowlist secret
         success_count, len(vms)
     )
     
@@ -837,7 +837,7 @@ def main() -> None:
             # Single-VM mode (legacy): Resolve secret ID only
             delinea_id = resolve(cfg)
             _write_github_env(cfg.github_env, "DELINEA_SECRET_ID", delinea_id)
-            log.info("[Single-VM Mode] ✓ DELINEA_SECRET_ID=%s", delinea_id)
+            log.info("[Single-VM Mode] DELINEA_SECRET_ID=%s", delinea_id)
             
     except ConfigurationError as ex:
         log.error("Configuration error: %s", ex)
