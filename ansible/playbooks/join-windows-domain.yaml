@@ -16,8 +16,10 @@
 #   dry_run               true -> preview only, no changes applied  (default: false)
 #   force_rejoin          true -> forces disjoin before join (default: false; use with caution)
 #
-# Required environment variables (set by workflow's fetch_delinea_multi_vm.py script):
+# Required environment variables (set by workflow's resolve_delinea_secret_id.py script):
 #   winrm_value_{target_vm_name_lowercase}    Per-VM SE-Admin password from Delinea  # pragma: allowlist secret
+#                                             Example: winrm_value_vmcuwinwebd09
+#                                             Role uses lookup('env', 'winrm_value_...')
 #
 # Required manifest keys:
 #   vms[*].target_vm_name                   Target hostname for each VM (must match current hostname)

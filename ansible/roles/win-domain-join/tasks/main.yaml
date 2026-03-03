@@ -91,8 +91,8 @@
           {{
             vm_winrm_values | default({}) | combine({
               item.name: (
-                lookup('vars', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') if
-                (lookup('vars', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') | string | length > 0)
+                lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') if
+                (lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') | string | length > 0)
                 else (item.vm_winrm_value | default(''))
               )
             })
@@ -101,6 +101,17 @@
       loop_control:
         label: "{{ item.name }}"
       no_log: true
+
+    - name: Debug per-VM WinRM password lookup (shows if env vars were found)  # pragma: allowlist secret
+      ansible.builtin.debug:
+        msg: |
+          VM: {{ item.name }}
+          Target name: {{ item.target_vm_name | default(item.name) }}
+          Env var name: winrm_value_{{ item.target_vm_name | default(item.name) | lower }}
+          Password found: {{ 'YES' if (vm_winrm_values[item.name] | default('') | length > 0) else 'NO' }}
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
 
     - name: Build per-VM WinRM username mapping
       ansible.builtin.set_fact:
