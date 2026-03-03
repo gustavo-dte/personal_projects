@@ -323,8 +323,13 @@ def _fetch_detail(
         )
         resp.raise_for_status()
     except HTTPError as ex:
+        error_body = ""
+        try:
+            error_body = " - " + ex.response.text
+        except Exception:
+            pass
         raise DelineaError(
-            "Failed to fetch secret %s (HTTP %s)" % (secret_id, ex.response.status_code)
+            "Failed to fetch secret %s (HTTP %s)%s" % (secret_id, ex.response.status_code, error_body)
         ) from ex
     except RequestException as ex:
         raise DelineaError("Failed to fetch secret %s: %s" % (secret_id, ex)) from ex
