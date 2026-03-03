@@ -1,47 +1,29 @@
 name: Ansible-Join-Windows-Domain
 
-# Joins Windows VMs to Active Directory with optional disjoin-rename-join cycle.
-# When force_rejoin=true (default): Disjoins -> Renames -> Rejoins (recommended for migrated VMs with stale trust)
-# When force_rejoin=false: Only joins if VM is not already in the domain
-# Calls: ansible/roles/python_scripts/resolve_delinea_secret_id.py for per-VM password retrieval  # pragma: allowlist secret
-# Calls: ansible/roles/python_scripts/ensure_nsg_winrm_rule.py to ensure NSG WinRM rule exists
-# Calls: ansible/roles/python_scripts/configure_winrm_firewall.py to configure Windows Firewall via Azure Run Command
-# Calls: ansible/roles/python_scripts/read_manifest_value.py to read subscription ID from manifest
-# Calls: ansible/playbooks/join-windows-domain.yaml
-#
-# Steps executed when force_rejoin=true:
-#   1 - Fetch per-VM SE-Admin passwords from Delinea Secret Server (for WinRM connectivity)  # pragma: allowlist secret
-#       Uses ansible/roles/python_scripts/resolve_delinea_secret_id.py to dynamically query Delinea for each VM
-#       based on vm_winrm_connect_hostname from manifest, or uses vm_delinea_secret_id if explicitly set
-#   2 - Disjoin from current domain (if joined)
-#   3 - Rename VM hostname (if needed)
-#   4 - Join to target domain using cpoe-automation domain account
-#
-# Required GitHub Secrets:
-#   DELINEA_USERNAME          Service account that authenticates to Delinea Secret Server
-#   DELINEA_PASSWORD          Secret value for the Delinea service account  # pragma: allowlist secret
-#   DOMAIN_ADMIN_PASSWORD     Secret value for the cpoe-automation domain account  # pragma: allowlist secret
-#   AZURE_TENANT_ID           Azure tenant for managed-identity login
-#   VM_MIGRATE_MI_CLIENT_ID   Client ID of the user-assigned managed identity
-#
-# Required GitHub Variables (vars.*):
-#   DELINEA_BASE_URL          Delinea Secret Server base URL (defaults to https://dte.secretservercloud.com)
-#   DELINEA_DOMAIN_SUFFIX     Domain suffix appended to hostnames (defaults to .dtenet.com)
+# This workflow joins Windows servers to an Active Directory domain.
+# Steps:
+#   1. Login to Azure using target_subscription_id from the manifest
+#   2. Open RDP (3389) and WinRM (5985) via Azure VM Run Command (Windows Firewall)
+#   3. Resolve the SE-Admin WinRM password from Delinea using target_vm_name
+#   4. TCP test WinRM port connectivity
+#   5. Disjoin VM from domain using SE-Admin + Delinea password
+#   6. Rename hostname using local Administrator + SE-Admin (Delinea) password
+#   7. Join VM to domain using cpoe-automation + DOMAIN_ADMIN_PASSWORD secret
 
 on:
   workflow_dispatch:
     inputs:
       manifest:
-        description: "Manifest name (directory under ansible/vars/)"
+        description: "Manifest name (directory in ansible/vars/)"
         required: true
         type: string
       dry_run:
-        description: "Dry run - no changes applied"
+        description: "Dry run - no changes will be made"
         required: false
         type: boolean
         default: true
       force_rejoin:
-        description: "Disjoin -> Rename -> Rejoin cycle (recommended for migrated VMs with stale trust)"
+        description: "Disjoin then Rejoin cycle (recommended for migrated VMs with stale trust)"
         required: false
         type: boolean
         default: true
@@ -56,7 +38,6 @@ permissions:
 
 jobs:
   join-windows-domain:
-    name: "Join — ${{ inputs.manifest }}${{ inputs.dry_run && ' [DRY RUN]' || '' }}"
     environment: dev
     runs-on:
       - self-hosted
@@ -68,153 +49,228 @@ jobs:
       ANSIBLE_CONFIG: ansible/ansible.cfg
       DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
-      DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}  # pragma: allowlist secret
-      DELINEA_DOMAIN_SUFFIX: ${{ vars.DELINEA_DOMAIN_SUFFIX != '' && vars.DELINEA_DOMAIN_SUFFIX || '.dtenet.com' }}
+      DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
+      DELINEA_SECRET_ACCOUNT: ${{ vars.DELINEA_SECRET_ACCOUNT != '' && vars.DELINEA_SECRET_ACCOUNT || 'SE-Admin' }}
 
     steps:
+      # ------------------------------------------------------------------
+      # Dependencies
+      # ------------------------------------------------------------------
 
-      - name: "Checkout repository"
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: "Setup Ansible environment"
-        uses: ./.github/actions/setup-ansible-environment
+      - name: Install Python dependencies
+        run: |
+          pip install python-tss-sdk PyYAML requests
+        shell: bash
 
-      - name: "Install PyYAML for manifest parsing"
-        run: pip install PyYAML
+      - name: Upgrade Ansible to required version
+        run: pip install --upgrade 'ansible>=2.15.0'
+        shell: bash
 
-      - name: "Validate manifest"
+      - name: Install Delinea Platform Secret Server Ansible Collection
+        run: ansible-galaxy collection install delinea.platform_secretserver
+        shell: bash
+
+      - name: Verify Delinea lookup plugin is installed
+        run: ansible-doc -t lookup -l | grep tss
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Validate manifest
+      # ------------------------------------------------------------------
+
+      - name: Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: "Read subscription ID from manifest"
-        if: ${{ !inputs.dry_run }}
-        id: manifest_sub
-        env:
-          MANIFEST: ${{ inputs.manifest }}
-          MANIFEST_KEY: target_subscription_id
-        run: |
-          SUB_ID=$(python3 ansible/roles/python_scripts/read_manifest_value.py)
-          echo "subscription_id=${SUB_ID}" >> $GITHUB_OUTPUT
-          echo "[INFO] Target subscription: ${SUB_ID}"
+      # ------------------------------------------------------------------
+      # Read target_subscription_id from manifest
+      # ------------------------------------------------------------------
 
-      - name: "Azure Login"
+      - name: Read target subscription ID from manifest
+        id: read_subscription
+        run: |
+          SUB_ID=$(MANIFEST="${{ inputs.manifest }}" MANIFEST_KEY="target_subscription_id" \
+            python3 ansible/roles/python_scripts/read_manifest_value.py)
+          echo "subscription_id=${SUB_ID}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] Target subscription: ${SUB_ID}"
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Azure login using the subscription from the manifest
+      # ------------------------------------------------------------------
+
+      - name: Azure login with user-assigned managed identity
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          subscription-id: ${{ steps.manifest_sub.outputs.subscription_id }}
+          subscription-id: ${{ steps.read_subscription.outputs.subscription_id }}
+          allow-no-subscriptions: false
           enable-AzPSSession: true
 
-      - name: "Ensure WinRM NSG rule exists for VM connectivity"
+      # ------------------------------------------------------------------
+      # Open RDP and WinRM on the VM Windows Firewall via Azure Run Command
+      # ------------------------------------------------------------------
+
+      - name: Configure VM Windows Firewall (RDP 3389 and WinRM 5985)
         if: ${{ !inputs.dry_run }}
-        env:
-          MANIFEST: ${{ inputs.manifest }}
         run: |
-          echo "[INFO] Checking WinRM NSG rules for VMs in manifest: ${MANIFEST}"
-          python3 ansible/roles/python_scripts/ensure_nsg_winrm_rule.py
+          MANIFEST="${{ inputs.manifest }}" \
+            python3 ansible/roles/python_scripts/configure_winrm_firewall.py
+        shell: bash
 
-      - name: "Configure Windows Firewall on VMs for WinRM (Azure Run Command)"
+      # ------------------------------------------------------------------
+      # Extract VM hostname for Delinea lookup
+      # Uses target_vm_name from manifest as the Delinea machine filter
+      # ------------------------------------------------------------------
+
+      - name: Extract VM hostname for Delinea lookup
+        run: |
+          MANIFEST_FILE="ansible/vars/${{ inputs.manifest }}/manifest.yml" \
+            python3 ansible/roles/python_scripts/extract_vm_hostname.py
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Resolve SE-Admin password from Delinea using target_vm_name
+      # Writes per-VM env vars: winrm_value_<target_vm_name_lowercase>
+      # ------------------------------------------------------------------
+
+      - name: Resolve SE-Admin WinRM password from Delinea
+        id: delinea_fetch
+        run: |
+          MANIFEST="${{ inputs.manifest }}" \
+            python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+        shell: bash
+        env:
+          DELINEA_SECRET_ACCOUNT: SE-Admin
+
+      # ------------------------------------------------------------------
+      # TCP test WinRM port before proceeding
+      # ------------------------------------------------------------------
+
+      - name: TCP test WinRM port connectivity
         if: ${{ !inputs.dry_run }}
-        env:
-          MANIFEST: ${{ inputs.manifest }}
         run: |
-          echo "[INFO] Configuring Windows Firewall on VMs to allow WinRM"
-          python3 ansible/roles/python_scripts/configure_winrm_firewall.py
+          set -euo pipefail
+          MANIFEST_FILE="ansible/vars/${{ inputs.manifest }}/manifest.yml"
 
-      - name: "Display configuration"
+          python3 - <<'PYEOF'
+          import os, sys, socket, yaml
+
+          manifest_file = os.environ.get("MANIFEST_FILE", "").strip()
+          if not manifest_file:
+              print("[ERROR] MANIFEST_FILE not set")
+              sys.exit(1)
+
+          with open(manifest_file, encoding="utf-8") as fh:
+              manifest = yaml.safe_load(fh) or {}
+
+          vms = manifest.get("vms") or []
+          failed = []
+
+          for vm in vms:
+              hostname = vm.get("vm_winrm_connect_hostname") or vm.get("name", "")
+              port = int(vm.get("vm_winrm_port", 5985))
+              target_vm_name = vm.get("target_vm_name", vm.get("name", ""))
+
+              if not hostname:
+                  print("[WARN] No hostname for VM entry, skipping TCP test")
+                  continue
+
+              print("[INFO] Testing WinRM TCP %s:%d (target_vm_name=%s)" % (hostname, port, target_vm_name))
+              try:
+                  with socket.create_connection((hostname, port), timeout=10):
+                      print("[OK] WinRM reachable: %s:%d" % (hostname, port))
+              except (socket.timeout, ConnectionRefusedError, OSError) as ex:
+                  print("[FAIL] WinRM not reachable on %s:%d - %s" % (hostname, port, ex))
+                  failed.append("%s:%d" % (hostname, port))
+
+          if failed:
+              print("[FAIL] WinRM TCP test failed for: %s" % ", ".join(failed))
+              sys.exit(1)
+
+          print("[OK] All WinRM ports reachable")
+          PYEOF
+        shell: bash
+        env:
+          MANIFEST_FILE: ansible/vars/${{ inputs.manifest }}/manifest.yml
+
+      # ------------------------------------------------------------------
+      # Display configuration
+      # ------------------------------------------------------------------
+
+      - name: Display configuration
         run: |
-          echo "========================================================"
-          echo "  Ansible-Join-Windows-Domain - ${{ inputs.manifest }}"
-          echo "========================================================"
-          echo "  Dry run         : ${{ inputs.dry_run }}"
-          echo "  Force rejoin    : ${{ inputs.force_rejoin }}"
-          echo ""
-          echo "  Step 1 - Fetch per-VM SE-Admin values from Delinea (WinRM connectivity)"
-          echo "           URL             : ${DELINEA_BASE_URL}"
-          echo "           Config user     : ${DELINEA_USERNAME}"
-          echo "           Domain suffix   : ${DELINEA_DOMAIN_SUFFIX}"
-          echo ""
-          if [ "${{ inputs.force_rejoin }}" = "true" ]; then
-            echo "  Step 2 - Disjoin from current domain (if joined)    [SE-Admin]"
-            echo "  Step 3 - Rename VM hostname (if needed)              [Administrator]"
-            echo "  Step 4 - Join VM to target domain                    [cpoe-automation]"
-            echo ""
-            echo "  Mode: Full disjoin-rename-join cycle (recommended for migrated VMs)"
+          echo "[INFO] Manifest:      ${{ inputs.manifest }}"
+          echo "[INFO] Dry run:       ${{ inputs.dry_run }}"
+          echo "[INFO] Force rejoin:  ${{ inputs.force_rejoin }}"
+          echo "[INFO] Subscription:  ${{ steps.read_subscription.outputs.subscription_id }}"
+          echo "[INFO] Domain admin:  cpoe-automation (from DOMAIN_ADMIN_PASSWORD secret)"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "[INFO] Running in DRY RUN mode - no actual changes will be made"
           else
-            echo "  Step 2 - Join VM to domain (only if not already joined) [cpoe-automation]"
-            echo ""
-            echo "  Mode: Join only (skips disjoin/rename if VM is in target domain)"
+            echo "[INFO] Running LIVE - changes will be applied to the VM"
           fi
-          echo "========================================================"
-          [ "${{ inputs.dry_run }}" = "true" ] \
-            && echo "DRY RUN - no changes will be made." \
-            || echo "LIVE RUN - changes will be applied."
+        shell: bash
 
-      - name: "Fetch WinRM passwords from Delinea for all VMs"  # pragma: allowlist secret
-        env:
-          MANIFEST: ${{ inputs.manifest }}
-        run: |
-          echo "[INFO] Fetching Delinea secrets for VMs in manifest: ${MANIFEST}"
-          python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
-          if [ $? -ne 0 ]; then
-            echo "[FAIL] Failed to fetch Delinea secrets"
-            exit 1
-          fi
-          echo "[OK] Delinea secrets fetched successfully"
+      # ------------------------------------------------------------------
+      # Build ansible_extra_vars.json
+      # Disjoin step: uses SE-Admin + Delinea password (winrm_password injected by resolve step)
+      # Join step:    uses cpoe-automation + DOMAIN_ADMIN_PASSWORD secret
+      # ------------------------------------------------------------------
 
-      - name: "Verify environment variables were written"  # pragma: allowlist secret
-        run: |
-          echo "[INFO] Checking environment variables written to GITHUB_ENV"
-          if [ -f "$GITHUB_ENV" ]; then
-            echo "[INFO] GITHUB_ENV contents:"
-            grep "^winrm_value_" "$GITHUB_ENV" | sed 's/=.*/=***MASKED***/' || echo "[WARN] No winrm_value_* variables found"
-          else
-            echo "[WARN] GITHUB_ENV file not found"
-          fi
-          echo "[INFO] Current environment variables:"
-          env | grep "^winrm_value_" | sed 's/=.*/=***MASKED***/' || echo "[WARN] No winrm_value_* in current environment"
-
-      - name: "Prepare Ansible extra-vars"
-        env:
-          WORKFLOW_MANIFEST:            ${{ inputs.manifest }}
-          WORKFLOW_DRY_RUN:             ${{ inputs.dry_run }}
-          WORKFLOW_FORCE_REJOIN:        ${{ inputs.force_rejoin }}
-          SECRET_DOMAIN_ADMIN_VALUE:    ${{ secrets.DOMAIN_ADMIN_PASSWORD }}  # pragma: allowlist secret
-          SECRET_DOMAIN_OU_PATH:        ${{ secrets.DOMAIN_OU_PATH }}
+      - name: Build extra vars file for domain join workflow
         run: |
           python3 ansible/roles/python_scripts/json_builder.py join
           chmod 600 ansible_extra_vars.json
           python3 -m json.tool ansible_extra_vars.json > /dev/null \
-            && echo "JSON valid" \
-            || (echo "JSON invalid" && exit 1)
-
-      - name: "Run join playbook"
+            && echo "[OK] JSON is valid" \
+            || (echo "[FAIL] JSON validation failed" && exit 1)
+        shell: bash
         env:
-          ANSIBLE_LOAD_CALLBACK_PLUGINS: "true"
+          WORKFLOW_MANIFEST: ${{ inputs.manifest }}
+          WORKFLOW_DRY_RUN: ${{ inputs.dry_run }}
+          WORKFLOW_FORCE_REJOIN: ${{ inputs.force_rejoin }}
+          WORKFLOW_SKIP_HOSTNAME_SETUP: "false"
+          # Domain join uses cpoe-automation; password comes from GitHub secret
+          SECRET_DOMAIN_ADMIN_VALUE: ${{ secrets.DOMAIN_ADMIN_PASSWORD }}
+          SECRET_DOMAIN_OU_PATH: ${{ secrets.DOMAIN_OU_PATH }}
+          # Rename step runs as local Administrator using the SE-Admin Delinea password
+          WORKFLOW_RENAME_USERNAME: Administrator
+
+      # ------------------------------------------------------------------
+      # Run playbook
+      # Order inside the playbook:
+      #   1. Disjoin  - SE-Admin + Delinea password  (resolved above per VM)
+      #   2. Rename   - Administrator + SE-Admin (Delinea) password
+      #   3. Join     - cpoe-automation + DOMAIN_ADMIN_PASSWORD
+      # ------------------------------------------------------------------
+
+      - name: Run playbook - join Windows servers to domain
         run: |
           mkdir -p ansible/logs
-          set -a
-          source <(cat $GITHUB_ENV | sed 's/^/export /')
-          set +a
-
-          echo "=== Environment variables available to ansible-playbook ==="
-          env | grep "^winrm_value_" | sed 's/=.*/=***MASKED***/' || echo "No winrm_value_* variables found"
-          echo "==========================================================="
-
           ansible-playbook ansible/playbooks/join-windows-domain.yaml \
-            -e @ansible_extra_vars.json 2>&1 | tee ansible/logs/join.log
+            -e @ansible_extra_vars.json 2>&1 | tee ansible/logs/ansible-run.log
           rc=${PIPESTATUS[0]}
           rm -f ansible_extra_vars.json
           exit $rc
+        shell: bash
 
-      - name: "Upload logs"
+      # ------------------------------------------------------------------
+      # Upload logs
+      # ------------------------------------------------------------------
+
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: join-logs-${{ inputs.manifest }}
+          name: domain-join-logs
           path: ansible/logs/
           if-no-files-found: warn
           retention-days: 90

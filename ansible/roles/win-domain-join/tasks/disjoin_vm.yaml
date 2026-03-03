@@ -1,0 +1,132 @@
+---
+# Standalone disjoin workflow (prepare_winrm → disjoin → reboot)
+
+- name: Prepare WinRM and validate connectivity
+  ansible.builtin.include_tasks: prepare_winrm.yaml
+
+# Domain admin creds are optional; add them when the secure channel is broken.
+- name: Disjoin VM from domain (when not dry run)
+  block:
+    - name: Disjoin VM from domain (move to workgroup)
+      block:
+        - name: Disjoin VM from domain (move to workgroup)
+          microsoft.ad.membership:
+            workgroup_name: "WORKGROUP"
+            state: workgroup
+            reboot: false
+          delegate_to: "{{ target_vm_host }}"
+          vars:
+            ansible_connection: winrm
+            ansible_winrm_transport: "{{ winrm_transport }}"
+            ansible_winrm_port: "{{ winrm_port }}"
+            ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+            ansible_winrm_server_cert_validation: ignore
+            ansible_winrm_connection_timeout: 60
+            ansible_winrm_read_timeout: 70
+            ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+            ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+          register: disjoin_result
+          no_log: true
+      rescue:
+        - name: Fail with secure channel guidance when disjoin failed with Access is denied
+          ansible.builtin.fail:
+            msg: |
+              [FAIL] Disjoin failed for {{ target_vm_name }}: Access is denied.
+              The computer's secure channel to the domain is likely broken.
+              Fix: Add domain_admin_username and domain_admin_password to the playbook, or run Test-ComputerSecureChannel -Repair on the VM.
+              Original error: {{ disjoin_result.msg | default('Unknown') }}
+          when: "'access is denied' in ((disjoin_result.msg | default('')) | string | lower)"
+
+        - name: Fail when domain disjoin failed (other errors)
+          ansible.builtin.fail:
+            msg: "Disjoin failed for {{ target_vm_name }}: {{ disjoin_result.msg | default('Unknown error') | string }}"
+          when: "'access is denied' not in ((disjoin_result.msg | default('')) | string | lower)"
+
+        - name: Fail when domain disjoin failed (catch-all)
+          ansible.builtin.fail:
+            msg: "Disjoin failed for {{ target_vm_name }}: {{ disjoin_result.msg | default('Unknown error') | string }}"
+
+    - name: Display disjoin result
+      ansible.builtin.debug:
+        msg: "Disjoin completed for {{ target_vm_name }}. Reboot required: {{ disjoin_result.reboot_required | default(false) }}"
+
+    # Always reboot after disjoin when restart_on_success is true
+    - name: Reboot VM after disjoin
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 30
+        post_reboot_delay: 30
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_winrm_read_timeout: 70
+        ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+      when:
+        - not (disjoin_result.failed | default(false) | bool)
+        - restart_on_success | default(true) | bool
+      failed_when: false
+      no_log: true
+
+    - name: Wait for VM to come back online after disjoin
+      ansible.builtin.wait_for:
+        port: "{{ winrm_port }}"
+        host: "{{ target_vm_host }}"
+        delay: 60
+        timeout: 600
+      when:
+        - not (disjoin_result.failed | default(false) | bool)
+        - restart_on_success | default(true) | bool
+
+    - name: Capture final domain status after disjoin reboot
+      ansible.windows.win_shell: |
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Domain, PartOfDomain, Workgroup
+        $domainName = if ($cs.PartOfDomain) {
+          try {
+            [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().Name
+          }
+          catch {
+            $cs.Domain
+          }
+        }
+        else {
+          $null
+        }
+        @{
+          domain = if ($domainName) { $domainName } else { 'WORKGROUP' }
+          part_of_domain = $cs.PartOfDomain
+          workgroup_name = $cs.Workgroup
+        } | ConvertTo-Json
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_winrm_read_timeout: 70
+        ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+      register: final_status
+      changed_when: false
+      failed_when: false
+      when:
+        - not (disjoin_result.failed | default(false) | bool)
+
+    - name: Display final status for {{ target_vm_name }}
+      ansible.builtin.debug:
+        msg: "VM {{ target_vm_name }} is now in: {{ final_status.stdout | from_json | to_nice_json }}"
+      when:
+        - final_status is defined
+  when: not (dry_run | default(false) | bool)
+
+- name: Dry run - would disjoin {{ target_vm_name }}
+  ansible.builtin.debug:
+    msg: "[DRY RUN] Would disjoin {{ target_vm_name }} from domain and move to WORKGROUP."
+  when: dry_run | default(false) | bool

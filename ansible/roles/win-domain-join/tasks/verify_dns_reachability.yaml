@@ -1,0 +1,136 @@
+---
+# Post-join reachability checks from runner:
+# - Ping by IP (log-only on failure)
+# - Ping by new machine name
+# - If name ping fails, force DNS registration and retry
+
+- name: Pause for AD DNS replication before first reachability check
+  ansible.builtin.pause:
+    seconds: "{{ post_join_dns_settle_seconds | default(60) | int }}"
+  when: post_join_dns_settle_seconds | default(0) | int > 0
+
+- name: Set post-join reachability targets
+  ansible.builtin.set_fact:
+    target_vm_fqdn: "{{ target_vm_name }}.{{ domain_name }}"
+
+- name: Ping VM by IP from runner (log-only on failure)
+  ansible.builtin.command: "ping -c 2 -W 2 {{ target_vm_host }}"
+  register: ping_by_ip_result
+  changed_when: false
+  failed_when: false
+
+- name: Log warning when VM is not reachable by IP from runner
+  ansible.builtin.debug:
+    msg: |
+      [WARN] VM is not reachable by IP from runner: {{ target_vm_host }}
+      Logged only for now per requirement. Investigate separately (NSG/routes/firewall/runner network path).
+  when: ping_by_ip_result.rc != 0
+
+# Try FQDN first (runner often needs FQDN to resolve AD hosts). Use separate registers to avoid overwrite when task skipped.
+- name: Ping VM by FQDN from runner
+  ansible.builtin.command: "ping -c 2 -W 2 {{ target_vm_fqdn }}"
+  register: ping_by_fqdn_result
+  changed_when: false
+  failed_when: false
+
+- name: Ping VM by short name when FQDN failed
+  ansible.builtin.command: "ping -c 2 -W 2 {{ target_vm_name }}"
+  register: ping_by_short_result
+  changed_when: false
+  failed_when: false
+  when: ping_by_fqdn_result.rc != 0
+
+- name: Set name ping failed (both FQDN and short name failed)
+  ansible.builtin.set_fact:
+    name_ping_failed: "{{ (ping_by_fqdn_result.rc | default(1)) != 0 and (ping_by_short_result.rc | default(1)) != 0 }}"
+  when: ping_by_short_result is defined
+
+- name: Set name ping failed when FQDN failed and short name task was skipped
+  ansible.builtin.set_fact:
+    name_ping_failed: true
+  when: ping_by_fqdn_result.rc != 0 and ping_by_short_result is not defined
+
+- name: Set name ping failed false when FQDN or short name succeeded
+  ansible.builtin.set_fact:
+    name_ping_failed: false
+  when: ping_by_fqdn_result.rc == 0 or (ping_by_short_result is defined and not (ping_by_short_result.skipped | default(false)) and (ping_by_short_result.rc | default(1)) == 0)
+
+- name: Log initial name ping failure details
+  ansible.builtin.debug:
+    msg: |
+      Name-based reachability failed for {{ target_vm_name }} (FQDN: {{ target_vm_fqdn }}).
+      Running ipconfig /registerdns on VM and retrying name ping.
+  when: name_ping_failed | default(false) | bool
+
+- name: Run ipconfig /registerdns when name ping fails
+  ansible.windows.win_shell: ipconfig /registerdns
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"
+  register: register_dns_result
+  changed_when: false
+  when: name_ping_failed | default(false) | bool
+
+- name: Pause to allow DNS registration to propagate
+  ansible.builtin.pause:
+    seconds: "{{ dns_retry_wait_seconds | default(60) | int }}"
+  when: name_ping_failed | default(false) | bool
+
+- name: Re-ping VM by FQDN after registerdns
+  ansible.builtin.command: "ping -c 2 -W 2 {{ target_vm_fqdn }}"
+  register: ping_retry_fqdn_result
+  changed_when: false
+  failed_when: false
+  when: name_ping_failed | default(false) | bool
+
+- name: Re-ping VM by short name when FQDN retry failed
+  ansible.builtin.command: "ping -c 2 -W 2 {{ target_vm_name }}"
+  register: ping_retry_short_result
+  changed_when: false
+  failed_when: false
+  when:
+    - name_ping_failed | default(false) | bool
+    - ping_retry_fqdn_result.rc | default(1) != 0
+
+- name: Set name ping retry failed
+  ansible.builtin.set_fact:
+    name_ping_retry_failed: "{{ (ping_retry_fqdn_result.rc | default(1)) != 0 and (ping_retry_short_result.rc | default(1)) != 0 }}"
+  when:
+    - name_ping_failed | default(false) | bool
+    - ping_retry_fqdn_result is defined
+    - ping_retry_short_result is defined
+
+- name: Set name ping retry failed when only FQDN retry ran and failed
+  ansible.builtin.set_fact:
+    name_ping_retry_failed: "{{ ping_retry_fqdn_result.rc | default(1) != 0 }}"
+  when:
+    - name_ping_failed | default(false) | bool
+    - ping_retry_fqdn_result is defined
+    - ping_retry_short_result is not defined
+
+- name: Set name ping retry failed false when retry succeeded
+  ansible.builtin.set_fact:
+    name_ping_retry_failed: false
+  when:
+    - name_ping_failed | default(false) | bool
+    - ping_retry_fqdn_result is defined
+    - (ping_retry_fqdn_result.rc == 0) or (ping_retry_short_result is defined and ping_retry_short_result.rc == 0)
+
+# Warn only - runner may be outside AD DNS scope; domain join succeeded
+- name: Warn when name-based reachability still fails after registerdns
+  ansible.builtin.debug:
+    msg: |
+      [WARN] Name-based reachability still failing after ipconfig /registerdns (runner may be outside AD DNS scope).
+      - Name: {{ target_vm_name }}
+      - FQDN: {{ target_vm_fqdn }}
+      - IP: {{ target_vm_host }}
+      Domain join succeeded; investigate DNS resolution from runner separately.
+  when: name_ping_retry_failed | default(false) | bool

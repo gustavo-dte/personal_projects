@@ -1,8 +1,7 @@
 name: Ansible-Stop-Migration-Replication
 
-# Stops Azure Migrate replication for VMs defined in a manifest.
-# Calls: ansible/roles/python_scripts/read_manifest_value.py to read subscription ID from manifest
-# Calls: ansible/playbooks/stop-migration-replication.yml
+# This workflow stops Azure Migrate replication for VMs defined in a manifest
+# It mirrors the patterns used by Ansible-Start-Migration-Replication
 
 on:
   workflow_dispatch:
@@ -12,7 +11,7 @@ on:
         required: true
         type: string
       vm_names:
-        description: "Comma-delimited VM names to stop; use STOP_ALL to stop all VMs from manifest"
+        description: "Comma-delimited VM names to stop replication; use STOP_ALL to stop all from manifest"
         required: false
         type: string
         default: ""
@@ -41,54 +40,48 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
-
     steps:
-      - name: "Checkout repository"
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: "Install PyYAML for manifest parsing"
-        run: pip install PyYAML
-
-      - name: "Validate manifest"
+      - name: ✅ Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: "Fail early if no VM names provided"
-        run: |
-          if [ -z "${{ inputs.vm_names }}" ]; then
-            echo "[ERROR] No VM names provided. Specify vm_names (comma-delimited) or use STOP_ALL."
-            exit 1
-          fi
-
-      - name: "Read subscription ID from manifest"
-        id: manifest_sub
-        env:
-          MANIFEST: ${{ inputs.manifest }}
-          MANIFEST_KEY: target_subscription_id
-        run: |
-          SUB_ID=$(python3 ansible/roles/python_scripts/read_manifest_value.py)
-          echo "subscription_id=${SUB_ID}" >> $GITHUB_OUTPUT
-          echo "[INFO] Target subscription: ${SUB_ID}"
-
-      - name: "Azure Login"
+      - name: 🔐 Azure Login with user-assigned managed identity
         uses: azure/login@v2
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          subscription-id: ${{ steps.manifest_sub.outputs.subscription_id }}
+          allow-no-subscriptions: true
           enable-AzPSSession: true
 
-      - name: "Display configuration"
+      - name: 📊 Display configuration
         run: |
-          echo "[INFO] Manifest  : ${{ inputs.manifest }}"
-          echo "[INFO] VM names  : ${{ inputs.vm_names }}"
-          echo "[INFO] Dry run   : ${{ inputs.dry_run }}"
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🗂️  VM names filter: ${{ inputs.vm_names }}"
+          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "🛑 Stopping migration replication..."
+          fi
 
-      - name: "Prepare extra vars"
+      - name: 🚫 Fail early if no VM names provided and not STOP_ALL
+        shell: bash
         run: |
-          cat > ansible_extra_vars.json <<JSON
+          VM_NAMES_INPUT="${{ inputs.vm_names }}"
+          if [ -z "$VM_NAMES_INPUT" ]; then
+            echo "❌ No VM names provided. Specify 'vm_names' (comma-delimited) or use STOP_ALL to stop all from manifest."
+            exit 1
+          fi
+
+      - name: 🧱 Prepare extra vars file to maintain variable types
+        run: |
+          cat > ansible_extra_vars.json <<'JSON'
           {
             "manifest": "${{ inputs.manifest }}",
             "dry_run": ${{ inputs.dry_run }},
@@ -97,10 +90,7 @@ jobs:
           }
           JSON
 
-      - name: "Run playbook - stop migration replication"
+      - name: 🎬 Run playbook - stop migration replication
         run: |
           ansible-playbook ansible/playbooks/stop-migration-replication.yml \
             -e @ansible_extra_vars.json
-          rc=$?
-          rm -f ansible_extra_vars.json
-          exit $rc

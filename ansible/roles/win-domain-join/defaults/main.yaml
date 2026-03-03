@@ -1,18 +1,12 @@
----
 # Default variables for win-domain-join role
 
 # WinRM username format: computername\username (one backslash; used in bootstrap_winrm_username)
 winrm_username_sep: "\\"
 
-# Username used for the hostname rename step (Step 3 in join / Step 4 in disjoin).
-# This account must have local Administrator rights on the VM.
-# The SE-Admin Delinea value (winrm_value) is reused for connection setup.  # pragma: allowlist secret
-rename_winrm_username: "Administrator"
-
 # Domain configuration
 domain_name: ""
 domain_admin_username: ""
-domain_admin_value: ""  # Should be passed via GitHub Actions secret  # pragma: allowlist secret
+domain_admin_password: ""  # Should be passed via Ansible Vault or environment variable
 # Required for pre-create flow: OU where new AD computer object is created (DN format).
 # Example for dtenet.com/Servers/DCA/Azure: "OU=Azure,OU=DCA,OU=Servers,DC=dtenet,DC=com"
 domain_ou_path: ""
@@ -22,17 +16,15 @@ computer_name: ""  # Optional: Custom computer name (defaults to inventory_hostn
 
 # Behavior flags
 dry_run: false
-# disjoin_and_rename: disjoin from domain → reboot → rename hostname to target_vm_name → reboot
-# Used by the disjoin workflow. Does NOT rejoin the domain.
-disjoin_and_rename: false
 debug_mode: false  # When true, show extra WinRM connection details
 restart_on_success: true  # Whether to restart the server after successful domain join
 wait_for_reboot: true  # Whether to wait for reboot to complete
+force_rejoin: true  # Disjoin → Rename → Rejoin cycle; recommended for migrated VMs with stale domain trust
 # Use Azure CLI restart as primary for Azure VMs (more reliable than win_reboot). When true, run Azure restart first; fall back to win_reboot only if Azure fails.
 use_azure_restart: true
-# Extra delay after rename reboot before first WinRM connection (Windows may reject connection until fully settled)  # pragma: allowlist secret
-# Increase if connection rejection persists (e.g. after disjoin+rename double-reboot)  # pragma: allowlist secret
-post_rename_reboot_settle_seconds: 300
+# Extra delay after rename reboot before first WinRM connection (Windows may reject auth until fully settled)
+# Increase if credential rejection persists (e.g. after disjoin+rename double-reboot)
+post_rename_reboot_settle_seconds: 90
 # Pause before first DNS ping (allows AD replication after fresh join). Set to 0 to skip.
 post_join_dns_settle_seconds: 60
 # Pause after ipconfig /registerdns before retrying name ping (propagation time)

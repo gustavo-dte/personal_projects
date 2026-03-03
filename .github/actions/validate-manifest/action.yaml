@@ -27,12 +27,12 @@ runs:
 
         # Security: Validate manifest name (alphanumeric, hyphens, underscores only)
         if [[ ! "${MANIFEST}" =~ ^[a-zA-Z0-9_-]+$ ]] || [[ -z "${MANIFEST}" ]] || [[ ${#MANIFEST} -gt 50 ]]; then
-          echo "ERROR: Invalid manifest name. Use only alphanumeric characters, hyphens, and underscores (max 50 chars)."
+          echo "❌ ERROR: Invalid manifest name. Use only alphanumeric characters, hyphens, and underscores (max 50 chars)."
           echo "   Provided: '${MANIFEST}'"
           exit 1
         fi
 
-        echo "Validating manifest: ${MANIFEST}"
+        echo "🔍 Validating manifest: ${MANIFEST}"
 
         # Construct safe paths
         VARS_PATH_ABS=$(realpath "${VARS_PATH}")
@@ -41,25 +41,25 @@ runs:
 
         # Security: Ensure path stays within vars directory (prevents path traversal)
         if [[ "${MANIFEST_DIR_ABS}" != "${VARS_PATH_ABS}"/* ]]; then
-          echo "ERROR: Path traversal detected."
+          echo "❌ ERROR: Path traversal detected."
           exit 1
         fi
 
         # Validate files exist
         if [ ! -d "${MANIFEST_DIR_ABS}" ]; then
-          echo "ERROR: Manifest directory '${MANIFEST_DIR_ABS}' does not exist"
-          echo "Available manifests:"
+          echo "❌ ERROR: Manifest directory '${MANIFEST_DIR_ABS}' does not exist"
+          echo "📋 Available manifests:"
           ls -la "${VARS_PATH_ABS}" 2>/dev/null | grep "^d" | awk '{print "  - " $9}' | grep -v "^\s*-\s*\.$" | grep -v "^\s*-\s*\.\.$" || echo "  (none found)"
           exit 1
         fi
 
         if [ ! -f "${MANIFEST_FILE_ABS}" ]; then
-          echo "ERROR: Manifest file '${MANIFEST_FILE_ABS}' does not exist"
+          echo "❌ ERROR: Manifest file '${MANIFEST_FILE_ABS}' does not exist"
           exit 1
         fi
 
-        echo "Manifest validation successful!"
-        echo "Using manifest file: ${MANIFEST_FILE_ABS}"
+        echo "✅ Manifest validation successful!"
+        echo "📄 Using manifest file: ${MANIFEST_FILE_ABS}"
 
         # Set outputs
         echo "manifest_path=${MANIFEST_FILE_ABS}" >> $GITHUB_OUTPUT

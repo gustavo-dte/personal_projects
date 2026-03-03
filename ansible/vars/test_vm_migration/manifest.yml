@@ -126,11 +126,11 @@ uninstall_tools_list:
 
 # List of VMs to replicate
 vms:
-  - name: dca-dev7000
-    target_vm_name: vmcuwinwebd01
+  - name: vmcuwinwebd01
+    target_vm_name: vmcuwinwebd08
     vm_winrm_port: 5985   # VM has WinRM HTTP on 5985; ensure NSG allows inbound 5985 from runner
-    vm_winrm_username: migration-test  # WinRM user for dummy VM; value from GitHub secret winrm_password_vmcuwinwebd01  # pragma: allowlist secret
-    vm_winrm_connect_hostname: dca-dev7000  # current hostname for first WinRM connection (target_vm_name may differ)  # pragma: allowlist secret
+    vm_winrm_username: migration-test  # WinRM user for dummy VM; password from GitHub secret winrm_password_vmcuwinwebd08
+    vm_winrm_connect_hostname: vmcuwinwebd01  # current hostname for first WinRM connection (avoids credential reject when target_vm_name differs)
     description: "Server created to test migration pipeline"
     target_vm_size: Standard_D2s_v5
     target_license_type: WindowsServer
@@ -218,7 +218,7 @@ load_balancers:
     # List of VM target_vm_names to associate with this load balancer
     # The template will automatically resolve these to NIC IDs
     vm_names:
-      - vmcuwinwebd01
+      - vmcuwinwebd08
 
     # Optional: Backend address pools configuration
     # If not specified, a default pool will be created with the VMs from vm_names

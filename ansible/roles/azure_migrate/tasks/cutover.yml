@@ -102,7 +102,7 @@
     - name: Handle "Solution not found" error
       ansible.builtin.fail:
         msg: |
-          Azure Migrate solution not found for VM '{{ vm_name }}'
+          ❌ Azure Migrate solution not found for VM '{{ vm_name }}'
 
           This error typically means:
           1. The Azure Migrate project '{{ azure_migrate_project_name }}' doesn't exist
@@ -150,7 +150,7 @@
     - name: Display cutover proceed message
       ansible.builtin.debug:
         msg: |
-          - PROCEEDING: VM is ready for migration cutover
+          - ✅ PROCEEDING: VM is ready for migration cutover
       when: vm_ready_for_cutover
 
     - name: Display skip message and set result
@@ -158,7 +158,7 @@
         - name: Display skip message
           ansible.builtin.debug:
             msg: |
-              SKIPPING CUTOVER for VM '{{ vm_name }}'
+              ⚠️ SKIPPING CUTOVER for VM '{{ vm_name }}'
 
               Current VM Status:
               - MigrationState: {{ replication_json.get('MigrationState', 'Unknown') }}
@@ -235,7 +235,7 @@
     - name: Display warning if forcing cutover
       ansible.builtin.debug:
         msg: |
-          WARNING: Force cutover enabled - bypassing replication status validation
+          ⚠️  WARNING: Force cutover enabled - bypassing replication status validation
 
           Migration State: {{ current_migration_state }}
           Migration Description: {{ current_migration_description }}
@@ -248,14 +248,14 @@
     - name: Fail if VM is not ready and force is not enabled
       ansible.builtin.fail:
         msg: |
-          VM '{{ vm_name }}' is not ready for cutover.
+          ❌ VM '{{ vm_name }}' is not ready for cutover.
 
           Migration State: {{ current_migration_state }}
           Migration Description: {{ current_migration_description }}
           Replication Status: {{ current_replication_status }}
           VM Ready for Cutover: {{ vm_ready_for_cutover }}
 
-          IMPORTANT: Migration state check details.
+          ⚠️  IMPORTANT: Migration state check details.
 
           The VM migration state shows '{{ current_migration_state }}' with description '{{ current_migration_description }}',
           and replication status shows '{{ current_replication_status }}'.
@@ -264,25 +264,25 @@
           1. 'Migrate' in AllowedOperations: {{ 'Migrate' in (replication_json.get('AllowedOperationStrings', [])) }}
           2. MigrationStateDescription = 'Ready to migrate': {{ replication_json.get('MigrationStateDescription', '') == 'Ready to migrate' }}
 
-          Current VM State:
+          🔍 Current VM State:
           - AllowedOperations: {{ replication_json.get('AllowedOperationStrings', []) | join(', ') if replication_json.get('AllowedOperationStrings', []) | length > 0 else 'None' }}
           - MigrationStateDescription: {{ replication_json.get('MigrationStateDescription', 'Not defined') }}
           - MigrationState: {{ replication_json.get('MigrationState', 'Not defined') }}
 
-          Possible Solutions:
+          💡 Possible Solutions:
           - If VM migration already completed successfully (MigrationState = MigrationSucceeded), no further action needed
           - If VM needs test migration first, run test migration before cutover
           - If VM is ready but check failed, use: --extra-vars "force_cutover=true"
           - Check Azure Migrate portal for detailed VM migration status
 
-          Full replication data: {{ replication_json }}
+          📋 Full replication data: {{ replication_json }}
       when: not vm_ready_for_cutover and not force_cutover_enabled
   when: not (skip_cutover | default(false) | bool)
 
 - name: Display success message when VM is ready
   ansible.builtin.debug:
     msg: |
-      VM '{{ vm_name }}' is ready for cutover
+      ✅ VM '{{ vm_name }}' is ready for cutover
 
       Migration State: {{ current_migration_state }}
       Migration Description: {{ current_migration_description }}
@@ -399,19 +399,19 @@
   ansible.builtin.debug:
     msg: |
       {% if cutover_result is defined and cutover_result.get('Status') == 'Initiated' -%}
-      Cutover operation initiated for '{{ vm_name }}'
+      ✅ Cutover operation initiated for '{{ vm_name }}'
       {%- elif cutover_result is defined and cutover_result.get('Status') == 'Skipped' -%}
-      Cutover operation skipped for '{{ vm_name }}'
+      ⚠️ Cutover operation skipped for '{{ vm_name }}'
       {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyCompleted' -%}
-      Migration already completed for '{{ vm_name }}'
+      ℹ️ Migration already completed for '{{ vm_name }}'
       {%- elif cutover_result is defined and cutover_result.get('Status') == 'AlreadyInProgress' -%}
-      Migration already in progress for '{{ vm_name }}'
+      🔄 Migration already in progress for '{{ vm_name }}'
       {%- elif cutover_result is defined and cutover_result.get('Status') == 'Failed' -%}
-      Cutover operation failed for '{{ vm_name }}'
+      ❌ Cutover operation failed for '{{ vm_name }}'
       {%- elif cutover_result is defined -%}
       Cutover operation completed for '{{ vm_name }}'
       {%- else -%}
-      Cutover result not available for '{{ vm_name }}'
+      ⚠️ Cutover result not available for '{{ vm_name }}'
       {%- endif %}
       Status: {{ cutover_result.get('Status', 'Unknown') | trim if cutover_result is defined else 'Not Available' }}
       {% if cutover_result is defined and cutover_result.get('JobId') and cutover_result.get('Status') | trim == 'Initiated' -%}
@@ -424,6 +424,9 @@
       Manual shutdown may be required for source VM
       {%- endif %}
       {% if cutover_result is defined and cutover_result.get('Message') and cutover_result.get('Status') | trim in ['AlreadyCompleted', 'Skipped', 'AlreadyInProgress', 'Failed'] -%}
-
+      {% if cutover_result.get('Status') | trim == 'AlreadyCompleted' -%}✅ {%- endif -%}
+      {% if cutover_result.get('Status') | trim == 'Skipped' -%}⚠️ {%- endif -%}
+      {% if cutover_result.get('Status') | trim == 'AlreadyInProgress' -%}🔄 {%- endif -%}
+      {% if cutover_result.get('Status') | trim == 'Failed' -%}❌ {%- endif -%}
       {{ cutover_result.get('Message') | trim }}
       {%- endif %}

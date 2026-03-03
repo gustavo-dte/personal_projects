@@ -1,8 +1,6 @@
 name: Ansible-Start-Test-Migration
 
-# Starts test migration for VMs using Azure Migrate.
-# Calls: ansible/roles/python_scripts/read_manifest_value.py to read subscription ID from manifest
-# Calls: ansible/playbooks/start-test-migration.yml
+# This workflow starts test migration for VMs
 
 on:
   workflow_dispatch:
@@ -31,56 +29,59 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
-
     steps:
-      - name: "Checkout repository"
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: "Install PyYAML for manifest parsing"
-        run: pip install PyYAML
-
-      - name: "Validate manifest"
+      - name: ✅ Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: "Read subscription ID from manifest"
-        id: manifest_sub
-        env:
-          MANIFEST: ${{ inputs.manifest }}
-          MANIFEST_KEY: target_subscription_id
-        run: |
-          SUB_ID=$(python3 ansible/roles/python_scripts/read_manifest_value.py)
-          echo "subscription_id=${SUB_ID}" >> $GITHUB_OUTPUT
-          echo "[INFO] Target subscription: ${SUB_ID}"
-
-      - name: "Azure Login"
+      - name: 🔐 Azure Login with user-assigned managed identity
         uses: azure/login@v2
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          subscription-id: ${{ steps.manifest_sub.outputs.subscription_id }}
+          allow-no-subscriptions: true
           enable-AzPSSession: true
 
-      - name: "Display configuration"
+      - name: 📊 Display configuration
         run: |
-          echo "[INFO] Manifest : ${{ inputs.manifest }}"
-          echo "[INFO] Note: Ensure test_network_id is configured in the manifest"
+          echo "✅ Configuration validated!"
+          echo "📄 Using manifest: ${{ inputs.manifest }}"
+          echo "🧪 Starting test migration..."
+          echo ""
+          echo "Note: Ensure test_network_id is configured in the manifest"
+          echo "Test migration will create test VMs in the specified test network"
 
-      - name: "Prepare extra vars"
+      - name: 🧱 Prepare extra vars file to maintain variable types
         run: |
-          cat > ansible_extra_vars.json <<JSON
+          cat > ansible_extra_vars.json <<'JSON'
           {
             "manifest": "${{ inputs.manifest }}",
             "migration_action": "test_migration"
           }
           JSON
 
-      - name: "Run playbook - start test migration"
+      - name: 🎬 Run playbook - start test migration
         run: |
           ansible-playbook ansible/playbooks/start-test-migration.yml \
             -e @ansible_extra_vars.json
-          rc=$?
-          rm -f ansible_extra_vars.json
-          exit $rc
+
+      - name: 📋 Post-test migration guidance
+        if: success()
+        run: |
+          echo "Test migration workflow completed"
+          echo ""
+          echo "Next steps:"
+          echo "1. Monitor test migration jobs in Azure portal"
+          echo "2. Connect to test VMs via RDP/SSH"
+          echo "3. Verify application functionality"
+          echo "4. Check network connectivity"
+          echo "5. Run validation tests"
+          echo "6. Perform cleanup when done (delete test VMs)"
+          echo ""
+          echo "Note: Test VMs will remain until manually cleaned up"
+          echo "Check workflow run output for detailed results"
