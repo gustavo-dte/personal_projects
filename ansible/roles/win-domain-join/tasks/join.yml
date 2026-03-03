@@ -612,7 +612,7 @@
                   and not (winrm_rename_restart_result.failed | default(true) | bool))
 
         # Verify the rename took effect before joining the domain
-        - name: "Step 4: Verify hostname after rename reboot (.\Administrator)"
+        - name: 'Step 4: Verify hostname after rename reboot (.\\Administrator)'
           ansible.windows.win_shell: |
             (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
           delegate_to: "{{ target_vm_host }}"

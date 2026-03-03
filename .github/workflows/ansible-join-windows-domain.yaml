@@ -1,17 +1,20 @@
 name: Ansible-Join-Windows-Domain
 
-# Joins Windows VMs to Active Directory.
-# Assumes VMs are already disjoined and renamed by ansible-disjoin-windows-domain workflow.
+# Joins Windows VMs to Active Directory with optional disjoin-rename-join cycle.
+# When force_rejoin=true (default): Disjoins → Renames → Rejoins (recommended for migrated VMs with stale trust)
+# When force_rejoin=false: Only joins if VM is not already in the domain
 # Calls: ansible/playbooks/join-windows-domain.yaml
 #
-# Steps executed:
+# Steps executed when force_rejoin=true:
 #   1 — Fetch SE-Admin password from Delinea Secret Server (for WinRM connectivity)
-#   2 — Join each VM to the domain using cpoe-automation domain account
+#   2 — Disjoin from current domain (if joined)
+#   3 — Rename VM hostname (if needed)
+#   4 — Join to target domain using cpoe-automation domain account
 #
 # Required GitHub Secrets:
 #   DELINEA_USERNAME          Service account that authenticates to Delinea
 #   DELINEA_PASSWORD          Password for the Delinea service account
-#   DOMAIN_ADMIN_PASSWORD     Password for the cpoe-automation domain account (Step 4)
+#   DOMAIN_ADMIN_PASSWORD     Password for the cpoe-automation domain account
 #   AZURE_TENANT_ID           Azure tenant for managed-identity login
 #   VM_MIGRATE_MI_CLIENT_ID   Client ID of the user-assigned managed identity
 #
@@ -35,10 +38,10 @@ on:
         type: boolean
         default: true
       force_rejoin:
-        description: "Force disjoin first even if VM is already in the target domain"
+        description: "Disjoin → Rename → Rejoin cycle (recommended for migrated VMs with stale trust)"
         required: false
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}
@@ -111,10 +114,17 @@ jobs:
           echo "           Machine filter  : ${DELINEA_SECRET_MACHINE:-<not set>}"
           echo "           Account filter  : ${DELINEA_SECRET_ACCOUNT}"
           echo ""
-          echo "  Step 2 — Join VM to domain                   [cpoe-automation]"
-          echo ""
-          echo "  Note: VMs must be disjoined and renamed before running this workflow."
-          echo "        Run ansible-disjoin-windows-domain workflow first if needed."
+          if [ "${{ inputs.force_rejoin }}" = "true" ]; then
+            echo "  Step 2 — Disjoin from current domain (if joined)    [SE-Admin]"
+            echo "  Step 3 — Rename VM hostname (if needed)              [Administrator]"
+            echo "  Step 4 — Join VM to target domain                    [cpoe-automation]"
+            echo ""
+            echo "  Mode: Full disjoin-rename-join cycle (recommended for migrated VMs)"
+          else
+            echo "  Step 2 — Join VM to domain (only if not already joined) [cpoe-automation]"
+            echo ""
+            echo "  Mode: Join only (skips disjoin/rename if VM is in target domain)"
+          fi
           echo "════════════════════════════════════════════════════════"
           [ "${{ inputs.dry_run }}" = "true" ] \
             && echo "DRY RUN — no changes will be made." \
