@@ -126,8 +126,8 @@ uninstall_tools_list:
 
 # List of VMs to replicate
 vms:
-  - name: dca-tst1856  # Logical identifier, not used for connection
-    target_vm_name: VMCUWINWEBD10  # Current hostname after rename
+  - name: VMCUWINWEBD10  # Azure VM resource name (must match Azure)
+    target_vm_name: VMCUWINWEBD10  # Current Windows hostname
     vm_winrm_port: 5985   # WinRM HTTP port (Windows Firewall configured via Azure Run Command)
     vm_winrm_username: se-admin  # WinRM user for VM; password from Delinea
     vm_winrm_connect_hostname: dca-tst1856  # Current hostname for first WinRM connection (target_vm_name may differ)
