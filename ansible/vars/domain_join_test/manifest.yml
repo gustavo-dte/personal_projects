@@ -9,7 +9,7 @@ azure_migrate_project_name: azure-migrate-automation-private
 azure_migrate_project_resource_group: DTE-CU-PROD-VMMIGRATESR-RG
 azure_migrate_subscription_id: 002b1877-7a58-4845-bc1f-37a6588bb95d
 target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
-target_resource_group: RG-CU-CORPAPPS-MIGRATIONTEST-DEV
+target_resource_group: rg-cu-CorpApps-MigrationTest-Dev
 os_disk_scsi_id: scsi0:0
 
 # Azure Update Manager / Patch scheduling defaults
@@ -126,11 +126,11 @@ uninstall_tools_list:
 
 # List of VMs to replicate
 vms:
-  - name: VMCUWINWEBD10  # Azure VM resource name (must match Azure)
-    target_vm_name: VMCUWINWEBD10  # Current Windows hostname
+  - name: VMCUWINWEBD10  # Azure VM resource name (created by Azure Migrate)
+    target_vm_name: VMCUWINWEBD10  # Target Windows hostname after rename/domain join
     vm_winrm_port: 5985   # WinRM HTTP port (Windows Firewall configured via Azure Run Command)
     vm_winrm_username: se-admin  # WinRM user for VM; password from Delinea
-    vm_winrm_connect_hostname: dca-tst1856  # Current hostname for first WinRM connection (target_vm_name may differ)
+    vm_winrm_connect_hostname: dca-tst1856  # Current Windows hostname inside VM (from VMware source)
     # vm_delinea_secret_id: 3459  # Delinea secret ID to use (bypasses search)
     description: "Server created to test migration pipeline"
     target_vm_size: Standard_D2s_v5
@@ -252,23 +252,4 @@ load_balancers:
       # Any tags not specified here will use global_tags values
 
 # List of SQL VMs to replicate
-sqlvms:
-  - name: dca-tst1856
-    description: "Server created to test migration pipeline"
-    target_vm_size: Standard_D2s_v5
-    target_license_type: WindowsServer
-    target_disk_type: Standard_LRS
-    portfolio: Test-Portfolio
-    tier: 4
-    env: dev
-    app_name: test-app
-
-    backup:
-      recovery_vault_name: cloud-platform-prod-cu-backup-vault
-
-    # VM-specific tag overrides (optional)
-    # These will override global_tags for this specific VM
-    tags:
-      Environment: "Dev"
-      Portfolio: "CorpApps"
-      # Any tags not specified here will use global_tags values
+sqlvms: []
