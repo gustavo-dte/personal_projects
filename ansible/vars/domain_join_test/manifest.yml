@@ -154,9 +154,10 @@ vms:
         direction: Inbound
         access: Allow
         protocol: Tcp
-    destination_port_range: "5986"
-    source_address_prefixes: ["10.0.0.0/8"]  # Allows WinRM HTTPS from internal network including GitHub runners
-      backup_vault_policy_name: daily-migration-test-vm-backup-policy
+        destination_port_range: "5985"
+        source_address_prefixes: ["10.0.0.0/8"]  # Allows WinRM HTTP from internal network including GitHub runners
+
+    backup_vault_policy_name: daily-migration-test-vm-backup-policy
 
     # VM-specific tag overrides (optional)
     # These will override global_tags for this specific VM
