@@ -338,6 +338,45 @@ def _fetch_detail(
     return result
 
 
+def _checkin_secret(
+    base_url: str, auth: Dict[str, str], secret_id: int
+) -> None:
+    """Force check-in a secret if it's currently checked out.
+
+    Args:
+        base_url:  Base URL of the Delinea Secret Server instance.
+        auth:      Authorization header dict containing the bearer token.  # pragma: allowlist secret
+        secret_id: Numeric Delinea secret ID.
+
+    Raises:
+        DelineaError: On any network or HTTP failure.
+    """
+    try:
+        resp = requests.post(
+            "%s/api/v1/secrets/%s/check-in" % (base_url, secret_id),
+            headers=auth,
+            timeout=30,
+        )
+        # 200 = success, 400 with "SecretNotCheckedOut" is acceptable (already checked in)
+        if resp.status_code == 400:
+            error_data = resp.json()
+            if error_data.get("errorCode") == "API_SecretNotCheckedOut":
+                # Secret is already checked in, this is fine
+                return
+        resp.raise_for_status()
+    except HTTPError as ex:
+        error_body = ""
+        try:
+            error_body = " - " + ex.response.text
+        except Exception:
+            pass
+        raise DelineaError(
+            "Failed to check in secret %s (HTTP %s)%s" % (secret_id, ex.response.status_code, error_body)
+        ) from ex
+    except RequestException as ex:
+        raise DelineaError("Failed to check in secret %s: %s" % (secret_id, ex)) from ex
+
+
 def _extract_password(detail: Dict[str, Any]) -> str:  # pragma: allowlist secret
     """Extract the password field value from a secret detail response.  # pragma: allowlist secret
 
@@ -707,6 +746,19 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
             if not secret_id:
                 raise DelineaError(
                     "No matching secret found for %s\\%s" % (machine_fqdn, account_name)
+                )
+            
+            # Force check-in the secret if it's checked out  # pragma: allowlist secret
+            log.info(
+                "[VM %d/%d] Checking in secret ID=%s (if checked out)",
+                idx, len(vms), secret_id
+            )
+            try:
+                _checkin_secret(cfg.base_url, auth, int(secret_id))
+            except DelineaError as ex:
+                log.warning(
+                    "[VM %d/%d] Check-in warning for ID=%s: %s (continuing anyway)",
+                    idx, len(vms), secret_id, ex
                 )
             
             # Fetch full details to extract password  # pragma: allowlist secret
