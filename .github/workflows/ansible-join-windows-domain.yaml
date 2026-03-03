@@ -84,6 +84,21 @@ jobs:
         with:
           manifest: ${{ inputs.manifest }}
 
+      - name: "Read subscription ID from manifest"
+        if: ${{ !inputs.dry_run }}
+        id: manifest_sub
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          SUB_ID=$(python3 -c "
+import yaml, os
+with open(f\"ansible/vars/{os.environ['MANIFEST']}/manifest.yml\") as f:
+    m = yaml.safe_load(f)
+print(m.get('target_subscription_id', ''))
+")
+          echo "subscription_id=${SUB_ID}" >> $GITHUB_OUTPUT
+          echo "[INFO] Target subscription: ${SUB_ID}"
+
       - name: "Azure Login"
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
@@ -91,7 +106,7 @@ jobs:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          allow-no-subscriptions: true
+          subscription-id: ${{ steps.manifest_sub.outputs.subscription_id }}
           enable-AzPSSession: true
 
       - name: "Ensure WinRM NSG rule exists for VM connectivity"
