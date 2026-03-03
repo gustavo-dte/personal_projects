@@ -19,7 +19,7 @@ name: Ansible-Join-Windows-Domain
 #   VM_MIGRATE_MI_CLIENT_ID   Client ID of the user-assigned managed identity
 #
 # Required GitHub Variables (vars.*):
-#   DELINEA_BASE_URL          Delinea Secret Server base URL
+#   DELINEA_BASE_URL          Delinea Secret Server base URL (or defaults to https://dte.secretservercloud.com)
 #   DELINEA_SECRET_ID         Numeric ID of the SE-Admin secret  (preferred)
 #   DELINEA_SECRET_PATH       Name/path search term              (fallback when ID not set)
 #   DELINEA_SECRET_MACHINE    (Optional) Machine FQDN to narrow secret matching
@@ -63,7 +63,7 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
-      DELINEA_BASE_URL: ${{ secrets.DELINEA_BASE_URL != '' && secrets.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
+      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
       DELINEA_VALUE: ${{ secrets.DELINEA_PASSWORD }}  # pragma: allowlist secret
       DELINEA_SECRET_ID: ${{ vars.DELINEA_SECRET_ID }}
