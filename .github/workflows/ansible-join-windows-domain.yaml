@@ -240,24 +240,84 @@ jobs:
               print(f"[INFO] Setting Azure subscription context: {target_subscription_id}")
               subprocess.run(['az', 'account', 'set', '--subscription', target_subscription_id], check=True)
           
-          # PowerShell script to configure Windows Firewall for WinRM
+          # PowerShell script to configure Windows Firewall for WinRM and RDP
           ps_script = """
-          # Disable Windows Firewall for all profiles to allow WinRM connectivity
-          Write-Output "Disabling Windows Firewall for all profiles..."
+          # Configure Windows Firewall to allow WinRM and RDP traffic
+          Write-Output "Configuring Windows Firewall rules for WinRM and RDP..."
           
-          # Disable firewall for Domain, Private, and Public profiles
-          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+          # Ensure firewall is enabled for all profiles
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
+          Write-Output "Windows Firewall is enabled"
           
-          Write-Output "Windows Firewall disabled successfully"
+          # Allow WinRM HTTP (port 5985) from any source
+          $winrmHttpRule = Get-NetFirewallRule -Name "WINRM-HTTP-In-TCP-Custom" -ErrorAction SilentlyContinue
+          if (-not $winrmHttpRule) {
+              New-NetFirewallRule -Name "WINRM-HTTP-In-TCP-Custom" `
+                                  -DisplayName "Windows Remote Management (HTTP-In) - Custom" `
+                                  -Enabled True `
+                                  -Direction Inbound `
+                                  -Protocol TCP `
+                                  -LocalPort 5985 `
+                                  -Action Allow `
+                                  -Profile Any
+              Write-Output "Created WinRM HTTP (5985) allow rule"
+          } else {
+              Set-NetFirewallRule -Name "WINRM-HTTP-In-TCP-Custom" -Enabled True -Action Allow
+              Write-Output "Enabled existing WinRM HTTP (5985) rule"
+          }
+          
+          # Allow WinRM HTTPS (port 5986) from any source
+          $winrmHttpsRule = Get-NetFirewallRule -Name "WINRM-HTTPS-In-TCP-Custom" -ErrorAction SilentlyContinue
+          if (-not $winrmHttpsRule) {
+              New-NetFirewallRule -Name "WINRM-HTTPS-In-TCP-Custom" `
+                                  -DisplayName "Windows Remote Management (HTTPS-In) - Custom" `
+                                  -Enabled True `
+                                  -Direction Inbound `
+                                  -Protocol TCP `
+                                  -LocalPort 5986 `
+                                  -Action Allow `
+                                  -Profile Any
+              Write-Output "Created WinRM HTTPS (5986) allow rule"
+          } else {
+              Set-NetFirewallRule -Name "WINRM-HTTPS-In-TCP-Custom" -Enabled True -Action Allow
+              Write-Output "Enabled existing WinRM HTTPS (5986) rule"
+          }
+          
+          # Allow RDP (port 3389) from any source
+          $rdpRule = Get-NetFirewallRule -Name "RDP-In-TCP-Custom" -ErrorAction SilentlyContinue
+          if (-not $rdpRule) {
+              New-NetFirewallRule -Name "RDP-In-TCP-Custom" `
+                                  -DisplayName "Remote Desktop (RDP-In) - Custom" `
+                                  -Enabled True `
+                                  -Direction Inbound `
+                                  -Protocol TCP `
+                                  -LocalPort 3389 `
+                                  -Action Allow `
+                                  -Profile Any
+              Write-Output "Created RDP (3389) allow rule"
+          } else {
+              Set-NetFirewallRule -Name "RDP-In-TCP-Custom" -Enabled True -Action Allow
+              Write-Output "Enabled existing RDP (3389) rule"
+          }
+          
+          # Enable default WinRM firewall rules (if they exist)
+          Enable-NetFirewallRule -DisplayGroup "Windows Remote Management" -ErrorAction SilentlyContinue
+          Write-Output "Enabled default WinRM firewall rules"
+          
+          # Enable default RDP firewall rules (if they exist)
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          Write-Output "Enabled default RDP firewall rules"
           
           # Ensure WinRM service is enabled and running
           Set-Service -Name WinRM -StartupType Automatic -ErrorAction SilentlyContinue
           Start-Service -Name WinRM -ErrorAction SilentlyContinue
+          Write-Output "WinRM service is running"
           
           # Configure WinRM to allow connections
           Enable-PSRemoting -Force -SkipNetworkProfileCheck -ErrorAction SilentlyContinue
+          Write-Output "PSRemoting enabled"
           
-          Write-Output "WinRM service configured and running"
+          Write-Output "Windows Firewall configured successfully - WinRM and RDP traffic allowed"
           """
           
           for vm in vms:
