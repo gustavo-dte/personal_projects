@@ -9,7 +9,7 @@ name: Ansible-Join-Windows-Domain
 # Steps executed when force_rejoin=true:
 #   1 - Fetch per-VM SE-Admin passwords from Delinea Secret Server (for WinRM connectivity)  # pragma: allowlist secret
 #       Uses ansible/roles/python_scripts/resolve_delinea_secret_id.py to dynamically query Delinea for each VM
-#       based on vm_winrm_connect_hostname from manifest
+#       based on vm_winrm_connect_hostname from manifest, or uses vm_delinea_secret_id if explicitly set
 #   2 - Disjoin from current domain (if joined)
 #   3 - Rename VM hostname (if needed)
 #   4 - Join to target domain using cpoe-automation domain account

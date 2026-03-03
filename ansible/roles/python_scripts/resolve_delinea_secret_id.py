@@ -8,6 +8,8 @@ Resolves Delinea Secret Server secrets for SE-Admin accounts and writes them to 
 Supports two modes:
   1. Single-VM mode (LEGACY): Resolves one secret ID using DELINEA_SECRET_PATH or DELINEA_SECRET_MACHINE
   2. Multi-VM mode (DEFAULT): Loads manifest, resolves per-VM passwords from Delinea  # pragma: allowlist secret
+     - If vm_delinea_secret_id is set in manifest: Uses that secret ID directly (bypasses search)
+     - Otherwise: Dynamically searches Delinea based on vm_winrm_connect_hostname
 
 Exits with code 1 on:
   - Missing Delinea credentials
@@ -674,6 +676,7 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
         target_vm_name = vm.get("target_vm_name", "")
         vm_hostname = vm.get("vm_winrm_connect_hostname", "")
         vm_username = vm.get("vm_winrm_username", "")
+        vm_delinea_secret_id = vm.get("vm_delinea_secret_id", "")  # Optional: bypass search with explicit ID
         
         if not all([target_vm_name, vm_hostname, vm_username]):
             log.warning(
@@ -688,66 +691,74 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
         )
         
         try:
-            # Build FQDN: hostname + domain_suffix
-            machine_fqdn = (vm_hostname + cfg.domain_suffix).lower()
-            account_name = vm_username.lower()
-            
-            log.info(
-                "[VM %d/%d] Searching Delinea: %s\\%s",
-                idx, len(vms), machine_fqdn, account_name
-            )
-            
-            # Search Delinea for this VM's secret
-            records = _search_secrets(cfg.base_url, auth, machine_fqdn)
-            
-            if not records:
-                raise DelineaError(
-                    "No records returned for machine: %s" % machine_fqdn
+            # Check if secret ID is explicitly provided in manifest
+            if vm_delinea_secret_id:
+                secret_id = str(vm_delinea_secret_id).strip()
+                log.info(
+                    "[VM %d/%d] Using explicit Delinea secret ID from manifest: %s",
+                    idx, len(vms), secret_id
                 )
+            else:
+                # Build FQDN: hostname + domain_suffix
+                machine_fqdn = (vm_hostname + cfg.domain_suffix).lower()
+                account_name = vm_username.lower()
+                
+                log.info(
+                    "[VM %d/%d] Searching Delinea: %s\\%s",
+                    idx, len(vms), machine_fqdn, account_name
+                )
+                
+                # Search Delinea for this VM's secret
+                records = _search_secrets(cfg.base_url, auth, machine_fqdn)
             
-            # Strategy 1: Match by name pattern "FQDN\\Account"
-            secret_id = None
-            search_pattern = "%s\\%s" % (machine_fqdn, account_name)
-            
-            for rec in records:
-                rec_name = str(rec.get("name") or "").strip().lower()
-                if rec_name == search_pattern:
-                    secret_id = rec.get("id")
-                    log.info(
-                        "[VM %d/%d] Matched by name: %s (ID=%s)",
-                        idx, len(vms), rec_name, secret_id
+                if not records:
+                    raise DelineaError(
+                        "No records returned for machine: %s" % machine_fqdn
                     )
-                    break
-            
-            # Strategy 2: Match by items (machine + username fields)
-            if not secret_id:
+                
+                # Strategy 1: Match by name pattern "FQDN\\Account"
+                secret_id = None
+                search_pattern = "%s\\%s" % (machine_fqdn, account_name)
+                
                 for rec in records:
-                    rec_id = rec.get("id")
-                    if not rec_id:
-                        continue
-                    
-                    try:
-                        detail = _fetch_detail(cfg.base_url, auth, rec_id)
-                        items = detail.get("items") or []
-                        
-                        if _matches_by_items(items, machine_fqdn, account_name):
-                            secret_id = rec_id
-                            log.info(
-                                "[VM %d/%d] Matched by items: ID=%s",
-                                idx, len(vms), secret_id
-                            )
-                            break
-                    except DelineaError as ex:
-                        log.warning(
-                            "[VM %d/%d] Failed to fetch details for ID=%s: %s",
-                            idx, len(vms), rec_id, ex
+                    rec_name = str(rec.get("name") or "").strip().lower()
+                    if rec_name == search_pattern:
+                        secret_id = rec.get("id")
+                        log.info(
+                            "[VM %d/%d] Matched by name: %s (ID=%s)",
+                            idx, len(vms), rec_name, secret_id
                         )
-                        continue
-            
-            if not secret_id:
-                raise DelineaError(
-                    "No matching secret found for %s\\%s" % (machine_fqdn, account_name)
-                )
+                        break
+                
+                # Strategy 2: Match by items (machine + username fields)
+                if not secret_id:
+                    for rec in records:
+                        rec_id = rec.get("id")
+                        if not rec_id:
+                            continue
+                        
+                        try:
+                            detail = _fetch_detail(cfg.base_url, auth, rec_id)
+                            items = detail.get("items") or []
+                            
+                            if _matches_by_items(items, machine_fqdn, account_name):
+                                secret_id = rec_id
+                                log.info(
+                                    "[VM %d/%d] Matched by items: ID=%s",
+                                    idx, len(vms), secret_id
+                                )
+                                break
+                        except DelineaError as ex:
+                            log.warning(
+                                "[VM %d/%d] Failed to fetch details for ID=%s: %s",
+                                idx, len(vms), rec_id, ex
+                            )
+                            continue
+                
+                if not secret_id:
+                    raise DelineaError(
+                        "No matching secret found for %s\\%s" % (machine_fqdn, account_name)
+                    )
             
             # Force check-in the secret if it's checked out  # pragma: allowlist secret
             log.info(
