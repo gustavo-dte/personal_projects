@@ -302,14 +302,14 @@ def _search_secrets(
 
 
 def _fetch_detail(
-    base_url: str, auth: Dict[str, str], secret_id: int
+    base_url: str, auth: Dict[str, str], delinea_id: int
 ) -> Dict[str, Any]:
     """Fetch full detail for a single secret by numeric ID.
 
     Args:
         base_url:  Base URL of the Delinea Secret Server instance.
         auth:      Authorization header dict containing the bearer token.  # pragma: allowlist secret
-        secret_id: Numeric Delinea secret ID.
+        delinea_id: Numeric Delinea secret ID.
 
     Returns:
         Full secret detail dict as returned by the API.
@@ -319,7 +319,7 @@ def _fetch_detail(
     """
     try:
         resp = requests.get(
-            "%s/api/v1/secrets/%s" % (base_url, secret_id),
+            "%s/api/v1/secrets/%s" % (base_url, delinea_id),
             headers=auth,
             timeout=30,
         )
@@ -331,24 +331,24 @@ def _fetch_detail(
         except Exception:
             pass
         raise DelineaError(
-            "Failed to fetch secret %s (HTTP %s)%s" % (secret_id, ex.response.status_code, error_body)
+            "Failed to fetch secret %s (HTTP %s)%s" % (delinea_id, ex.response.status_code, error_body)
         ) from ex
     except RequestException as ex:
-        raise DelineaError("Failed to fetch secret %s: %s" % (secret_id, ex)) from ex
+        raise DelineaError("Failed to fetch secret %s: %s" % (delinea_id, ex)) from ex
 
     result: Dict[str, Any] = resp.json()
     return result
 
 
 def _checkin_secret(
-    base_url: str, auth: Dict[str, str], secret_id: int
+    base_url: str, auth: Dict[str, str], delinea_id: int
 ) -> None:
     """Force check-in a secret if it's currently checked out.
 
     Args:
         base_url:  Base URL of the Delinea Secret Server instance.
         auth:      Authorization header dict containing the bearer token.  # pragma: allowlist secret
-        secret_id: Numeric Delinea secret ID.
+        delinea_id: Numeric Delinea secret ID.
 
     Raises:
         DelineaError: On any network or HTTP failure.
@@ -356,7 +356,7 @@ def _checkin_secret(
     try:
         # Use forceCheckIn=true to check in secrets checked out by other users (requires admin permission)
         resp = requests.post(
-            "%s/api/v1/secrets/%s/check-in?forceCheckIn=true" % (base_url, secret_id),
+            "%s/api/v1/secrets/%s/check-in?forceCheckIn=true" % (base_url, delinea_id),
             headers=auth,
             timeout=30,
         )
@@ -374,10 +374,10 @@ def _checkin_secret(
         except Exception:
             pass
         raise DelineaError(
-            "Failed to force check in secret %s (HTTP %s)%s" % (secret_id, ex.response.status_code, error_body)
+            "Failed to force check in secret %s (HTTP %s)%s" % (delinea_id, ex.response.status_code, error_body)
         ) from ex
     except RequestException as ex:
-        raise DelineaError("Failed to force check in secret %s: %s" % (secret_id, ex)) from ex
+        raise DelineaError("Failed to force check in secret %s: %s" % (delinea_id, ex)) from ex
 
 
 def _extract_password(detail: Dict[str, Any]) -> str:  # pragma: allowlist secret
@@ -584,14 +584,14 @@ def resolve(cfg: Config) -> str:
 
     # Strategy 1: exact name match — fastest, no extra API calls.
     if cfg.search_text:
-        secret_id = _resolve_by_exact_name(records, cfg.search_text)
-        if secret_id:
+        delinea_id = _resolve_by_exact_name(records, cfg.search_text)
+        if delinea_id:
             log.info("Resolved DELINEA_SECRET_ID via exact name match")
-            return secret_id
+            return delinea_id
 
     # Strategy 2: machine + account/name filtering.
     if cfg.machine_filter:
-        secret_id = _resolve_by_machine(
+        delinea_id = _resolve_by_machine(
             cfg.base_url,
             auth,
             records,
@@ -600,7 +600,7 @@ def resolve(cfg: Config) -> str:
             cfg.account_filter,
         )
         log.info("Resolved DELINEA_SECRET_ID via machine filter")
-        return secret_id
+        return delinea_id
 
     raise DelineaError(
         "No exact name match found and DELINEA_SECRET_MACHINE is not set"
@@ -693,10 +693,10 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
         try:
             # Check if secret ID is explicitly provided in manifest
             if vm_delinea_secret_id:
-                secret_id = str(vm_delinea_secret_id).strip()
+                delinea_id = str(vm_delinea_secret_id).strip()
                 log.info(
                     "[VM %d/%d] Using explicit Delinea secret ID from manifest: %s",
-                    idx, len(vms), secret_id
+                    idx, len(vms), delinea_id
                 )
             else:
                 # Build FQDN: hostname + domain_suffix
@@ -717,21 +717,21 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
                     )
                 
                 # Strategy 1: Match by name pattern "FQDN\\Account"
-                secret_id = None
+                delinea_id = None
                 search_pattern = "%s\\%s" % (machine_fqdn, account_name)
                 
                 for rec in records:
                     rec_name = str(rec.get("name") or "").strip().lower()
                     if rec_name == search_pattern:
-                        secret_id = rec.get("id")
+                        delinea_id = rec.get("id")
                         log.info(
                             "[VM %d/%d] Matched by name: %s (ID=%s)",
-                            idx, len(vms), rec_name, secret_id
+                            idx, len(vms), rec_name, delinea_id
                         )
                         break
                 
                 # Strategy 2: Match by items (machine + username fields)
-                if not secret_id:
+                if not delinea_id:
                     for rec in records:
                         rec_id = rec.get("id")
                         if not rec_id:
@@ -742,10 +742,10 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
                             items = detail.get("items") or []
                             
                             if _matches_by_items(items, machine_fqdn, account_name):
-                                secret_id = rec_id
+                                delinea_id = rec_id
                                 log.info(
                                     "[VM %d/%d] Matched by items: ID=%s",
-                                    idx, len(vms), secret_id
+                                    idx, len(vms), delinea_id
                                 )
                                 break
                         except DelineaError as ex:
@@ -755,7 +755,7 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
                             )
                             continue
                 
-                if not secret_id:
+                if not delinea_id:
                     raise DelineaError(
                         "No matching secret found for %s\\%s" % (machine_fqdn, account_name)
                     )
@@ -763,18 +763,18 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
             # Force check-in the secret if it's checked out  # pragma: allowlist secret
             log.info(
                 "[VM %d/%d] Force checking in secret ID=%s (requires admin permission)",
-                idx, len(vms), secret_id
+                idx, len(vms), delinea_id
             )
             try:
-                _checkin_secret(cfg.base_url, auth, int(secret_id))
+                _checkin_secret(cfg.base_url, auth, int(delinea_id))
             except DelineaError as ex:
                 log.warning(
                     "[VM %d/%d] Check-in warning for ID=%s: %s (continuing anyway)",
-                    idx, len(vms), secret_id, ex
+                    idx, len(vms), delinea_id, ex
                 )
             
             # Fetch full details to extract password  # pragma: allowlist secret
-            detail = _fetch_detail(cfg.base_url, auth, int(secret_id))
+            detail = _fetch_detail(cfg.base_url, auth, int(delinea_id))
             password = _extract_password(detail)  # pragma: allowlist secret
             
             # Mask password in logs  # pragma: allowlist secret
@@ -826,9 +826,9 @@ def main() -> None:
             _resolve_multi_vm(cfg)
         else:
             # Single-VM mode (legacy): Resolve secret ID only
-            secret_id = resolve(cfg)
-            _write_github_env(cfg.github_env, "DELINEA_SECRET_ID", secret_id)
-            log.info("[Single-VM Mode] ✓ DELINEA_SECRET_ID=%s", secret_id)
+            delinea_id = resolve(cfg)
+            _write_github_env(cfg.github_env, "DELINEA_SECRET_ID", delinea_id)
+            log.info("[Single-VM Mode] ✓ DELINEA_SECRET_ID=%s", delinea_id)
             
     except ConfigurationError as ex:
         log.error("Configuration error: %s", ex)
