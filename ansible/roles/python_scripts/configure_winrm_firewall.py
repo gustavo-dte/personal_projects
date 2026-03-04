@@ -378,12 +378,33 @@ def main() -> None:
         sys.exit(0)
 
     for vm in vms:
-        azure_vm_name: str = vm.get("name", "")
-        target_vm_name: str = vm.get("target_vm_name", azure_vm_name)
+        manifest_vm_name: str = vm.get("name", "")
+        target_vm_name: str = vm.get("target_vm_name", manifest_vm_name)
 
-        if not azure_vm_name:
+        if not manifest_vm_name:
             log.warning("[WARN] VM entry has no 'name' field, skipping")
             continue
+
+        # Resolve the actual Azure resource name: try manifest 'name' first,
+        # then fall back to 'target_vm_name' (the Azure resource may already
+        # have been renamed from the original migrate-created name).
+        azure_vm_name: str = manifest_vm_name
+        vm_exists, error_msg = _vm_exists(target_rg, manifest_vm_name, subscription_id)
+        if not vm_exists and target_vm_name and target_vm_name != manifest_vm_name:
+            log.info(
+                "[INFO] VM '%s' not found; trying target_vm_name '%s' as Azure resource name",
+                manifest_vm_name,
+                target_vm_name,
+            )
+            vm_exists_fallback, _ = _vm_exists(target_rg, target_vm_name, subscription_id)
+            if vm_exists_fallback:
+                azure_vm_name = target_vm_name
+                vm_exists = True
+                error_msg = ""
+                log.info(
+                    "[INFO] Resolved Azure VM resource name to '%s' (was already renamed)",
+                    azure_vm_name,
+                )
 
         log.info(
             "[INFO] Configuring Windows Firewall on VM: %s (target hostname: %s)",
@@ -391,17 +412,17 @@ def main() -> None:
             target_vm_name,
         )
 
-        vm_exists, error_msg = _vm_exists(target_rg, azure_vm_name, subscription_id)
         if not vm_exists:
             log.error(
-                "[ERROR] VM '%s' not found in resource group '%s'",
-                azure_vm_name,
+                "[ERROR] VM not found in resource group '%s' under either name '%s' or '%s'",
                 target_rg,
+                manifest_vm_name,
+                target_vm_name,
             )
             log.error(
                 "        Verify with: az vm show --resource-group %s --name %s --subscription %s",
                 target_rg,
-                azure_vm_name,
+                manifest_vm_name,
                 subscription_id,
             )
             if error_msg:
@@ -418,12 +439,13 @@ def main() -> None:
                 log.error("        Existing VMs in resource group:")
                 for existing in existing_vms:
                     log.error("          - %s", existing)
-                    if existing.lower() == azure_vm_name.lower() and existing != azure_vm_name:
-                        log.error(
-                            "        >>> CASE MISMATCH: manifest has '%s' but Azure has '%s'",
-                            azure_vm_name,
-                            existing,
-                        )
+                    for candidate in (manifest_vm_name, target_vm_name):
+                        if existing.lower() == candidate.lower() and existing != candidate:
+                            log.error(
+                                "        >>> CASE MISMATCH: manifest has '%s' but Azure has '%s'",
+                                candidate,
+                                existing,
+                            )
             else:
                 log.error("        No VMs found in resource group (or permission issue)")
 
