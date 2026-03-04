@@ -529,6 +529,7 @@
           when: az_rename_result is defined
 
         # Fallback: WinRM as Administrator using the SE-Admin Delinea password
+        # NOTE: Administrator account uses SAME password as SE-Admin from Delinea Secret Server
         - name: "Step 4: Rename via WinRM fallback (Administrator)"
           ansible.windows.win_shell: |
             $ErrorActionPreference = 'Stop'
@@ -619,6 +620,7 @@
                   and not (winrm_rename_restart_result.failed | default(true) | bool))
 
         # Verify the rename took effect before joining the domain
+        # NOTE: Uses local Administrator with SE-Admin password from Delinea
         - name: 'Step 4: Verify hostname after rename reboot (.\\Administrator)'
           ansible.windows.win_shell: |
             (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
