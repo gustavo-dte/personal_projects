@@ -2,6 +2,8 @@
 """
 resolve_delinea_secret_id.py
 ============================
+Version: 2.0.0 (2026-03-04)
+
 Resolves Delinea Secret Server secrets for SE-Admin accounts and writes them to GITHUB_ENV.
 
 Supports two modes:
@@ -738,7 +740,11 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
                     delinea_id,
                 )
             else:
-                machine_fqdn = (vm_hostname + cfg.domain_suffix).lower()
+                # Build FQDN - only append domain suffix if hostname doesn't already have it
+                if vm_hostname.lower().endswith(cfg.domain_suffix.lower()):
+                    machine_fqdn = vm_hostname.lower()
+                else:
+                    machine_fqdn = (vm_hostname + cfg.domain_suffix).lower()
                 account_name = vm_username.lower()
 
                 log.info(
