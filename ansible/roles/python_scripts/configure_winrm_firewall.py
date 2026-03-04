@@ -97,8 +97,19 @@ Write-Output "Windows Firewall configured successfully"
 
 
 def _az(*args: str) -> subprocess.CompletedProcess:
-    """Run an az CLI command and return the result."""
-    return subprocess.run(["az", *args], capture_output=True, text=True, check=False)
+    """Run an az CLI command and return the result.
+    
+    Explicitly passes environment variables to ensure Azure CLI authentication
+    context (tokens, configuration) is properly inherited, especially important
+    in GitHub Actions runners with managed identity authentication.
+    """
+    return subprocess.run(
+        ["az", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=os.environ.copy(),
+    )
 
 
 def _load_manifest(manifest_name: str) -> Dict[str, Any]:
@@ -114,8 +125,18 @@ def _set_subscription(subscription_id: str) -> None:
     log.info("[INFO] Setting Azure subscription context: %s", subscription_id)
     result = _az("account", "set", "--subscription", subscription_id)
     if result.returncode != 0:
-        log.error("[ERROR] Failed to set subscription: %s", result.stderr)
+        log.error("[ERROR] Failed to set subscription: %s", result.stderr.strip())
         sys.exit(1)
+    
+    # Verify subscription is set correctly
+    verify = _az("account", "show", "--query", "id", "-o", "tsv")
+    if verify.returncode == 0:
+        current_sub = verify.stdout.strip()
+        log.info("[INFO] Current subscription verified: %s", current_sub)
+        if current_sub != subscription_id:
+            log.warning("[WARN] Subscription mismatch: expected %s, got %s", subscription_id, current_sub)
+    else:
+        log.warning("[WARN] Could not verify current subscription: %s", verify.stderr.strip()[:200])
 
 
 def _vm_exists(resource_group: str, vm_name: str) -> bool:
@@ -126,6 +147,10 @@ def _vm_exists(resource_group: str, vm_name: str) -> bool:
         "--query", "name",
         "-o", "tsv",
     )
+    if result.returncode != 0:
+        # Log stderr for debugging authentication or permission issues
+        if result.stderr:
+            log.debug("[DEBUG] az vm show stderr: %s", result.stderr.strip()[:200])
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
@@ -161,6 +186,21 @@ def main() -> None:
     if not manifest_name:
         log.error("[ERROR] MANIFEST environment variable is not set")
         sys.exit(1)
+
+    # Verify Azure CLI authentication before proceeding
+    auth_check = _az("account", "show", "-o", "json")
+    if auth_check.returncode != 0:
+        log.error("[ERROR] Azure CLI authentication failed. Please login first.")
+        log.error("        Error: %s", auth_check.stderr.strip()[:300])
+        sys.exit(1)
+    
+    try:
+        auth_info = json.loads(auth_check.stdout)
+        log.info("[INFO] Azure CLI authenticated as: %s", auth_info.get("user", {}).get("name", "unknown"))
+        log.info("[INFO] Current subscription: %s (%s)", 
+                 auth_info.get("name", ""), auth_info.get("id", ""))
+    except (json.JSONDecodeError, KeyError):
+        log.warning("[WARN] Could not parse Azure authentication info")
 
     manifest = _load_manifest(manifest_name)
 
@@ -200,6 +240,11 @@ def main() -> None:
                 "        Verify with: az vm show --resource-group %s --name %s",
                 target_rg, azure_vm_name,
             )
+            # Add additional context about current subscription
+            current_sub = _az("account", "show", "--query", "id", "-o", "tsv")
+            if current_sub.returncode == 0 and current_sub.stdout.strip():
+                log.error("        Current subscription: %s", current_sub.stdout.strip())
+            log.error("        Expected subscription: %s", manifest.get("target_subscription_id", "Not set"))
             sys.exit(1)
 
         output = _run_command_on_vm(target_rg, azure_vm_name)
