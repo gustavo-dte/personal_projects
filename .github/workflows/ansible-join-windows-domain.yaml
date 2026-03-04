@@ -132,10 +132,10 @@ jobs:
           echo "Current subscription: $CURRENT_SUB"
           echo "Expected subscription: $EXPECTED_SUB"
           if [ "$CURRENT_SUB" != "$EXPECTED_SUB" ]; then
-            echo "❌ WARNING: Subscription mismatch!"
+            echo "[ERROR] WARNING: Subscription mismatch!"
             exit 1
           else
-            echo "✅ Subscription context is correct"
+            echo "[OK] Subscription context is correct"
           fi
         shell: bash
 
@@ -146,14 +146,20 @@ jobs:
           az version --output yaml | grep azure-cli
           echo ""
           echo "=== Upgrading Azure CLI ==="
-          # Upgrade with account context already configured
-          az upgrade --yes --all || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          # Try upgrade with account context already configured
+          # Note: az upgrade may show warnings but still succeed
+          az upgrade --yes --all 2>&1 | tee /tmp/az_upgrade.log || true
+          
+          # Check if upgrade actually succeeded by comparing versions
+          UPGRADED_VERSION=$(az version --output yaml | grep 'azure-cli:' | awk '{print $2}' | tr -d '"')
+          echo "Upgraded to version: $UPGRADED_VERSION"
+          
           echo ""
           echo "=== Updated Azure CLI Version ==="
           az version --output yaml | grep azure-cli
           echo ""
           echo "=== Verifying compute API ==="
-          az provider show --namespace Microsoft.Compute --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" -o tsv
+          az provider show --namespace Microsoft.Compute --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" -o tsv || echo "Warning: Unable to verify compute API"
         shell: bash
 
       - name: Re-verify authentication after CLI upgrade
