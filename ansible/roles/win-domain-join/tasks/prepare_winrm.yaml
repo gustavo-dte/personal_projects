@@ -116,6 +116,7 @@
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
     - winrm_probe_fallback is defined
+    - not (winrm_probe_fallback.skipped | default(false) | bool)
     - not (winrm_probe_fallback.unreachable | default(false) | bool)
     - not (winrm_probe_fallback.failed | default(false) | bool)
 
@@ -131,6 +132,7 @@
     - winrm_probe_primary is defined
     - (winrm_probe_primary.unreachable | default(false) | bool or winrm_probe_primary.failed | default(false) | bool)
     - winrm_probe_fallback is defined
+    - not (winrm_probe_fallback.skipped | default(false) | bool)
     - not (winrm_probe_fallback.unreachable | default(false) | bool)
     - not (winrm_probe_fallback.failed | default(false) | bool)
 
