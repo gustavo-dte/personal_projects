@@ -2,6 +2,8 @@
 """
 configure_winrm_firewall.py
 ===========================
+Version: 2.1.0 (2026-03-04) - Enhanced error diagnostics with explicit subscription handling
+
 Configures Windows Firewall on Azure VMs to allow WinRM (5985) and RDP (3389)
 using the Azure Run Command API (works regardless of NSG or Windows Firewall state).
 
@@ -207,6 +209,8 @@ def _run_command_on_vm(resource_group: str, vm_name: str, subscription_id: Optio
 
 
 def main() -> None:
+    log.info("[INFO] configure_winrm_firewall.py v2.1.0 (2026-03-04)")
+    
     manifest_name = os.environ.get("MANIFEST", "").strip()
     if not manifest_name:
         log.error("[ERROR] MANIFEST environment variable is not set")

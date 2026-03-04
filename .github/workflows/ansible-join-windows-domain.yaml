@@ -59,6 +59,16 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Display current commit SHA
+        run: |
+          echo "Running workflow on commit: $(git rev-parse HEAD)"
+          echo "Branch: $(git branch --show-current)"
+          echo "Last commit message: $(git log -1 --pretty=%B)"
+        shell: bash
 
       - name: Install Python dependencies
         run: |
@@ -99,9 +109,26 @@ jobs:
       # Azure login using the subscription from the manifest
       # ------------------------------------------------------------------
 
+      - name: Upgrade Azure CLI to latest version
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== Current Azure CLI Version ==="
+          az version --output yaml | grep azure-cli
+          echo ""
+          echo "=== Upgrading Azure CLI ==="
+          # Use az upgrade for existing installations
+          az upgrade --yes --all || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          echo ""
+          echo "=== Updated Azure CLI Version ==="
+          az version --output yaml | grep azure-cli
+          echo ""
+          echo "=== Verifying compute API ==="
+          az provider show --namespace Microsoft.Compute --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" -o tsv
+        shell: bash
+
       - name: Azure login with user-assigned managed identity
         if: ${{ !inputs.dry_run }}
-        uses: azure/login@v2
+        uses: azure/login@v2.4.0
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -110,9 +137,41 @@ jobs:
           allow-no-subscriptions: false
           enable-AzPSSession: true
 
+      - name: Verify Azure CLI authentication and version
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== Azure CLI Version ==="
+          az version
+          echo ""
+          echo "=== Current Authentication ==="
+          az account show --output table
+          echo ""
+          echo "=== Subscription Context ==="
+          CURRENT_SUB=$(az account show --query id -o tsv)
+          EXPECTED_SUB="${{ steps.read_subscription.outputs.subscription_id }}"
+          echo "Current subscription: $CURRENT_SUB"
+          echo "Expected subscription: $EXPECTED_SUB"
+          if [ "$CURRENT_SUB" != "$EXPECTED_SUB" ]; then
+            echo "❌ WARNING: Subscription mismatch!"
+            exit 1
+          else
+            echo "✅ Subscription context is correct"
+          fi
+          echo ""
+          echo "=== Verify VM Operations ==="
+          az vm --help | grep -i "show" || echo "VM show command not found"
+        shell: bash
+
       # ------------------------------------------------------------------
       # Open RDP and WinRM on the VM Windows Firewall via Azure Run Command
       # ------------------------------------------------------------------
+
+      - name: Verify script version
+        run: |
+          echo "=== Script Version Check ==="
+          head -n 6 ansible/roles/python_scripts/configure_winrm_firewall.py | grep -i version || echo "Version line not found"
+          echo "Script checksum: $(sha256sum ansible/roles/python_scripts/configure_winrm_firewall.py | awk '{print $1}')"
+        shell: bash
 
       - name: Configure VM Windows Firewall (RDP 3389 and WinRM 5985)
         if: ${{ !inputs.dry_run }}

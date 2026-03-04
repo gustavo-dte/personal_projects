@@ -2,6 +2,8 @@
 """
 ensure_nsg_winrm_rule.py
 ========================
+Version: 2.0.0 (2026-03-04)
+
 Ensures a WinRM inbound NSG rule (port 5985) exists for all VMs in a manifest.
 
 For each VM it:
@@ -40,9 +42,23 @@ WINRM_PORT = "5985"
 WINRM_SOURCE_PREFIX = "10.0.0.0/8"
 
 
-def _az(*args: str) -> subprocess.CompletedProcess:
-    """Run an az CLI command and return the result."""
-    return subprocess.run(["az", *args], capture_output=True, text=True, check=False)
+def _az(*args: str, subscription_id: Optional[str] = None) -> subprocess.CompletedProcess:
+    """Run an az CLI command and return the result.
+    
+    Args:
+        *args: Command-line arguments to pass to 'az'
+        subscription_id: Optional Azure subscription ID to use for this command
+        
+    Returns:
+        CompletedProcess with stdout, stderr and returncode
+    """
+    cmd = ["az", *args]
+    if subscription_id:
+        cmd.extend(["--subscription", subscription_id])
+    
+    # CRITICAL: Pass env=os.environ.copy() to inherit Managed Identity credentials
+    # from the GitHub Actions runner environment (AZURE_CLIENT_ID, etc.)
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, env=os.environ.copy())
 
 
 def _load_manifest(manifest_name: str) -> Dict[str, Any]:
@@ -55,20 +71,22 @@ def _load_manifest(manifest_name: str) -> Dict[str, Any]:
 
 
 def _set_subscription(subscription_id: str) -> None:
+    """Legacy function - subscription is now passed to each _az() call directly."""
     log.info("[INFO] Setting Azure subscription context: %s", subscription_id)
-    result = _az("account", "set", "--subscription", subscription_id)
+    result = _az("account", "set", subscription_id=subscription_id)
     if result.returncode != 0:
         log.error("[ERROR] Failed to set subscription: %s", result.stderr)
         sys.exit(1)
 
 
-def _get_nic_id(resource_group: str, vm_name: str) -> Optional[str]:
+def _get_nic_id(resource_group: str, vm_name: str, subscription_id: Optional[str] = None) -> Optional[str]:
     result = _az(
         "vm", "nic", "list",
         "--resource-group", resource_group,
         "--vm-name", vm_name,
         "--query", "[0].id",
         "-o", "tsv",
+        subscription_id=subscription_id,
     )
     if result.returncode != 0 or not result.stdout.strip():
         log.warning("[WARN] Could not get NIC for Azure VM %s", vm_name)
@@ -76,13 +94,14 @@ def _get_nic_id(resource_group: str, vm_name: str) -> Optional[str]:
     return result.stdout.strip()
 
 
-def _get_nsg_id(nic_id: str) -> Optional[str]:
+def _get_nsg_id(nic_id: str, subscription_id: Optional[str] = None) -> Optional[str]:
     nic_name = nic_id.split("/")[-1]
     result = _az(
         "network", "nic", "show",
         "--ids", nic_id,
         "--query", "networkSecurityGroup.id",
         "-o", "tsv",
+        subscription_id=subscription_id,
     )
     if result.returncode != 0 or not result.stdout.strip():
         log.warning("[WARN] Could not get NSG for NIC %s", nic_name)
@@ -90,12 +109,13 @@ def _get_nsg_id(nic_id: str) -> Optional[str]:
     return result.stdout.strip()
 
 
-def _ensure_winrm_rule(nsg_name: str, nsg_rg: str, vm_name: str) -> None:
+def _ensure_winrm_rule(nsg_name: str, nsg_rg: str, vm_name: str, subscription_id: Optional[str] = None) -> None:
     check = _az(
         "network", "nsg", "rule", "show",
         "--resource-group", nsg_rg,
         "--nsg-name", nsg_name,
         "--name", NSG_RULE_NAME,
+        subscription_id=subscription_id,
     )
     if check.returncode == 0:
         log.info("[OK] WinRM NSG rule already exists for Azure VM %s", vm_name)
@@ -114,6 +134,7 @@ def _ensure_winrm_rule(nsg_name: str, nsg_rg: str, vm_name: str) -> None:
         "--destination-port-ranges", WINRM_PORT,
         "--source-address-prefixes", WINRM_SOURCE_PREFIX,
         "--description", "Allow WinRM HTTP from internal network for GitHub Actions runner",
+        subscription_id=subscription_id,
     )
     if create.returncode == 0:
         log.info("[OK] WinRM NSG rule created for Azure VM %s", vm_name)
@@ -148,11 +169,11 @@ def main() -> None:
 
         log.info("[INFO] Checking NSG for Azure VM: %s", azure_vm_name)
 
-        nic_id = _get_nic_id(target_rg, azure_vm_name)
+        nic_id = _get_nic_id(target_rg, azure_vm_name, subscription_id)
         if not nic_id:
             continue
 
-        nsg_id = _get_nsg_id(nic_id)
+        nsg_id = _get_nsg_id(nic_id, subscription_id)
         if not nsg_id:
             continue
 
@@ -160,7 +181,7 @@ def main() -> None:
         nsg_rg = nsg_id.split("/")[4]
         log.info("[INFO] Found NSG: %s in RG: %s", nsg_name, nsg_rg)
 
-        _ensure_winrm_rule(nsg_name, nsg_rg, azure_vm_name)
+        _ensure_winrm_rule(nsg_name, nsg_rg, azure_vm_name, subscription_id)
 
 
 if __name__ == "__main__":
