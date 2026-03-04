@@ -71,6 +71,8 @@
   ansible.builtin.set_fact:
     winrm_initial_auth_result: "{{ winrm_probe_primary }}"
     actual_vm_hostname: "{{ winrm_probe_primary.stdout | default('') | trim }}"
+    current_hostname_info:
+      old_name: "{{ winrm_probe_primary.stdout | default('') | trim }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -107,6 +109,8 @@
   ansible.builtin.set_fact:
     winrm_initial_auth_result: "{{ winrm_probe_fallback }}"
     actual_vm_hostname: "{{ winrm_probe_fallback.stdout | default('') | trim }}"
+    current_hostname_info:
+      old_name: "{{ winrm_probe_fallback.stdout | default('') | trim }}"
     resolved_winrm_username: "Administrator"  # Update to reflect actual working username
   when:
     - not (dry_run | default(false) | bool)
@@ -178,7 +182,7 @@
 
 - name: Set resolved_winrm_password alias for backward compatibility
   ansible.builtin.set_fact:
-    resolved_winrm_password: "{{ hostvars['localhost']['resolved_winrm_value'] }}"
+    resolved_winrm_password: "{{ resolved_winrm_value }}"
   no_log: true
 
 - name: Debug - Show credential variables being used
@@ -232,8 +236,8 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ formatted_winrm_username }}"
-    ansible_password: "{{ resolved_winrm_password }}"  # pragma: allowlist secret
+    ansible_user: "{{ '.\\Administrator' if (resolved_winrm_username == 'Administrator') else (actual_vm_hostname + '\\\\' + resolved_winrm_username) }}"
+    ansible_password: "{{ resolved_winrm_value }}"  # pragma: allowlist secret
   register: current_domain_status_raw
   changed_when: false
   failed_when: false
@@ -290,8 +294,8 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ formatted_winrm_username }}"
-    ansible_password: "{{ resolved_winrm_password }}"  # pragma: allowlist secret
+    ansible_user: "{{ '.\\Administrator' if (resolved_winrm_username == 'Administrator') else (actual_vm_hostname + '\\\\' + resolved_winrm_username) }}"
+    ansible_password: "{{ resolved_winrm_value }}"  # pragma: allowlist secret
   register: get_current_hostname_result
   changed_when: false
   failed_when: false
@@ -318,6 +322,6 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ formatted_winrm_username }}"
-    ansible_password: "{{ resolved_winrm_password }}"  # pragma: allowlist secret
+    ansible_user: "{{ '.\\Administrator' if (resolved_winrm_username == 'Administrator') else (actual_vm_hostname + '\\\\' + resolved_winrm_username) }}"
+    ansible_password: "{{ resolved_winrm_value }}"  # pragma: allowlist secret
   when: not (dry_run | default(false) | bool)

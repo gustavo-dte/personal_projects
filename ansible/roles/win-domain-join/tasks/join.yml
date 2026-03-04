@@ -66,6 +66,21 @@
               and target_vm_name is defined)
              and (current_hostname_info.old_name | default('')) != target_vm_name) }}
 
+- name: "Debug — Show detected hostname and workflow conditions"
+  ansible.builtin.debug:
+    msg: |
+      VM {{ target_vm_name }} workflow conditions:
+      - Current hostname detected: '{{ current_hostname_info.old_name | default('UNKNOWN') }}'
+      - Target hostname: '{{ target_vm_name }}'
+      - Current domain: '{{ current_domain_status.domain | default('UNKNOWN') }}'
+      - Target domain: '{{ domain_name }}'
+      
+      Conditions:
+      - hostname_differs_from_target: {{ hostname_differs_from_target | bool }}
+      - domain_differs_from_target: {{ domain_differs_from_target | bool }}
+      - needs_disjoin: {{ needs_disjoin | bool }}
+      - domain_migration_needed: {{ domain_migration_needed | bool }}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Dry-run short-circuit
 # ══════════════════════════════════════════════════════════════════════════════
