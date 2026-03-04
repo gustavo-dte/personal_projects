@@ -2,7 +2,7 @@
 # Install Azure collection for Ansible
 collections:
   - name: azure.azcollection
-    version: "1.19.0"
+    # Use latest version to ensure API compatibility
   - name: microsoft.ad
     # Domain join modules migrated from ansible.windows to microsoft.ad
   - name: ansible.windows
