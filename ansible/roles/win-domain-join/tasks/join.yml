@@ -671,18 +671,20 @@
             - not (hostname_after_reboot.skipped | default(false) | bool)
             - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
 
-        # Restore formatted_winrm_username to SE-Admin with the new hostname
-        # so Step 5 (domain join) connects with the correct credential format
-        - name: "Step 4: Restore formatted_winrm_username to SE-Admin after rename"
+        # Keep using .\Administrator for domain join since VM is still in WORKGROUP state
+        # The domain join will use cpoe-automation@dtenet.com credentials (not SE-Admin)
+        - name: "Step 4: Keep formatted_winrm_username as .\Administrator for domain join"
           ansible.builtin.set_fact:
-            formatted_winrm_username: "{{ target_vm_name }}\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+            formatted_winrm_username: ".\\Administrator"
           when:
             - hostname_after_reboot is defined
             - not (hostname_after_reboot.skipped | default(false) | bool)
             - (hostname_after_reboot.stdout | default('') | trim | upper) == (target_vm_name | upper)
 
     # ── Step 5: Join domain ───────────────────────────────────────────────────
-    # Uses cpoe domain account credentials. SE-Admin is not involved here.
+    # WinRM connection: .\Administrator (local account with SE-Admin password from Delinea)
+    # Domain join operation: cpoe-automation@dtenet.com (domain admin from GH secrets)
+    # Computer object will be created as: target_vm_name.dtenet.com
 
     - name: "Step 5: Join '{{ target_vm_name }}' to domain '{{ domain_name }}'"
       block:
