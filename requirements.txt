@@ -2,3 +2,10 @@ ansible>=2.15.0
 python-tss-sdk
 requests
 pyyaml
+
+# Linting and type-checking (used by pre-commit and CI)
+ruff>=0.4.0
+mypy>=1.10.0
+types-PyYAML
+types-requests
+yamllint>=1.35.0

@@ -12,12 +12,14 @@ Environment variables read:
 
 Exits with code 0 and prints the value on success.
 Exits with code 1 if MANIFEST or MANIFEST_KEY are unset, manifest not found,
-or the key is missing/empty.
+or the key is missing or empty.
 
 Usage:
   MANIFEST=domain_join_test MANIFEST_KEY=target_subscription_id \\
     python3 ansible/roles/python_scripts/read_manifest_value.py
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -30,11 +32,20 @@ except ImportError:
     print("[ERROR] PyYAML is required. Install: pip install PyYAML")
     sys.exit(1)
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 
 def main() -> None:
+    """Entry point: read one manifest key and print its value to stdout."""
     manifest_name = os.environ.get("MANIFEST", "").strip()
     manifest_key = os.environ.get("MANIFEST_KEY", "").strip()
 
@@ -56,10 +67,15 @@ def main() -> None:
 
     value = manifest.get(manifest_key, "")
     if not value:
-        log.error("[ERROR] Key '%s' not found or empty in manifest '%s'", manifest_key, manifest_name)
+        log.error(
+            "[ERROR] Key '%s' not found or empty in manifest '%s'",
+            manifest_key,
+            manifest_name,
+        )
         sys.exit(1)
 
-    # Print only the value — used by shell: SUB_ID=$(python3 read_manifest_value.py)
+    # Print only the value so shell callers can capture it directly:
+    #   SUB_ID=$(MANIFEST=x MANIFEST_KEY=y python3 read_manifest_value.py)
     print(str(value).strip())
 
 

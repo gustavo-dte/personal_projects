@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# TODO: pending to do unitest.
 """
 json_builder.py
 ===============
@@ -10,26 +9,28 @@ Usage:
   python3 ansible/roles/python_scripts/json_builder.py disjoin
 
 Actions:
-  join     — Build extra_vars for the join-windows-domain workflow.
-             Reads: WORKFLOW_MANIFEST, WORKFLOW_DRY_RUN, WORKFLOW_FORCE_REJOIN,
-                    WORKFLOW_SKIP_HOSTNAME_SETUP, SECRET_DOMAIN_ADMIN_VALUE,
-                    SECRET_DOMAIN_OU_PATH, WORKFLOW_RENAME_USERNAME
+  join     Build extra_vars for the join-windows-domain workflow.
+           Reads: WORKFLOW_MANIFEST, WORKFLOW_DRY_RUN, WORKFLOW_FORCE_REJOIN,
+                  WORKFLOW_SKIP_HOSTNAME_SETUP, SECRET_DOMAIN_ADMIN_VALUE,
+                  SECRET_DOMAIN_OU_PATH, WORKFLOW_RENAME_USERNAME
 
-  disjoin  — Build extra_vars for the disjoin-windows-domain workflow.
-             Reads: WORKFLOW_MANIFEST, WORKFLOW_DRY_RUN, WORKFLOW_RENAME_USERNAME
+  disjoin  Build extra_vars for the disjoin-windows-domain workflow.
+           Reads: WORKFLOW_MANIFEST, WORKFLOW_DRY_RUN, WORKFLOW_RENAME_USERNAME
 
 Output:
-  ansible_extra_vars.json — written to the current working directory.
+  ansible_extra_vars.json  Written to the current working directory.
 
 Note:
-  The SE-Admin WinRM value is intentionally excluded from both extra_vars.
-  It is fetched live from Delinea inside the Ansible playbook pre_tasks so it
-  is always current and never cached in the extra-vars file.
+  The SE-Admin WinRM password is intentionally excluded from both extra_vars.
+  It is fetched live from Delinea inside the Ansible playbook so it is always
+  current and never cached in the extra-vars file.
 
-  The rename step (change VM hostname) runs as Administrator using the SE-Admin
-  Delinea value. WORKFLOW_RENAME_USERNAME defaults to 'Administrator' and
-  can be overridden per workflow if the local admin account has a different name.
+  The rename step runs as Administrator using the SE-Admin Delinea password.
+  WORKFLOW_RENAME_USERNAME defaults to 'Administrator' and can be overridden
+  per workflow if the local admin account has a different name.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -68,15 +69,29 @@ class ConfigurationError(Exception):
 
 
 def _env(var: str) -> str:
-    """Return a stripped environment variable value, defaulting to empty string."""
+    """Return a stripped environment variable value, defaulting to empty string.
+
+    Args:
+        var: Environment variable name.
+
+    Returns:
+        Stripped string value, or empty string when unset.
+    """
     return (os.getenv(var) or "").strip()
 
 
 def _env_bool(var: str, default: str = "false") -> bool:
     """Read an environment variable and interpret it as a boolean.
 
-    Any value (case-insensitive) equal to 'true' returns True; everything
-    else — including unset — returns False, unless default is overridden.
+    Any value (case-insensitive) equal to 'true' returns True.
+    Everything else, including unset, returns False unless default is overridden.
+
+    Args:
+        var:     Environment variable name.
+        default: Fallback string to use when the variable is unset.
+
+    Returns:
+        True when the resolved string value is 'true', False otherwise.
     """
     return (os.getenv(var) or default).strip().lower() == "true"
 
@@ -111,20 +126,21 @@ def _build_join_vars() -> Dict[str, Any]:
         Dictionary of extra_vars ready for JSON serialization.
 
     Raises:
-        ConfigurationError: If WORKFLOW_MANIFEST is not set or if
-                          SECRET_DOMAIN_ADMIN_VALUE is missing in non-dry-run mode.
+        ConfigurationError: If WORKFLOW_MANIFEST is not set, or if
+                            SECRET_DOMAIN_ADMIN_VALUE is missing in live mode.
     """
     dry_run = _env_bool("WORKFLOW_DRY_RUN", default="true")
     domain_admin_value = _env("SECRET_DOMAIN_ADMIN_VALUE")
-    
+
     if not domain_admin_value:
         if dry_run:
             log.warning(
-                "SECRET_DOMAIN_ADMIN_VALUE is not set — domain join will fail at runtime"
+                "[WARN] SECRET_DOMAIN_ADMIN_VALUE is not set"
+                " — domain join will fail at runtime"
             )
         else:
             raise ConfigurationError(
-                "SECRET_DOMAIN_ADMIN_VALUE is required for production domain join operations"
+                "SECRET_DOMAIN_ADMIN_VALUE is required for live domain join operations"
             )
 
     return {
@@ -211,8 +227,9 @@ def write_extra_vars(extra_vars: Dict[str, Any], output_file: str) -> None:
 
 
 def main() -> None:
+    """Entry point: build extra_vars JSON for the requested workflow action."""
     if len(sys.argv) < 2:
-        log.error("Usage: %s <join|disjoin>", sys.argv[0])
+        log.error("[ERROR] Usage: %s <join|disjoin>", sys.argv[0])
         sys.exit(1)
 
     action = sys.argv[1]
@@ -221,13 +238,13 @@ def main() -> None:
         extra_vars = build_extra_vars(action)
         write_extra_vars(extra_vars, OUTPUT_FILE)
     except ConfigurationError as ex:
-        log.error("Configuration error: %s", ex)
+        log.error("[ERROR] Configuration error: %s", ex)
         sys.exit(1)
     except OSError as ex:
-        log.error("Failed to write to '%s': %s", OUTPUT_FILE, ex)
+        log.error("[ERROR] Failed to write to '%s': %s", OUTPUT_FILE, ex)
         sys.exit(1)
 
-    log.info("%s written for %s workflow", OUTPUT_FILE, action.strip().lower())
+    log.info("[INFO] %s written for %s workflow", OUTPUT_FILE, action.strip().lower())
 
 
 if __name__ == "__main__":

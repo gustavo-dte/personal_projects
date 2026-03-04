@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# TODO: pending to do unitest.
 """
 extract_vm_hostname.py
 ======================
@@ -25,6 +24,8 @@ Usage:
   MANIFEST_FILE="ansible/vars/my-manifest/manifest.yml" \\
     python3 ansible/roles/python_scripts/extract_vm_hostname.py
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -105,9 +106,7 @@ def extract_hostname(manifest: Dict[str, Any]) -> str:
         raise ManifestError("No VMs found in manifest")
 
     first_vm: Dict[str, Any] = vms[0]
-    hostname: Optional[str] = first_vm.get("vm_winrm_connect_hostname") or first_vm.get(
-        "name"
-    )
+    hostname: Optional[str] = first_vm.get("vm_winrm_connect_hostname") or first_vm.get("name")
 
     if not hostname:
         raise ManifestError(
@@ -138,12 +137,10 @@ def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
         OSError: If the GITHUB_ENV file cannot be written.
     """
     if not github_env:
-        log.warning("GITHUB_ENV not set — skipping environment variable export")
+        log.warning("[WARN] GITHUB_ENV not set — skipping environment variable export")
         return
 
-    # codeql[py/clear-text-storage-sensitive-data] - value is a non-sensitive
-    # machine hostname/FQDN, not a credential or secret.
-    with open(github_env, "a", encoding="utf-8") as fh:  # noqa: SIM115
+    with open(github_env, "a", encoding="utf-8") as fh:
         fh.write("%s=%s\n" % (key, value))
 
 
@@ -167,8 +164,8 @@ def run(manifest_file: str, github_env: Optional[str]) -> None:
     hostname = extract_hostname(manifest)
     vm_fqdn = "%s.%s" % (hostname, DOMAIN_SUFFIX)
 
-    log.info("Extracted VM hostname: %s", hostname)
-    log.info("Setting DELINEA_SECRET_MACHINE=%s", vm_fqdn)
+    log.info("[INFO] Extracted VM hostname: %s", hostname)
+    log.info("[INFO] Setting DELINEA_SECRET_MACHINE=%s", vm_fqdn)
 
     _write_github_env(github_env, "DELINEA_SECRET_MACHINE", vm_fqdn)
 
@@ -179,26 +176,25 @@ def run(manifest_file: str, github_env: Optional[str]) -> None:
 
 
 def main() -> None:
+    """Entry point: extract hostname and write DELINEA_SECRET_MACHINE to GITHUB_ENV."""
     manifest_file: str = os.getenv("MANIFEST_FILE", "").strip()
-    # os.getenv used directly — must be None (not "") when absent so run() can
-    # distinguish "not in Actions" from "set to empty string".
     github_env: Optional[str] = os.getenv("GITHUB_ENV")
 
     if not manifest_file:
-        log.error("MANIFEST_FILE environment variable is not set")
+        log.error("[ERROR] MANIFEST_FILE environment variable is not set")
         sys.exit(1)
 
     if not os.path.isfile(manifest_file):
-        log.error("Manifest file not found: %s", manifest_file)
+        log.error("[ERROR] Manifest file not found: %s", manifest_file)
         sys.exit(1)
 
     try:
         run(manifest_file, github_env)
     except ManifestError as ex:
-        log.error("Manifest error: %s", ex)
+        log.error("[ERROR] Manifest error: %s", ex)
         sys.exit(1)
     except OSError as ex:
-        log.error("Failed to write to '%s': %s", github_env, ex)
+        log.error("[ERROR] Failed to write to '%s': %s", github_env, ex)
         sys.exit(1)
 
 

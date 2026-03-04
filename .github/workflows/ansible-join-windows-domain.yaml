@@ -23,7 +23,7 @@ on:
         type: boolean
         default: true
       force_rejoin:
-        description: "Disjoin then Rejoin cycle (recommended for migrated VMs with stale trust)"
+        description: "Disjoin then rejoin cycle (recommended for migrated VMs with stale trust)"
         required: false
         type: boolean
         default: true
@@ -71,8 +71,7 @@ jobs:
         shell: bash
 
       - name: Install Python dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
         shell: bash
 
       - name: Install Delinea Platform Secret Server Ansible Collection
@@ -129,14 +128,13 @@ jobs:
           echo "=== Subscription Context ==="
           CURRENT_SUB=$(az account show --query id -o tsv)
           EXPECTED_SUB="${{ steps.read_subscription.outputs.subscription_id }}"
-          echo "Current subscription: $CURRENT_SUB"
-          echo "Expected subscription: $EXPECTED_SUB"
-          if [ "$CURRENT_SUB" != "$EXPECTED_SUB" ]; then
-            echo "[ERROR] WARNING: Subscription mismatch!"
+          echo "Current subscription:  ${CURRENT_SUB}"
+          echo "Expected subscription: ${EXPECTED_SUB}"
+          if [ "${CURRENT_SUB}" != "${EXPECTED_SUB}" ]; then
+            echo "[ERROR] Subscription mismatch!"
             exit 1
-          else
-            echo "[OK] Subscription context is correct"
           fi
+          echo "[OK] Subscription context is correct"
         shell: bash
 
       - name: Upgrade Azure CLI to latest version
@@ -146,20 +144,18 @@ jobs:
           az version --output yaml | grep azure-cli
           echo ""
           echo "=== Upgrading Azure CLI ==="
-          # Try upgrade with account context already configured
-          # Note: az upgrade may show warnings but still succeed
           az upgrade --yes --all 2>&1 | tee /tmp/az_upgrade.log || true
-          
-          # Check if upgrade actually succeeded by comparing versions
           UPGRADED_VERSION=$(az version --output yaml | grep 'azure-cli:' | awk '{print $2}' | tr -d '"')
-          echo "Upgraded to version: $UPGRADED_VERSION"
-          
+          echo "Upgraded to version: ${UPGRADED_VERSION}"
           echo ""
           echo "=== Updated Azure CLI Version ==="
           az version --output yaml | grep azure-cli
           echo ""
           echo "=== Verifying compute API ==="
-          az provider show --namespace Microsoft.Compute --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" -o tsv || echo "Warning: Unable to verify compute API"
+          az provider show \
+            --namespace Microsoft.Compute \
+            --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" \
+            -o tsv || echo "[WARN] Unable to verify compute API"
         shell: bash
 
       - name: Re-verify authentication after CLI upgrade
@@ -169,7 +165,7 @@ jobs:
           az account show --output table
           echo ""
           echo "=== Verify VM Operations ==="
-          az vm --help | grep -i "show" || echo "VM show command not found"
+          az vm --help | grep -i "show" || echo "[WARN] VM show command not found"
         shell: bash
 
       # ------------------------------------------------------------------
@@ -179,15 +175,14 @@ jobs:
       - name: Verify script version
         run: |
           echo "=== Script Version Check ==="
-          head -n 6 ansible/roles/python_scripts/configure_winrm_firewall.py | grep -i version || echo "Version line not found"
+          head -n 6 ansible/roles/python_scripts/configure_winrm_firewall.py \
+            | grep -i version || echo "[WARN] Version line not found"
           echo "Script checksum: $(sha256sum ansible/roles/python_scripts/configure_winrm_firewall.py | awk '{print $1}')"
         shell: bash
 
       - name: Configure VM Windows Firewall (RDP 3389 and WinRM 5985)
         if: ${{ !inputs.dry_run }}
-        run: |
-          MANIFEST="${{ inputs.manifest }}" \
-            python3 ansible/roles/python_scripts/configure_winrm_firewall.py
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/configure_winrm_firewall.py
         shell: bash
 
       # ------------------------------------------------------------------
@@ -208,9 +203,7 @@ jobs:
 
       - name: Resolve SE-Admin WinRM password from Delinea
         id: delinea_fetch
-        run: |
-          MANIFEST="${{ inputs.manifest }}" \
-            python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
         shell: bash
         env:
           DELINEA_SECRET_ACCOUNT: SE-Admin
@@ -226,7 +219,11 @@ jobs:
           MANIFEST_FILE="ansible/vars/${{ inputs.manifest }}/manifest.yml"
 
           python3 - <<'PYEOF'
-          import os, sys, socket, yaml
+          import os
+          import socket
+          import sys
+
+          import yaml
 
           manifest_file = os.environ.get("MANIFEST_FILE", "").strip()
           if not manifest_file:
@@ -303,10 +300,8 @@ jobs:
           WORKFLOW_DRY_RUN: ${{ inputs.dry_run }}
           WORKFLOW_FORCE_REJOIN: ${{ inputs.force_rejoin }}
           WORKFLOW_SKIP_HOSTNAME_SETUP: "false"
-          # Domain join uses cpoe-automation; password comes from GitHub secret
           SECRET_DOMAIN_ADMIN_VALUE: ${{ secrets.DOMAIN_ADMIN_PASSWORD }}
           SECRET_DOMAIN_OU_PATH: ${{ secrets.DOMAIN_OU_PATH }}
-          # Rename step runs as local Administrator using the SE-Admin Delinea password
           WORKFLOW_RENAME_USERNAME: Administrator
 
       # ------------------------------------------------------------------
