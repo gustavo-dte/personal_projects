@@ -123,6 +123,22 @@ jobs:
         shell: bash
 
       # ------------------------------------------------------------------
+      # Upgrade Azure CLI before authentication (no auth required)
+      # ------------------------------------------------------------------
+
+      - name: Upgrade Azure CLI to latest version (pre-login)
+        run: |
+          echo "=== Current Azure CLI Version ==="
+          az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
+          echo ""
+          echo "=== Upgrading Azure CLI via pip ==="
+          pip install --upgrade azure-cli
+          echo ""
+          echo "=== Updated Azure CLI Version ==="
+          az version --output yaml | grep azure-cli
+        shell: bash
+
+      # ------------------------------------------------------------------
       # Azure login using the subscription from the manifest
       # ------------------------------------------------------------------
 
@@ -153,37 +169,12 @@ jobs:
             exit 1
           fi
           echo "[OK] Subscription context is correct"
-        shell: bash
-
-      - name: Upgrade Azure CLI to latest version
-        if: ${{ !inputs.dry_run }}
-        run: |
-          echo "=== Current Azure CLI Version ==="
-          az version --output yaml | grep azure-cli
-          echo ""
-          echo "=== Upgrading Azure CLI ==="
-          az upgrade --yes --all 2>&1 | tee /tmp/az_upgrade.log || true
-          UPGRADED_VERSION=$(az version --output yaml | grep 'azure-cli:' | awk '{print $2}' | tr -d '"')
-          echo "Upgraded to version: ${UPGRADED_VERSION}"
-          echo ""
-          echo "=== Updated Azure CLI Version ==="
-          az version --output yaml | grep azure-cli
           echo ""
           echo "=== Verifying compute API ==="
           az provider show \
             --namespace Microsoft.Compute \
             --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" \
             -o tsv || echo "[WARN] Unable to verify compute API"
-        shell: bash
-
-      - name: Re-verify authentication after CLI upgrade
-        if: ${{ !inputs.dry_run }}
-        run: |
-          echo "=== Re-checking Authentication After Upgrade ==="
-          az account show --output table
-          echo ""
-          echo "=== Verify VM Operations ==="
-          az vm --help | grep -i "show" || echo "[WARN] VM show command not found"
         shell: bash
 
       # ------------------------------------------------------------------
