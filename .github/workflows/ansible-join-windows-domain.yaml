@@ -193,6 +193,15 @@ jobs:
         shell: bash
 
       # ------------------------------------------------------------------
+      # Ensure Azure NSG has WinRM rule allowing GitHub runner IP
+      # ------------------------------------------------------------------
+
+      - name: Ensure Azure NSG allows WinRM from GitHub runner
+        if: ${{ !inputs.dry_run }}
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/ensure_nsg_winrm_rule.py
+        shell: bash
+
+      # ------------------------------------------------------------------
       # Open RDP and WinRM on the VM Windows Firewall via Azure Run Command
       # ------------------------------------------------------------------
 
