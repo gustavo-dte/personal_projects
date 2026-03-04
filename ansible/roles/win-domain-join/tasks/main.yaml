@@ -22,13 +22,25 @@
         - item.vm_ip is defined
         - item.vm_ip | length > 0
 
-    - name: Get VM IP addresses from Azure (VMs without direct IP)
+    - name: Build VM IP mapping from vm_winrm_connect_hostname (when no direct IP)
+      ansible.builtin.set_fact:
+        vm_ip_map: "{{ vm_ip_map | default({}) | combine({item.name: item.vm_winrm_connect_hostname}) }}"
+      loop: "{{ manifest_data.vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.vm_ip is not defined or item.vm_ip | length == 0
+        - item.vm_winrm_connect_hostname is defined
+        - item.vm_winrm_connect_hostname | length > 0
+
+    - name: Get VM IP addresses from Azure (VMs without direct IP or hostname)
       block:
         - name: Query Azure for VM information
           azure.azcollection.azure_rm_virtualmachine_info:
             resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
             name: "{{ item.target_vm_name }}"
             subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
+            api_profile: 'latest'
           register: vm_azure_info
           loop: "{{ manifest_data.vms }}"
           loop_control:
@@ -36,12 +48,15 @@
           when:
             - item.target_vm_name is defined
             - item.vm_ip is not defined or item.vm_ip | length == 0
+            - item.vm_winrm_connect_hostname is not defined or item.vm_winrm_connect_hostname | length == 0
+            - item.name not in (vm_ip_map | default({}))
 
         - name: Get network interface information for each VM
           azure.azcollection.azure_rm_networkinterface_info:
             resource_group: "{{ item.item.vm_resource_group | default(manifest_data.target_resource_group) }}"
             name: "{{ item.vms[0].network_interface_names[0] }}"
             subscription_id: "{{ item.item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
+            api_profile: 'latest'
           register: nic_info
           loop: "{{ vm_azure_info.results | default([]) | selectattr('vms', 'defined') | list }}"
           loop_control:
@@ -142,7 +157,7 @@
         label: "{{ item.name }}"
       vars:
         target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host: "{{ (vm_ip_map | default({}))[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        target_vm_host: "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
         winrm_port: "{{ item.vm_winrm_port | default(5985) }}"
         winrm_transport: "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
@@ -191,7 +206,7 @@
         label: "{{ item.name }}"
       vars:
         target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:          "{{ (vm_ip_map | default({}))[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        target_vm_host:          "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
         winrm_port:              "{{ item.vm_winrm_port | default(5985) }}"
         winrm_transport:         "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
@@ -293,7 +308,7 @@
         label: "{{ item.name }}"
       vars:
         target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:          "{{ (vm_ip_map | default({}))[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        target_vm_host:          "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
         winrm_port:              "{{ item.vm_winrm_port | default(5985) }}"
         winrm_transport:         "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
