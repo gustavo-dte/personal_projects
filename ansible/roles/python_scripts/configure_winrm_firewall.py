@@ -96,15 +96,23 @@ Write-Output "Windows Firewall configured successfully"
 """
 
 
-def _az(*args: str) -> subprocess.CompletedProcess:
+def _az(*args: str, subscription_id: Optional[str] = None) -> subprocess.CompletedProcess:
     """Run an az CLI command and return the result.
     
     Explicitly passes environment variables to ensure Azure CLI authentication
     context (tokens, configuration) is properly inherited, especially important
     in GitHub Actions runners with managed identity authentication.
+    
+    Args:
+        *args: Command arguments to pass to az CLI
+        subscription_id: Optional subscription ID to add --subscription flag
     """
+    cmd = ["az", *args]
+    if subscription_id:
+        cmd.extend(["--subscription", subscription_id])
+    
     return subprocess.run(
-        ["az", *args],
+        cmd,
         capture_output=True,
         text=True,
         check=False,
@@ -139,13 +147,14 @@ def _set_subscription(subscription_id: str) -> None:
         log.warning("[WARN] Could not verify current subscription: %s", verify.stderr.strip()[:200])
 
 
-def _vm_exists(resource_group: str, vm_name: str) -> bool:
+def _vm_exists(resource_group: str, vm_name: str, subscription_id: Optional[str] = None) -> bool:
     result = _az(
         "vm", "show",
         "--resource-group", resource_group,
         "--name", vm_name,
         "--query", "name",
         "-o", "tsv",
+        subscription_id=subscription_id,
     )
     if result.returncode != 0:
         # Log stderr for debugging authentication or permission issues
@@ -154,7 +163,21 @@ def _vm_exists(resource_group: str, vm_name: str) -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
-def _run_command_on_vm(resource_group: str, vm_name: str) -> Optional[str]:
+def _list_vms_in_rg(resource_group: str, subscription_id: Optional[str] = None) -> List[str]:
+    """List all VM names in a resource group."""
+    result = _az(
+        "vm", "list",
+        "--resource-group", resource_group,
+        "--query", "[].name",
+        "-o", "tsv",
+        subscription_id=subscription_id,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return [vm.strip() for vm in result.stdout.strip().split("\n") if vm.strip()]
+    return []
+
+
+def _run_command_on_vm(resource_group: str, vm_name: str, subscription_id: Optional[str] = None) -> Optional[str]:
     """Run the WinRM PowerShell configuration on a VM via Azure Run Command.
 
     Returns the output message on success, None on failure.
@@ -165,6 +188,7 @@ def _run_command_on_vm(resource_group: str, vm_name: str) -> Optional[str]:
         "--name", vm_name,
         "--command-id", "RunPowerShellScript",
         "--scripts", _PS_CONFIGURE_WINRM,
+        subscription_id=subscription_id,
     )
     if result.returncode != 0:
         log.error(
@@ -231,23 +255,39 @@ def main() -> None:
             azure_vm_name, target_vm_name,
         )
 
-        if not _vm_exists(target_rg, azure_vm_name):
+        if not _vm_exists(target_rg, azure_vm_name, subscription_id):
             log.error(
                 "[ERROR] VM '%s' not found in resource group '%s'",
                 azure_vm_name, target_rg,
             )
             log.error(
-                "        Verify with: az vm show --resource-group %s --name %s",
-                target_rg, azure_vm_name,
+                "        Verify with: az vm show --resource-group %s --name %s --subscription %s",
+                target_rg, azure_vm_name, subscription_id,
             )
             # Add additional context about current subscription
             current_sub = _az("account", "show", "--query", "id", "-o", "tsv")
             if current_sub.returncode == 0 and current_sub.stdout.strip():
                 log.error("        Current subscription: %s", current_sub.stdout.strip())
-            log.error("        Expected subscription: %s", manifest.get("target_subscription_id", "Not set"))
+            log.error("        Expected subscription: %s", subscription_id or "Not set")
+            log.error("")
+            
+            # List existing VMs in the resource group to help troubleshoot
+            existing_vms = _list_vms_in_rg(target_rg, subscription_id)
+            if existing_vms:
+                log.error("        Existing VMs in resource group:")
+                for vm in existing_vms:
+                    log.error("          - %s", vm)
+            else:
+                log.error("        No VMs found in resource group (or permission issue)")
+            
+            log.error("")
+            log.error("        Possible causes:")
+            log.error("        1. VM has not been migrated yet - run 'Ansible-Start-Test-Migration' or 'Ansible-Migration-Cutover' workflow first")
+            log.error("        2. VM name in manifest doesn't match Azure resource name")
+            log.error("        3. VM was created in a different resource group")
             sys.exit(1)
 
-        output = _run_command_on_vm(target_rg, azure_vm_name)
+        output = _run_command_on_vm(target_rg, azure_vm_name, subscription_id)
         if output is None:
             sys.exit(1)
 
