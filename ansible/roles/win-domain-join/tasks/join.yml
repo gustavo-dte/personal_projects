@@ -155,6 +155,7 @@
             ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
             ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
           register: precreate_computer_result
+          ignore_errors: true
           no_log: true
 
         - name: "Step 2: Fail — pre-create AD computer object failed"
@@ -162,6 +163,12 @@
             msg: |
               Pre-create AD computer object failed for {{ target_vm_name }}.
               Error: {{ precreate_computer_result.msg | default('Unknown error') | string }}
+              {% if precreate_computer_result.module_stderr is defined %}
+              Stderr: {{ precreate_computer_result.module_stderr }}
+              {% endif %}
+              {% if precreate_computer_result.exception is defined %}
+              Exception: {{ precreate_computer_result.exception }}
+              {% endif %}
           when:
             - precreate_computer_result is defined
             - precreate_computer_result.failed | default(false) | bool
