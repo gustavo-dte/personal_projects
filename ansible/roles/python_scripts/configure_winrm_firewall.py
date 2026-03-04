@@ -147,7 +147,8 @@ def _set_subscription(subscription_id: str) -> None:
         log.warning("[WARN] Could not verify current subscription: %s", verify.stderr.strip()[:200])
 
 
-def _vm_exists(resource_group: str, vm_name: str, subscription_id: Optional[str] = None) -> bool:
+def _vm_exists(resource_group: str, vm_name: str, subscription_id: Optional[str] = None) -> tuple[bool, str]:
+    """Check if VM exists and return (exists, error_message)."""
     result = _az(
         "vm", "show",
         "--resource-group", resource_group,
@@ -157,10 +158,10 @@ def _vm_exists(resource_group: str, vm_name: str, subscription_id: Optional[str]
         subscription_id=subscription_id,
     )
     if result.returncode != 0:
-        # Log stderr for debugging authentication or permission issues
-        if result.stderr:
-            log.debug("[DEBUG] az vm show stderr: %s", result.stderr.strip()[:200])
-    return result.returncode == 0 and bool(result.stdout.strip())
+        # Return the error message for diagnostics
+        error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+        return False, error_msg
+    return bool(result.stdout.strip()), ""
 
 
 def _list_vms_in_rg(resource_group: str, subscription_id: Optional[str] = None) -> List[str]:
@@ -255,7 +256,8 @@ def main() -> None:
             azure_vm_name, target_vm_name,
         )
 
-        if not _vm_exists(target_rg, azure_vm_name, subscription_id):
+        vm_exists, error_msg = _vm_exists(target_rg, azure_vm_name, subscription_id)
+        if not vm_exists:
             log.error(
                 "[ERROR] VM '%s' not found in resource group '%s'",
                 azure_vm_name, target_rg,
@@ -264,6 +266,11 @@ def main() -> None:
                 "        Verify with: az vm show --resource-group %s --name %s --subscription %s",
                 target_rg, azure_vm_name, subscription_id,
             )
+            
+            # Show the actual error from az vm show
+            if error_msg:
+                log.error("        Azure CLI error: %s", error_msg[:500])
+            
             # Add additional context about current subscription
             current_sub = _az("account", "show", "--query", "id", "-o", "tsv")
             if current_sub.returncode == 0 and current_sub.stdout.strip():
@@ -277,14 +284,19 @@ def main() -> None:
                 log.error("        Existing VMs in resource group:")
                 for vm in existing_vms:
                     log.error("          - %s", vm)
+                    # Check if it's a case sensitivity or spacing issue
+                    if vm.lower() == azure_vm_name.lower() and vm != azure_vm_name:
+                        log.error("        >>> CASE MISMATCH: Manifest has '%s' but Azure has '%s'", 
+                                  azure_vm_name, vm)
             else:
                 log.error("        No VMs found in resource group (or permission issue)")
             
             log.error("")
             log.error("        Possible causes:")
-            log.error("        1. VM has not been migrated yet - run 'Ansible-Start-Test-Migration' or 'Ansible-Migration-Cutover' workflow first")
-            log.error("        2. VM name in manifest doesn't match Azure resource name")
-            log.error("        3. VM was created in a different resource group")
+            log.error("        1. VM might be in transitioning/deallocated state - check VM status")
+            log.error("        2. Permission issue - 'az vm list' works but 'az vm show' requires different permissions")
+            log.error("        3. VM name in manifest doesn't match Azure resource name exactly (check case)")
+            log.error("        4. VM was recently created and Azure Resource Manager is still syncing")
             sys.exit(1)
 
         output = _run_command_on_vm(target_rg, azure_vm_name, subscription_id)
