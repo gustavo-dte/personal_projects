@@ -47,6 +47,7 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
+      AZURE_CLOUD_API_PROFILE: latest
       DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
       DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
@@ -76,28 +77,22 @@ jobs:
 
       - name: Upgrade Azure SDK Python packages (before Ansible collections)
         run: |
-          echo "=== Current Azure SDK versions (before upgrade) ==="
-          pip list | grep -E "azure-" 2>/dev/null || echo "No azure packages found"
+          echo "=== Current Azure SDK versions (all locations) ==="
+          pip list --user | grep -E "azure-" 2>/dev/null || echo "No user azure packages"
+          pip list | grep -E "azure-" 2>/dev/null || echo "No system azure packages"
           echo ""
-          echo "=== Force reinstalling latest Azure SDK packages ==="
-          pip install --upgrade --force-reinstall --no-cache-dir --no-deps \
-            azure-mgmt-compute \
-            azure-mgmt-network \
-            azure-mgmt-resource \
-            azure-mgmt-core \
-            azure-common \
-            azure-identity \
-            azure-core
+          echo "=== Uninstalling old Azure SDK packages from user location ==="
+          pip uninstall -y $(pip list --user | grep azure- | awk '{print $1}') 2>/dev/null || true
           echo ""
-          echo "=== Installing dependencies for Azure SDK packages ==="
-          pip install --upgrade \
-            azure-mgmt-compute \
-            azure-mgmt-network \
-            azure-mgmt-resource \
-            azure-mgmt-core \
-            azure-common \
-            azure-identity \
-            azure-core
+          echo "=== Installing latest Azure SDK packages (version-pinned, compatible set) ==="
+          pip install --force-reinstall --no-cache-dir \
+            "azure-mgmt-compute>=30.0.0" \
+            "azure-mgmt-network>=23.0.0" \
+            "azure-mgmt-resource>=22.0.0" \
+            "azure-mgmt-core>=1.4.0" \
+            "azure-common>=1.1.28" \
+            "azure-identity>=1.15.0" \
+            "azure-core>=1.29.0"
           echo ""
           echo "=== Updated Azure SDK versions ==="
           pip list | grep -E "azure-"
