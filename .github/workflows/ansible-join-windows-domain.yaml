@@ -109,40 +109,20 @@ jobs:
       # Azure login using the subscription from the manifest
       # ------------------------------------------------------------------
 
-      - name: Upgrade Azure CLI to latest version
-        if: ${{ !inputs.dry_run }}
-        run: |
-          echo "=== Current Azure CLI Version ==="
-          az version --output yaml | grep azure-cli
-          echo ""
-          echo "=== Upgrading Azure CLI ==="
-          # Use az upgrade for existing installations
-          az upgrade --yes --all || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-          echo ""
-          echo "=== Updated Azure CLI Version ==="
-          az version --output yaml | grep azure-cli
-          echo ""
-          echo "=== Verifying compute API ==="
-          az provider show --namespace Microsoft.Compute --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" -o tsv
-        shell: bash
-
       - name: Azure login with user-assigned managed identity
         if: ${{ !inputs.dry_run }}
-        uses: azure/login@v2.4.0
+        uses: azure/login@v2
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
+          client-id: ${{ secrets.CLIENT_ID_VM_MIGRATE_DEV_CU_MI }}
           subscription-id: ${{ steps.read_subscription.outputs.subscription_id }}
           allow-no-subscriptions: false
           enable-AzPSSession: true
 
-      - name: Verify Azure CLI authentication and version
+      - name: Verify Azure CLI authentication
         if: ${{ !inputs.dry_run }}
         run: |
-          echo "=== Azure CLI Version ==="
-          az version
-          echo ""
           echo "=== Current Authentication ==="
           az account show --output table
           echo ""
@@ -157,6 +137,30 @@ jobs:
           else
             echo "✅ Subscription context is correct"
           fi
+        shell: bash
+
+      - name: Upgrade Azure CLI to latest version
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== Current Azure CLI Version ==="
+          az version --output yaml | grep azure-cli
+          echo ""
+          echo "=== Upgrading Azure CLI ==="
+          # Upgrade with account context already configured
+          az upgrade --yes --all || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          echo ""
+          echo "=== Updated Azure CLI Version ==="
+          az version --output yaml | grep azure-cli
+          echo ""
+          echo "=== Verifying compute API ==="
+          az provider show --namespace Microsoft.Compute --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" -o tsv
+        shell: bash
+
+      - name: Re-verify authentication after CLI upgrade
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== Re-checking Authentication After Upgrade ==="
+          az account show --output table
           echo ""
           echo "=== Verify VM Operations ==="
           az vm --help | grep -i "show" || echo "VM show command not found"
