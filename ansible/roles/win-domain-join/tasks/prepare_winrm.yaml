@@ -178,8 +178,18 @@
 
 - name: Set resolved_winrm_password alias for backward compatibility
   ansible.builtin.set_fact:
-    resolved_winrm_password: "{{ resolved_winrm_value }}"
+    resolved_winrm_password: "{{ hostvars['localhost']['resolved_winrm_value'] }}"
   no_log: true
+
+- name: Debug - Show credential variables being used
+  ansible.builtin.debug:
+    msg: |
+      WinRM Credentials Configuration:
+      - resolved_winrm_username: {{ resolved_winrm_username }}
+      - formatted_winrm_username: {{ formatted_winrm_username }}
+      - resolved_winrm_value exists: {{ resolved_winrm_value is defined }}
+      - resolved_winrm_password exists: {{ resolved_winrm_password is defined }}
+  when: debug_mode | default(false) | bool
 
 - name: Display WinRM connection details
   ansible.builtin.debug:
@@ -222,8 +232,8 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+    ansible_user: "{{ formatted_winrm_username }}"
+    ansible_password: "{{ resolved_winrm_password }}"  # pragma: allowlist secret
   register: current_domain_status_raw
   changed_when: false
   failed_when: false
@@ -280,8 +290,8 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+    ansible_user: "{{ formatted_winrm_username }}"
+    ansible_password: "{{ resolved_winrm_password }}"  # pragma: allowlist secret
   register: get_current_hostname_result
   changed_when: false
   failed_when: false
@@ -308,6 +318,6 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ hostvars['localhost']['formatted_winrm_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+    ansible_user: "{{ formatted_winrm_username }}"
+    ansible_password: "{{ resolved_winrm_password }}"  # pragma: allowlist secret
   when: not (dry_run | default(false) | bool)
