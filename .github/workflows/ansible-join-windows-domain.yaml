@@ -74,6 +74,35 @@ jobs:
         run: pip install -r requirements.txt
         shell: bash
 
+      - name: Upgrade Azure SDK Python packages (before Ansible collections)
+        run: |
+          echo "=== Current Azure SDK versions (before upgrade) ==="
+          pip list | grep -E "azure-" 2>/dev/null || echo "No azure packages found"
+          echo ""
+          echo "=== Force reinstalling latest Azure SDK packages ==="
+          pip install --upgrade --force-reinstall --no-cache-dir --no-deps \
+            azure-mgmt-compute \
+            azure-mgmt-network \
+            azure-mgmt-resource \
+            azure-mgmt-core \
+            azure-common \
+            azure-identity \
+            azure-core
+          echo ""
+          echo "=== Installing dependencies for Azure SDK packages ==="
+          pip install --upgrade \
+            azure-mgmt-compute \
+            azure-mgmt-network \
+            azure-mgmt-resource \
+            azure-mgmt-core \
+            azure-common \
+            azure-identity \
+            azure-core
+          echo ""
+          echo "=== Updated Azure SDK versions ==="
+          pip list | grep -E "azure-"
+        shell: bash
+
       - name: Install Ansible collections from requirements.yml
         run: |
           echo "=== Installing/Upgrading Ansible collections ==="
@@ -81,15 +110,6 @@ jobs:
           echo ""
           echo "=== Installed Azure collection version ==="
           ansible-galaxy collection list | grep azure.azcollection || echo "Azure collection not found"
-        shell: bash
-
-      - name: Upgrade Azure SDK Python packages
-        run: |
-          echo "=== Upgrading Azure SDK packages ==="
-          pip install --upgrade azure-mgmt-compute azure-mgmt-network azure-mgmt-resource azure-common azure-identity azure-core
-          echo ""
-          echo "=== Installed Azure SDK versions ==="
-          pip list | grep azure-mgmt || echo "No azure-mgmt packages found"
         shell: bash
 
       - name: Install Delinea Platform Secret Server Ansible Collection
