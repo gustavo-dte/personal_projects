@@ -122,12 +122,43 @@
     - not (dry_run | default(false) | bool)
     - (current_domain_status.domain | default('')) not in ['', 'WORKGROUP']
 
-- name: "Step 2: Fail — SE-Admin cannot perform disjoin"
-  ansible.builtin.fail:
-    msg: |
-      Pre-check failed: SE-Admin cannot perform disjoin for {{ item.name }}.
-      Ensure SE-Admin has local administrator rights on the VM.
-      Error: {{ disjoin_permission_precheck.stdout | default(disjoin_permission_precheck.msg) | default('Unknown') }}
+- name: "Step 2: Fail — SE-Admin cannot perform disjoin (trying fallback to Administrator)"
+  block:
+    - name: "Step 2: Pre-check disjoin permission — fallback to .\\Administrator"
+      ansible.windows.win_shell: |
+        try {
+          Remove-Computer -WorkgroupName "WORKGROUP" -Force -WhatIf -ErrorAction Stop | Out-Null
+          Write-Output "OK"
+        }
+        catch {
+          Write-Output ($_.Exception.Message)
+          exit 1
+        }
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_winrm_read_timeout: 70
+        ansible_user: ".\\Administrator"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+      register: disjoin_permission_precheck_fallback
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "Step 2: Fail — neither SE-Admin nor Administrator can perform disjoin"
+      ansible.builtin.fail:
+        msg: |
+          Pre-check failed: Neither SE-Admin nor local Administrator can perform disjoin for {{ item.name }}.
+          Both accounts lack required local administrator privileges.
+          SE-Admin error: {{ disjoin_permission_precheck.stdout | default(disjoin_permission_precheck.msg) | default('Unknown') }}
+          Administrator error: {{ disjoin_permission_precheck_fallback.stdout | default(disjoin_permission_precheck_fallback.msg) | default('Unknown') }}
+      when:
+        - (disjoin_permission_precheck_fallback.rc | default(0) | int) != 0
   when:
     - not (dry_run | default(false) | bool)
     - disjoin_permission_precheck is defined
@@ -158,17 +189,53 @@
         - not (dry_run | default(false) | bool)
         - (current_domain_status.domain | default('')) not in ['', 'WORKGROUP']
   rescue:
-    - name: "Step 2: Fail — Access is denied during disjoin"
+    - name: "Step 2: Disjoin fallback — try .\\Administrator if SE-Admin failed"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Stop'
+        Remove-Computer -WorkgroupName "WORKGROUP" -Force -ErrorAction Stop
+        Write-Output "DISJOIN_OK"
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_winrm_read_timeout: 70
+        ansible_user: ".\\Administrator"
+        ansible_password: "{{ hostvars['localhost']['resolved_winrm_password'] }}"  # pragma: allowlist secret
+      register: domain_disjoin_fallback_result
+      no_log: true
+      when:
+        - "'access is denied' in ((domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('')) | string | lower)"
+
+    - name: "Step 2: Record successful fallback disjoin"
+      ansible.builtin.set_fact:
+        domain_disjoin_result: "{{ domain_disjoin_fallback_result }}"
+        disjoin_used_fallback_admin: true
+        formatted_winrm_username: ".\\Administrator"
+      when:
+        - domain_disjoin_fallback_result is defined
+        - domain_disjoin_fallback_result.rc | default(0) | int == 0
+
+    - name: "Step 2: Fail — Access is denied during disjoin (both SE-Admin and Administrator failed)"
       ansible.builtin.fail:
         msg: |
           Disjoin failed for {{ item.name }}: Access is denied.
-          Ensure SE-Admin is in the local Administrators group on the VM.
-          Error: {{ domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('Unknown') }}
-      when: "'access is denied' in ((domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('')) | string | lower)"
+          Both SE-Admin and local Administrator lack required privileges.
+          Ensure the account is in the local Administrators group on the VM.
+          SE-Admin error: {{ domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('Unknown') }}
+          Administrator fallback error: {{ domain_disjoin_fallback_result.stderr | default(domain_disjoin_fallback_result.msg) | default('Unknown') }}
+      when:
+        - domain_disjoin_fallback_result is defined
+        - domain_disjoin_fallback_result.rc | default(0) | int != 0
 
-    - name: "Step 2: Fail — disjoin error"
+    - name: "Step 2: Fail — disjoin error (neither SE-Admin nor Administrator worked)"
       ansible.builtin.fail:
         msg: "Disjoin failed for {{ item.name }}: {{ domain_disjoin_result.stderr | default(domain_disjoin_result.msg) | default('Unknown error') | string }}"
+      when:
+        - domain_disjoin_fallback_result is not defined
 
 # Verify the computer actually left the domain before triggering reboot
 - name: "Step 2: Verify domain status after disjoin"

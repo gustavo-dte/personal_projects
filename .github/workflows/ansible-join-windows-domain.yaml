@@ -337,6 +337,16 @@ jobs:
           SECRET_DOMAIN_OU_PATH: ${{ secrets.DOMAIN_OU_PATH }}
           WORKFLOW_RENAME_USERNAME: Administrator
 
+      - name: Debug extra vars file content
+        run: |
+          echo "[INFO] Contents of ansible_extra_vars.json:"
+          cat ansible_extra_vars.json | python3 -m json.tool
+          echo ""
+          echo "[INFO] Checking for force_rejoin value:"
+          FORCE_REJOIN=$(python3 -c "import json; data = json.load(open('ansible_extra_vars.json')); print(data.get('force_rejoin', 'NOT FOUND'))")
+          echo "force_rejoin = ${FORCE_REJOIN}"
+        shell: bash
+
       # ------------------------------------------------------------------
       # Run playbook
       # Order inside the playbook:

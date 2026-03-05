@@ -673,7 +673,7 @@
 
         # Keep using .\Administrator for domain join since VM is still in WORKGROUP state
         # The domain join will use cpoe-automation@dtenet.com credentials (not SE-Admin)
-        - name: "Step 4: Keep formatted_winrm_username as .\Administrator for domain join"
+        - name: 'Step 4: Keep formatted_winrm_username as .\Administrator for domain join'
           ansible.builtin.set_fact:
             formatted_winrm_username: ".\\Administrator"
           when:
