@@ -121,15 +121,31 @@
       --scripts '
         $ErrorActionPreference = "Stop"
         try {
-          winrm quickconfig -quiet 2>&1 | Out-Null
-          Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
-          Set-Item WSMan:\localhost\Service\Auth\Basic       -Value $true -Force
-          Set-Item WSMan:\localhost\Service\Auth\NTLM        -Value $true -Force
+          # Step 1: ensure WinRM service is running before touching WSMan provider
+          $svc = Get-Service -Name WinRM -ErrorAction Stop
+          if ($svc.Status -ne "Running") {
+            Start-Service WinRM -ErrorAction Stop
+            Start-Sleep -Seconds 3
+          }
+
+          # Step 2: quickconfig (idempotent, safe to repeat)
+          & cmd /c "winrm quickconfig -quiet -force" 2>&1 | Out-Null
+
+          # Step 3: configure via winrm.cmd (avoids WSMan PS-drive path issues)
+          & cmd /c "winrm set winrm/config/service @{AllowUnencrypted=true}"  2>&1 | Out-Null
+          & cmd /c "winrm set winrm/config/service/auth @{Basic=true}"         2>&1 | Out-Null
+          & cmd /c "winrm set winrm/config/service/auth @{NTLM=true}"          2>&1 | Out-Null
+
+          # Step 4: open firewall port 5985
           netsh advfirewall firewall add rule `
             name="WinRM HTTP" `
             dir=in action=allow `
             protocol=TCP localport=5985 2>&1 | Out-Null
+
+          # Step 5: restart WinRM to apply
           Restart-Service WinRM -Force
+          Start-Sleep -Seconds 2
+
           Write-Output "WINRM_ENABLED"
         }
         catch {
