@@ -249,11 +249,12 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: |
           set -euo pipefail
-          MANIFEST_FILE="ansible/vars/${{ inputs.manifest }}/manifest.yml"
 
           python3 - <<'PYEOF'
+          import json
           import os
           import socket
+          import subprocess
           import sys
 
           import yaml
@@ -266,25 +267,62 @@ jobs:
           with open(manifest_file, encoding="utf-8") as fh:
               manifest = yaml.safe_load(fh) or {}
 
+          subscription_id = manifest.get("target_subscription_id", "")
+          target_rg = manifest.get("target_resource_group", "")
           vms = manifest.get("vms") or []
           failed = []
 
-          for vm in vms:
-              hostname = vm.get("vm_winrm_connect_hostname") or vm.get("name", "")
-              port = int(vm.get("vm_winrm_port", 5985))
-              target_vm_name = vm.get("target_vm_name", vm.get("name", ""))
+          def get_vm_private_ip(rg, vm_name, sub_id):
+              """Resolve a VM's private IP via Azure CLI NIC lookup."""
+              cmd = ["az", "vm", "nic", "list",
+                     "--resource-group", rg, "--vm-name", vm_name,
+                     "--query", "[0].id", "-o", "tsv",
+                     "--subscription", sub_id]
+              r = subprocess.run(cmd, capture_output=True, text=True, env=os.environ.copy())
+              if r.returncode != 0 or not r.stdout.strip():
+                  return None
+              nic_id = r.stdout.strip()
+              cmd2 = ["az", "network", "nic", "show", "--ids", nic_id,
+                      "--query", "ipConfigurations[0].privateIPAddress", "-o", "tsv",
+                      "--subscription", sub_id]
+              r2 = subprocess.run(cmd2, capture_output=True, text=True, env=os.environ.copy())
+              if r2.returncode != 0 or not r2.stdout.strip():
+                  return None
+              return r2.stdout.strip()
 
-              if not hostname:
-                  print("[WARN] No hostname for VM entry, skipping TCP test")
+          for vm in vms:
+              azure_vm_name = vm.get("name", "")
+              target_vm_name = vm.get("target_vm_name", azure_vm_name)
+              port = int(vm.get("vm_winrm_port", 5985))
+
+              if not azure_vm_name:
+                  print("[WARN] No name for VM entry, skipping TCP test")
                   continue
 
-              print("[INFO] Testing WinRM TCP %s:%d (target_vm_name=%s)" % (hostname, port, target_vm_name))
+              # Resolve private IP from Azure — the runner cannot resolve
+              # the VM's domain FQDN (dca-tst1856.dtenet.com) since it is
+              # outside the corporate DNS scope.
+              connect_addr = None
+              if subscription_id and target_rg:
+                  print("[INFO] Resolving private IP for VM: %s" % azure_vm_name)
+                  connect_addr = get_vm_private_ip(target_rg, azure_vm_name, subscription_id)
+                  if connect_addr:
+                      print("[INFO] Resolved private IP: %s" % connect_addr)
+                  else:
+                      print("[WARN] Could not resolve private IP for %s, falling back to vm_winrm_connect_hostname" % azure_vm_name)
+
+              # Fall back to manifest hostname if IP lookup failed
+              if not connect_addr:
+                  connect_addr = vm.get("vm_winrm_connect_hostname") or azure_vm_name
+
+              print("[INFO] Testing WinRM TCP %s:%d (VM: %s -> target: %s)" % (
+                  connect_addr, port, azure_vm_name, target_vm_name))
               try:
-                  with socket.create_connection((hostname, port), timeout=10):
-                      print("[OK] WinRM reachable: %s:%d" % (hostname, port))
+                  with socket.create_connection((connect_addr, port), timeout=10):
+                      print("[OK] WinRM reachable: %s:%d" % (connect_addr, port))
               except (socket.timeout, ConnectionRefusedError, OSError) as ex:
-                  print("[FAIL] WinRM not reachable on %s:%d - %s" % (hostname, port, ex))
-                  failed.append("%s:%d" % (hostname, port))
+                  print("[FAIL] WinRM not reachable on %s:%d - %s" % (connect_addr, port, ex))
+                  failed.append("%s (%s)" % (target_vm_name, connect_addr))
 
           if failed:
               print("[FAIL] WinRM TCP test failed for: %s" % ", ".join(failed))

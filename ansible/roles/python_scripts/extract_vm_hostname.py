@@ -87,16 +87,21 @@ def load_manifest(manifest_file: str) -> Dict[str, Any]:
 
 
 def extract_hostname(manifest: Dict[str, Any]) -> str:
-    """Extract the first VM's hostname from a parsed manifest.
+    """Extract the first VM's Delinea lookup hostname from a parsed manifest.
 
-    Prefers vm_winrm_connect_hostname over name so that the WinRM-reachable
-    address is used when it differs from the VM's display name.
+    Priority order:
+      1. vm_winrm_connect_hostname  — original source hostname (e.g. dca-tst1856.dtenet.com)
+      2. name                       — Azure Migrate resource name
+
+    The returned value is used only to search Delinea Secret Server, not for
+    WinRM connectivity. DNS resolvability is not required here.
 
     Args:
         manifest: Parsed manifest dictionary.
 
     Returns:
-        Hostname string (not yet qualified with the domain suffix).
+        Hostname string, stripped of any trailing domain suffix to avoid
+        double-qualification when DOMAIN_SUFFIX is appended by the caller.
 
     Raises:
         ManifestError: If no VMs are listed or the first VM has no hostname.
@@ -106,15 +111,23 @@ def extract_hostname(manifest: Dict[str, Any]) -> str:
         raise ManifestError("No VMs found in manifest")
 
     first_vm: Dict[str, Any] = vms[0]
-    hostname: Optional[str] = first_vm.get("vm_winrm_connect_hostname") or first_vm.get("name")
+    raw: Optional[str] = first_vm.get("vm_winrm_connect_hostname") or first_vm.get("name")
 
-    if not hostname:
+    if not raw:
         raise ManifestError(
             "No hostname found in first VM entry "
             "(missing both 'vm_winrm_connect_hostname' and 'name')"
         )
 
-    return hostname.strip()
+    hostname = raw.strip()
+
+    # Strip trailing domain suffix so callers can always safely append it
+    # without risk of producing host.domain.com.domain.com.
+    suffix = "." + DOMAIN_SUFFIX
+    if hostname.lower().endswith(suffix.lower()):
+        hostname = hostname[: -len(suffix)]
+
+    return hostname
 
 
 # ---------------------------------------------------------------------------
