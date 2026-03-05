@@ -2,16 +2,25 @@
 """
 resolve_delinea_secret_id.py
 ============================
-Version: 2.0.0 (2026-03-04)
+Version: 3.0.0 (2026-03-05)
 
-Resolves Delinea Secret Server secrets for SE-Admin accounts and writes them to GITHUB_ENV.
+Checks out Delinea Secret Server secrets for SE-Admin accounts, locks them,
+and writes passwords + secret IDs to GITHUB_ENV.
+
+**IMPORTANT**: This script CHECKS OUT secrets (locks them). You must run
+checkin_delinea_secrets.py at the end of your workflow to release the locks.
 
 Supports two modes:
-  1. Multi-VM mode (DEFAULT): Loads manifest, resolves per-VM passwords from Delinea.
+  1. Multi-VM mode (DEFAULT): Loads manifest, checks out per-VM passwords from Delinea.
      - If vm_delinea_secret_id is set in manifest: uses that secret ID directly.
      - Otherwise: dynamically searches Delinea based on vm_winrm_connect_hostname.
   2. Single-VM mode (LEGACY):  Resolves one secret ID using DELINEA_SECRET_PATH or
      DELINEA_SECRET_MACHINE (backward compatible).
+
+Checkout behavior:
+  - Locks the secret in Delinea (prevents concurrent access)
+  - Retrieves the password (may be rotated depending on Delinea policy)
+  - Stores both password and secret ID in GITHUB_ENV for later check-in
 
 Exits with code 1 on:
   - Missing Delinea credentials
@@ -22,9 +31,10 @@ Exits with code 1 on:
   - No records returned by the Delinea API
   - No secret matched the applied filters
   - Multiple secrets matched and cannot be disambiguated
+  - Checkout failed for all VMs
 
 Exits with code 0 on:
-  - Secret ID / passwords successfully resolved and written to GITHUB_ENV
+  - Secret ID / passwords successfully checked out and written to GITHUB_ENV
 
 Resolution strategy (in order):
   1. Exact name match against DELINEA_SECRET_PATH or constructed FQDN\\Account pattern
@@ -43,8 +53,12 @@ Environment variables read:
   DELINEA_SECRET_ACCOUNT  (Optional) Account name filter (fallback if NAME not set)
   GITHUB_ENV              Path to the GitHub Actions env file (set automatically by the runner)
 
+Environment variables written (Multi-VM mode):
+  winrm_value_<target_vm_name_lowercase>         Password for the VM
+  delinea_secret_id_<target_vm_name_lowercase>   Secret ID for check-in
+
 Usage:
-  # Multi-VM mode (reads manifest)
+  # Multi-VM mode (reads manifest, checks out secrets)
   MANIFEST=domain_join_test python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
 
   # Single-VM mode (legacy - backward compatible)
@@ -354,6 +368,54 @@ def _fetch_detail(
         raise DelineaError("Failed to fetch secret %s: %s" % (delinea_id, ex)) from ex
 
     return resp.json()
+
+
+def _checkout_secret(
+    base_url: str,
+    auth: Dict[str, str],
+    delinea_id: int,
+) -> str:
+    """Check out a secret from Delinea and return the password.
+
+    Checking out locks the secret and may rotate the password depending on
+    Delinea configuration. The checked-out password is returned directly.
+
+    Args:
+        base_url:   Base URL of the Delinea Secret Server instance.
+        auth:       Authorization header dict containing the bearer token.
+        delinea_id: Numeric Delinea secret ID.
+
+    Returns:
+        The checked-out password value.  # pragma: allowlist secret
+
+    Raises:
+        DelineaError: On any network or HTTP failure.
+    """
+    try:
+        resp = requests.post(
+            "%s/api/v1/secrets/%s/check-out" % (base_url, delinea_id),
+            headers=auth,
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except HTTPError as ex:
+        error_body = ""
+        try:
+            error_body = " - " + ex.response.text
+        except Exception:  # noqa: BLE001
+            pass
+        raise DelineaError(
+            "Failed to check out secret %s (HTTP %s)%s"
+            % (delinea_id, ex.response.status_code, error_body)
+        ) from ex
+    except RequestException as ex:
+        raise DelineaError(
+            "Failed to check out secret %s: %s" % (delinea_id, ex)
+        ) from ex
+
+    # Extract password from checkout response
+    detail = resp.json()
+    return _extract_password(detail)  # pragma: allowlist secret
 
 
 def _checkin_secret(
@@ -810,30 +872,27 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
                         "No matching secret found for %s\\%s" % (machine_fqdn, account_name)
                     )
 
-            # Force check-in so the secret is readable.
+            # Check out the secret to lock it and get the password.
             log.info(
-                "[INFO] [VM %d/%d] Force checking in secret ID=%s",
+                "[INFO] [VM %d/%d] Checking out secret ID=%s (locks and retrieves password)",
                 idx,
                 total,
                 delinea_id,
             )
             try:
-                _checkin_secret(cfg.base_url, auth, int(delinea_id))
+                password = _checkout_secret(cfg.base_url, auth, int(delinea_id))  # pragma: allowlist secret
             except DelineaError as ex:
-                log.warning(
-                    "[WARN] [VM %d/%d] Check-in warning for ID=%s: %s (continuing)",
+                log.error(
+                    "[ERROR] [VM %d/%d] Failed to checkout secret ID=%s: %s",
                     idx,
                     total,
                     delinea_id,
                     ex,
                 )
-
-            # Fetch full details to extract the password.
-            detail = _fetch_detail(cfg.base_url, auth, int(delinea_id))
-            password = _extract_password(detail)  # pragma: allowlist secret
+                continue
 
             log.info(
-                "[INFO] [VM %d/%d] Password resolved (first 5 chars): %s...",  # pragma: allowlist secret
+                "[INFO] [VM %d/%d] Password checked out (first 5 chars): %s...",  # pragma: allowlist secret
                 idx,
                 total,
                 password[:5] if len(password) >= 5 else password,
@@ -842,6 +901,7 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
             # Mask password in GitHub Actions logs.  # pragma: allowlist secret
             print("::add-mask::%s" % password)  # pragma: allowlist secret
 
+            # Write password to environment variable
             env_var_name = "winrm_value_%s" % target_vm_name.lower()
             _write_github_env(cfg.github_env, env_var_name, password)  # pragma: allowlist secret
 
@@ -851,6 +911,19 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
                 total,
                 env_var_name,
             )
+
+            # Write secret ID to environment variable for later check-in
+            secret_id_var_name = "delinea_secret_id_%s" % target_vm_name.lower()
+            _write_github_env(cfg.github_env, secret_id_var_name, str(delinea_id))
+
+            log.info(
+                "[INFO] [VM %d/%d] Secret ID written to env var: %s (value: %s)",
+                idx,
+                total,
+                secret_id_var_name,
+                delinea_id,
+            )
+
             success_count += 1
 
         except (DelineaError, ConfigurationError) as ex:

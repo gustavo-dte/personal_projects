@@ -171,12 +171,15 @@ jobs:
         shell: bash
 
       # ------------------------------------------------------------------
-      # Resolve SE-Admin password from Delinea using target_vm_name
-      # Writes per-VM env vars: resolved_credential_<target_vm_name_lowercase>
-      # Used for disjoin operations via Azure Run Command -LocalCredential
+      # Check out SE-Admin password from Delinea using target_vm_name
+      # Locks the secret and retrieves the password (may be rotated)
+      # Writes per-VM env vars: 
+      #   - resolved_credential_<target_vm_name_lowercase> (password)
+      #   - delinea_secret_id_<target_vm_name_lowercase> (for check-in)
+      # Secrets will be checked in at the end of the workflow
       # ------------------------------------------------------------------
 
-      - name: Resolve SE-Admin password from Delinea
+      - name: Check out SE-Admin password from Delinea
         id: delinea_fetch
         run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
         shell: bash
@@ -251,6 +254,19 @@ jobs:
           rm -f ansible_extra_vars.json
           exit $rc
         shell: bash
+
+      # ------------------------------------------------------------------
+      # Check in Delinea secrets
+      # Releases the secrets that were checked out at the beginning
+      # Runs even if playbook fails to ensure secrets are not left locked
+      # ------------------------------------------------------------------
+
+      - name: Check in Delinea secrets
+        if: always()
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/checkin_delinea_secrets.py
+        shell: bash
+        env:
+          FAILURE_MODE: continue
 
       # ------------------------------------------------------------------
       # Upload logs
