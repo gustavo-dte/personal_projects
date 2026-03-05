@@ -331,7 +331,7 @@
         - not (az_rename_restart_result.skipped | default(false) | bool)
         - az_rename_restart_result.rc | default(0) | int == 0
 
-    - name: "Step 4 - Verify hostname via WinRM (.\Administrator) after rename reboot"
+    - name: 'Step 4 - Verify hostname via WinRM (.\Administrator) after rename reboot'
       ansible.windows.win_shell: |
         (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
       delegate_to: "{{ target_vm_host }}"
