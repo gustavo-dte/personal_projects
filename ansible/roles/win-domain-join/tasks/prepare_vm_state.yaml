@@ -1,44 +1,44 @@
 ---
-# prepare_winrm.yaml
+# prepare_vm_state.yaml
 # ====================
 # Resolves credentials and reads current VM state (hostname, domain membership)
-# using Azure Run Command (SYSTEM) - no WinRM credentials needed at this stage.
+# using Azure Run Command (SYSTEM) - no credentials needed at this stage.
 #
 # Credential roles per step:
-#   Step 1 (probe/disjoin) : Azure Run Command as SYSTEM - no creds required
-#   Step 2 (rename)        : Azure Run Command as SYSTEM - no creds required
-#   Step 3 (join)          : WinRM as .\Administrator (local, post-disjoin/rename)
-#                            domain join itself uses cpoe-automation (domain admin)
+#   Step 1 (probe)     : Azure Run Command as SYSTEM - no creds required
+#   Step 2 (disjoin)   : Azure Run Command creates scheduled task as SYSTEM - no creds required
+#   Step 3 (rename)    : Azure Run Command as SYSTEM - no creds required
+#   Step 4 (join)      : Azure Run Command with domain admin credentials (cpoe-automation)
 #
-# WinRM (SE-Admin) is NOT used for disjoin - domain-joined VMs may have
-# stale/wrong Delinea passwords and local Administrator is often disabled.
+# Note: SE-Admin credentials are resolved for backward compatibility but not currently used.
+#       Disjoin now uses a scheduled task running as SYSTEM (avoids runCommand hang).
 
 # ------------------------------------------------------------------------------
 # Credential resolution
 # ------------------------------------------------------------------------------
 
-- name: Resolve SE-Admin WinRM credentials (used post-disjoin as local .\Administrator)
+- name: Resolve SE-Admin credentials (used for disjoin as local .\ Administrator)
   ansible.builtin.set_fact:
-    resolved_winrm_username: "{{ item_winrm_username if (item_winrm_username is defined and item_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
-    resolved_winrm_value: "{{ item_winrm_value if (item_winrm_value is defined and item_winrm_value | string | length > 0) else (winrm_value | default('')) }}"
+    resolved_se_admin_username: "{{ se_admin_username if (se_admin_username is defined and se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
+    resolved_se_admin_password: "{{ se_admin_password if (se_admin_password is defined and se_admin_password | string | length > 0) else (se_admin_password | default('')) }}"
     _domain_netbios: "{{ manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper }}"
   no_log: true
 
-- name: Set resolved_winrm_password alias
+- name: Set resolved_se_admin_password alias
   ansible.builtin.set_fact:
-    resolved_winrm_password: "{{ resolved_winrm_value }}"
+    resolved_se_admin_password: "{{ resolved_se_admin_password }}"
   no_log: true
 
-- name: Validate WinRM credentials are provided
+- name: Validate SE-Admin credentials are provided
   ansible.builtin.assert:
     that:
-      - resolved_winrm_username | length > 0
-      - resolved_winrm_value | length > 0
+      - resolved_se_admin_username | length > 0
+      - resolved_se_admin_password | length > 0
     fail_msg: |
-      WinRM credentials are missing for {{ target_vm_name }} ({{ target_vm_host }})
-      - Username : {{ 'PROVIDED' if (resolved_winrm_username | length > 0) else 'MISSING' }}
-      - Password : {{ 'PROVIDED' if (resolved_winrm_value | length > 0) else 'MISSING' }}
-      Ensure winrm_username / winrm_value are passed via GitHub Secrets or manifest.
+      SE-Admin credentials are missing for {{ target_vm_name }} ({{ target_vm_host }})
+      - Username : {{ 'PROVIDED' if (resolved_se_admin_username | length > 0) else 'MISSING' }}
+      - Password : {{ 'PROVIDED' if (resolved_se_admin_password | length > 0) else 'MISSING' }}
+      Ensure se_admin_username / se_admin_password are passed via GitHub Secrets or manifest.
     quiet: false
 
 # ------------------------------------------------------------------------------
@@ -58,21 +58,16 @@
       |    Method       : Azure Run Command (SYSTEM - no creds)
       +-------------------------------------------------------------+
       |  STEP 2 - Disjoin (if needed)
-      |    Method       : Azure Run Command with SE-Admin -LocalCredential
-      |    SE-Admin     : .\{{ resolved_winrm_username }}
-      |    Password src : Delinea / {{ item.vm_winrm_connect_hostname | default(item.name) }}
+      |    Method       : Azure Run Command (scheduled task as SYSTEM)
+      |    Note         : No creds needed; SYSTEM has local admin rights
+      |    Approach     : Scheduled task avoids runCommand hang during reboot
       +-------------------------------------------------------------+
       |  STEP 3 - Rename (if needed)
       |    Method       : Azure Run Command (SYSTEM - no creds)
       |    Azure VM     : {{ target_vm_name }}
       +-------------------------------------------------------------+
-      |  STEP 4 - Domain join (WinRM as local Administrator)
-      |    ansible_user : .\{{ rename_winrm_username | default('Administrator') }}
-      |    Password src : Delinea secret for {{ item.vm_winrm_connect_hostname | default(item.name) }}
-      |    Password len : {{ resolved_winrm_value | string | length }} chars
-      +-------------------------------------------------------------+
-      |  DOMAIN ADMIN (cpoe-automation, join.yml)
-      |    Username     : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
+      |  STEP 4 - Domain join (via Azure Run Command as SYSTEM)
+      |    Domain user  : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
       |    Password src : DOMAIN_ADMIN_PASSWORD GitHub Secret
       +=============================================================+
 
@@ -85,7 +80,7 @@
     current_domain_status: { domain: 'WORKGROUP', part_of_domain: false, workgroup_name: 'WORKGROUP' }
     current_hostname_info: { old_name: "{{ item.name }}" }
     actual_vm_hostname: "{{ item.name }}"
-    formatted_winrm_username: ".\\{{ rename_winrm_username | default('Administrator') }}"
+    formatted_local_admin_username: ".\\{{ local_admin_username | default('Administrator') }}"
   when: (dry_run | default(false) | bool) or (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
@@ -159,7 +154,7 @@
       domain: "{{ _preflight_data.domain }}"
       part_of_domain: "{{ _preflight_data.part_of_domain }}"
       workgroup_name: "{{ _preflight_data.workgroup_name | default('WORKGROUP') }}"
-    formatted_winrm_username: ".\\{{ rename_winrm_username | default('Administrator') }}"
+    formatted_local_admin_username: ".\\{{ local_admin_username | default('Administrator') }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)

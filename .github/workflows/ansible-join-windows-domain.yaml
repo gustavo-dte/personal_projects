@@ -8,7 +8,7 @@ name: Ansible-Join-Windows-Domain
 #   4. Rename hostname using Azure Run Command as SYSTEM
 #   5. Join VM to domain using Azure Run Command with cpoe-automation credentials from DOMAIN_ADMIN_PASSWORD secret
 #
-# Note: All operations use Azure Run Command API - no WinRM connectivity required.
+# Note: All operations use Azure Run Command API exclusively.
 
 on:
   workflow_dispatch:

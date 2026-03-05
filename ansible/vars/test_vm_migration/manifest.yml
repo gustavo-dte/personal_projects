@@ -128,9 +128,8 @@ uninstall_tools_list:
 vms:
   - name: vmcuwinwebd01
     target_vm_name: vmcuwinwebd08
-    vm_winrm_port: 5985   # VM has WinRM HTTP on 5985; ensure NSG allows inbound 5985 from runner
-    vm_winrm_username: migration-test  # WinRM user for dummy VM; password from GitHub secret winrm_password_vmcuwinwebd08
-    vm_winrm_connect_hostname: vmcuwinwebd01  # current hostname for first WinRM connection (avoids credential reject when target_vm_name differs)
+    vm_se_admin_username: migration-test  # SE-Admin local admin username; password from GitHub secret se_admin_password or winrm_password_vmcuwinwebd08
+    delinea_hostname: vmcuwinwebd01  # Current hostname for Delinea secret lookup (avoids credential reject when target_vm_name differs)
     description: "Server created to test migration pipeline"
     target_vm_size: Standard_D2s_v5
     target_license_type: WindowsServer

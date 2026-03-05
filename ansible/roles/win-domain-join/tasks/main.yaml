@@ -10,7 +10,7 @@
   vars:
     manifest: "{{ manifest }}"
 
-- name: Prepare VM connectivity (IP and WinRM creds)
+- name: Prepare VM connectivity (IP and SE-Admin credentials)
   block:
     - name: Build VM IP mapping from direct IP
       ansible.builtin.set_fact:
@@ -73,15 +73,15 @@
         - not (item.skipped | default(false) | bool)
         - item.stdout is not defined or item.stdout | trim | length == 0
 
-    - name: Build per-VM WinRM password mapping
+    - name: Build per-VM SE-Admin password mapping
       ansible.builtin.set_fact:
-        vm_winrm_values: >-
+        vm_se_admin_passwords: >-
           {{
-            vm_winrm_values | default({}) | combine({
+            vm_se_admin_passwords | default({}) | combine({
               item.name: (
                 lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') if
                 (lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') | string | length > 0)
-                else (item.vm_winrm_value | default(''))
+                else (item.vm_se_admin_password | default(''))
               )
             })
           }}
@@ -90,40 +90,40 @@
         label: "{{ item.name }}"
       no_log: true
 
-    - name: Debug per-VM WinRM password lookup (shows if env vars were found)  # pragma: allowlist secret
+    - name: Debug per-VM SE-Admin password lookup (shows if env vars were found)  # pragma: allowlist secret
       ansible.builtin.debug:
         msg: |
           VM: {{ item.name }}
           Target name: {{ item.target_vm_name | default(item.name) }}
           Env var name: winrm_value_{{ item.target_vm_name | default(item.name) | lower }}
-          Password found: {{ 'YES' if (vm_winrm_values[item.name] | default('') | length > 0) else 'NO' }}
-          Password length: {{ vm_winrm_values[item.name] | default('') | string | length }}
+          Password found: {{ 'YES' if (vm_se_admin_passwords[item.name] | default('') | length > 0) else 'NO' }}
+          Password length: {{ vm_se_admin_passwords[item.name] | default('') | string | length }}
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"
 
-    - name: Build per-VM WinRM username mapping
+    - name: Build per-VM SE-Admin username mapping
       ansible.builtin.set_fact:
-        vm_winrm_usernames: "{{ vm_winrm_usernames | default({}) | combine({item.name: item.vm_winrm_username | default('')}) }}"
+        vm_se_admin_usernames: "{{ vm_se_admin_usernames | default({}) | combine({item.name: item.vm_se_admin_username | default('')}) }}"
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"
 
-    - name: Debug - Show the vm_winrm_values dictionary populated from env vars
+    - name: Debug - Show the vm_se_admin_passwords dictionary populated from env vars
       ansible.builtin.debug:
-        msg: "Populated vm_winrm_values - checking {{ item.name }} has password..."
+        msg: "Populated vm_se_admin_passwords - checking {{ item.name }} has password..."
       loop: "{{ manifest_data.vms }}"
       loop_control:
-        label: "{{ item.name }} => password length={{ (vm_winrm_values[item.name] | default('') | string | length) }}"
+        label: "{{ item.name }} => password length={{ (vm_se_admin_passwords[item.name] | default('') | string | length) }}"
   when:
     - (manifest_data.vms | default([])) | length > 0
     - not (dry_run | default(false)) | bool
 
 - name: Disjoin-only path (targets from manifest)
   block:
-    - name: Set WinRM username separator
+    - name: Set username separator
       ansible.builtin.set_fact:
-        winrm_username_sep: "\\"  # Backslash separator for Windows domain\username format
+        username_separator: "\\"  # Backslash separator for Windows domain\username format
 
     - name: Assert manifest has VMs for disjoin
       ansible.builtin.assert:
@@ -138,11 +138,10 @@
         label: "{{ item.name }}"
       vars:
         target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host: "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
-        item_winrm_value: "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
-        vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
-        bootstrap_winrm_username: "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
+        target_vm_host: "{{ vm_ip_map.get(item.name, item.delinea_hostname | default(item.vm_ansible_host | default(item.name))) }}"
+        se_admin_username: "{{ item.vm_se_admin_username if (item.vm_se_admin_username is defined and item.vm_se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
+        se_admin_password: "{{ (vm_se_admin_passwords | default({}))[item.name] | default('') if ((vm_se_admin_passwords | default({}))[item.name] | default('') | string | length > 0) else (se_admin_password | default('')) }}"
+        delinea_hostname: "{{ item.delinea_hostname | default('') }}"
         skip_rename: true
         azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
         azure_subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
@@ -168,9 +167,9 @@
 
 - name: Disjoin and rename path (disjoin → reboot → rename → reboot; no domain rejoin)
   block:
-    - name: Set WinRM username separator
+    - name: Set username separator
       ansible.builtin.set_fact:
-        winrm_username_sep: "\\"  # Backslash separator for Windows domain\username format
+        username_separator: "\\"  # Backslash separator for Windows domain\username format
 
     - name: Assert manifest has VMs for disjoin-and-rename
       ansible.builtin.assert:
@@ -192,11 +191,10 @@
         label: "{{ item.name }}"
       vars:
         target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:          "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
-        item_winrm_value:     "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
-        vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
-        bootstrap_winrm_username:  "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
+        target_vm_host:          "{{ vm_ip_map.get(item.name, item.delinea_hostname | default(item.vm_ansible_host | default(item.name))) }}"
+        se_admin_username:     "{{ item.vm_se_admin_username if (item.vm_se_admin_username is defined and item.vm_se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
+        se_admin_password:     "{{ (vm_se_admin_passwords | default({}))[item.name] | default('') if ((vm_se_admin_passwords | default({}))[item.name] | default('') | string | length > 0) else (se_admin_password | default('')) }}"
+        delinea_hostname: "{{ item.delinea_hostname | default('') }}"
         skip_rename:             false
         azure_resource_group:    "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
         azure_vm_name:           "{{ item.target_vm_name | default(item.name) }}"
@@ -244,7 +242,7 @@
         wait_for_reboot: "{{ wait_for_reboot | default(true) }}"
         safe_mode_password: "{{ safe_mode_password | default('') }}"
         force_rejoin: "{{ force_rejoin | default(false) }}"
-        winrm_username_sep: "\\"  # Backslash separator for Windows domain\username format
+        username_separator: "\\"  # Backslash separator for Windows domain\username format
       no_log: true
 
     - name: Debug effective domain admin username (non-sensitive)
@@ -261,11 +259,10 @@
         label: "{{ item.name }}"
       vars:
         target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:          "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
-        item_winrm_value:     "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
-        vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
-        bootstrap_winrm_username:  "{{ ((item.vm_winrm_connect_hostname | default('')) if ((item.vm_winrm_connect_hostname | default('')) | length > 0) else '.') ~ winrm_username_sep ~ item_winrm_username }}"
+        target_vm_host:          "{{ vm_ip_map.get(item.name, item.delinea_hostname | default(item.vm_ansible_host | default(item.name))) }}"
+        se_admin_username:     "{{ item.vm_se_admin_username if (item.vm_se_admin_username is defined and item.vm_se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
+        se_admin_password:     "{{ (vm_se_admin_passwords | default({}))[item.name] | default('') if ((vm_se_admin_passwords | default({}))[item.name] | default('') | string | length > 0) else (se_admin_password | default('')) }}"
+        delinea_hostname: "{{ item.delinea_hostname | default('') }}"
         azure_resource_group:    "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
         azure_vm_name:           "{{ item.target_vm_name | default(item.name) }}"
         azure_subscription_id:   "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
