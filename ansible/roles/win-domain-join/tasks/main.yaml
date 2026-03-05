@@ -139,8 +139,6 @@
       vars:
         target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host: "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        winrm_port: "{{ item.vm_winrm_port | default(5985) }}"
-        winrm_transport: "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username: "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
         item_winrm_value: "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
         vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
@@ -195,8 +193,6 @@
       vars:
         target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host:          "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        winrm_port:              "{{ item.vm_winrm_port | default(5985) }}"
-        winrm_transport:         "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
         item_winrm_value:     "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
         vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"
@@ -256,38 +252,7 @@
         msg: "Using domain_admin_username='{{ domain_admin_username }}' (length={{ domain_admin_username | length }})"
       no_log: false
 
-    - name: Test WinRM port connectivity before domain join
-      block:
-        - name: Test TCP connectivity to WinRM port
-          ansible.builtin.shell: timeout 5 bash -c "echo > /dev/tcp/{{ (vm_ip_map | default({}))[item.name] }}/{{ item.vm_winrm_port | default(5985) }}" || true
-          loop: "{{ manifest_data.vms }}"
-          loop_control:
-            label: "{{ item.name }} ({{ (vm_ip_map | default({}))[item.name] | default('?') }}:{{ item.vm_winrm_port | default(5985) }})"
-          register: port_test_result
-          changed_when: false
-          failed_when: false
-          when:
-            - not (dry_run | default(false))
-            - item.name in (vm_ip_map | default({}))
-            - (vm_ip_map | default({}))[item.name] | length > 0
 
-        - name: Fail if port is not reachable
-          ansible.builtin.fail:
-            msg: |
-              WinRM port {{ item.item.vm_winrm_port | default(5985) }} is not reachable on {{ (vm_ip_map | default({}))[item.item.name] | default('?') }}
-              This indicates a firewall/NSG blocking issue. Please verify:
-              - Azure NSG allows inbound port {{ item.item.vm_winrm_port | default(5985) }} from GitHub Actions runner
-              - Windows Firewall allows port {{ item.item.vm_winrm_port | default(5985) }} on the VM
-              - WinRM service is running and configured on the VM
-          loop: "{{ port_test_result.results | default([]) }}"
-          when:
-            - not (dry_run | default(false))
-            - port_test_result is defined
-            - port_test_result.results is defined
-            - item.rc != 0
-      when:
-        - not (dry_run | default(false))
-        - (vm_ip_map | default({})) | length > 0
 
     - name: Join each Windows server to domain
       ansible.builtin.include_tasks: join.yml
@@ -297,8 +262,6 @@
       vars:
         target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host:          "{{ vm_ip_map.get(item.name, item.vm_winrm_connect_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        winrm_port:              "{{ item.vm_winrm_port | default(5985) }}"
-        winrm_transport:         "{{ item.vm_winrm_transport | default('ntlm') }}"
         item_winrm_username:     "{{ item.vm_winrm_username if (item.vm_winrm_username is defined and item.vm_winrm_username | string | length > 0) else (winrm_username | default('SE-Admin')) }}"
         item_winrm_value:     "{{ (vm_winrm_values | default({}))[item.name] | default('') if ((vm_winrm_values | default({}))[item.name] | default('') | string | length > 0) else (winrm_value | default('')) }}"
         vm_winrm_connect_hostname: "{{ item.vm_winrm_connect_hostname | default('') }}"

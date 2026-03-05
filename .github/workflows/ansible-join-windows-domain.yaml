@@ -1,14 +1,14 @@
 name: Ansible-Join-Windows-Domain
 
-# This workflow joins Windows servers to an Active Directory domain.
+# This workflow joins Windows servers to an Active Directory domain using Azure Run Command.
 # Steps:
 #   1. Login to Azure using target_subscription_id from the manifest
-#   2. Open RDP (3389) and WinRM (5985) via Azure VM Run Command (Windows Firewall)
-#   3. Resolve the SE-Admin WinRM password from Delinea using target_vm_name
-#   4. TCP test WinRM port connectivity
-#   5. Disjoin VM from domain using SE-Admin + Delinea password
-#   6. Rename hostname using local Administrator + SE-Admin (Delinea) password
-#   7. Join VM to domain using cpoe-automation + DOMAIN_ADMIN_PASSWORD secret
+#   2. Resolve the SE-Admin password from Delinea using target_vm_name
+#   3. Disjoin VM from domain using Azure Run Command with SE-Admin credentials
+#   4. Rename hostname using Azure Run Command as SYSTEM
+#   5. Join VM to domain using Azure Run Command with cpoe-automation credentials from DOMAIN_ADMIN_PASSWORD secret
+#
+# Note: All operations use Azure Run Command API - no WinRM connectivity required.
 
 on:
   workflow_dispatch:
@@ -71,30 +71,13 @@ jobs:
           echo "Last commit message: $(git log -1 --pretty=%B)"
         shell: bash
 
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-        shell: bash
-
-      - name: Upgrade Azure SDK Python packages (before Ansible collections)
+      - name: Install Python dependencies (includes Azure CLI and SDK)
         run: |
-          echo "=== Current Azure SDK versions (all locations) ==="
-          pip list --user | grep -E "azure-" 2>/dev/null || echo "No user azure packages"
-          pip list | grep -E "azure-" 2>/dev/null || echo "No system azure packages"
+          echo "=== Installing Python dependencies from requirements.txt ==="
+          pip install -r requirements.txt
           echo ""
-          echo "=== Uninstalling old Azure SDK packages from user location ==="
-          pip uninstall -y $(pip list --user | grep azure- | awk '{print $1}') 2>/dev/null || true
-          echo ""
-          echo "=== Installing latest Azure SDK packages (version-pinned, compatible set) ==="
-          pip install --force-reinstall --no-cache-dir \
-            "azure-mgmt-compute>=30.0.0" \
-            "azure-mgmt-network>=23.0.0" \
-            "azure-mgmt-resource>=22.0.0" \
-            "azure-mgmt-core>=1.4.0" \
-            "azure-common>=1.1.28" \
-            "azure-identity>=1.15.0" \
-            "azure-core>=1.29.0"
-          echo ""
-          echo "=== Updated Azure SDK versions ==="
+          echo "=== Installed Azure CLI and SDK versions ==="
+          az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
           pip list | grep -E "azure-"
         shell: bash
 
@@ -138,22 +121,6 @@ jobs:
         shell: bash
 
       # ------------------------------------------------------------------
-      # Upgrade Azure CLI before authentication (no auth required)
-      # ------------------------------------------------------------------
-
-      - name: Upgrade Azure CLI to latest version (pre-login)
-        run: |
-          echo "=== Current Azure CLI Version ==="
-          az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
-          echo ""
-          echo "=== Upgrading Azure CLI via pip ==="
-          pip install --upgrade azure-cli
-          echo ""
-          echo "=== Updated Azure CLI Version ==="
-          az version --output yaml | grep azure-cli
-        shell: bash
-
-      # ------------------------------------------------------------------
       # Azure login using the subscription from the manifest
       # ------------------------------------------------------------------
 
@@ -193,32 +160,6 @@ jobs:
         shell: bash
 
       # ------------------------------------------------------------------
-      # Ensure Azure NSG has WinRM rule allowing GitHub runner IP
-      # ------------------------------------------------------------------
-
-      - name: Ensure Azure NSG allows WinRM from GitHub runner
-        if: ${{ !inputs.dry_run }}
-        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/ensure_nsg_winrm_rule.py
-        shell: bash
-
-      # ------------------------------------------------------------------
-      # Open RDP and WinRM on the VM Windows Firewall via Azure Run Command
-      # ------------------------------------------------------------------
-
-      - name: Verify script version
-        run: |
-          echo "=== Script Version Check ==="
-          head -n 6 ansible/roles/python_scripts/configure_winrm_firewall.py \
-            | grep -i version || echo "[WARN] Version line not found"
-          echo "Script checksum: $(sha256sum ansible/roles/python_scripts/configure_winrm_firewall.py | awk '{print $1}')"
-        shell: bash
-
-      - name: Configure VM Windows Firewall (RDP 3389 and WinRM 5985)
-        if: ${{ !inputs.dry_run }}
-        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/configure_winrm_firewall.py
-        shell: bash
-
-      # ------------------------------------------------------------------
       # Extract VM hostname for Delinea lookup
       # Uses target_vm_name from manifest as the Delinea machine filter
       # ------------------------------------------------------------------
@@ -231,108 +172,16 @@ jobs:
 
       # ------------------------------------------------------------------
       # Resolve SE-Admin password from Delinea using target_vm_name
-      # Writes per-VM env vars: winrm_value_<target_vm_name_lowercase>
+      # Writes per-VM env vars: resolved_credential_<target_vm_name_lowercase>
+      # Used for disjoin operations via Azure Run Command -LocalCredential
       # ------------------------------------------------------------------
 
-      - name: Resolve SE-Admin WinRM password from Delinea
+      - name: Resolve SE-Admin password from Delinea
         id: delinea_fetch
         run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
         shell: bash
         env:
           DELINEA_SECRET_ACCOUNT: SE-Admin
-
-      # ------------------------------------------------------------------
-      # TCP test WinRM port before proceeding
-      # ------------------------------------------------------------------
-
-      - name: TCP test WinRM port connectivity
-        if: ${{ !inputs.dry_run }}
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PYEOF'
-          import json
-          import os
-          import socket
-          import subprocess
-          import sys
-
-          import yaml
-
-          manifest_file = os.environ.get("MANIFEST_FILE", "").strip()
-          if not manifest_file:
-              print("[ERROR] MANIFEST_FILE not set")
-              sys.exit(1)
-
-          with open(manifest_file, encoding="utf-8") as fh:
-              manifest = yaml.safe_load(fh) or {}
-
-          subscription_id = manifest.get("target_subscription_id", "")
-          target_rg = manifest.get("target_resource_group", "")
-          vms = manifest.get("vms") or []
-          failed = []
-
-          def get_vm_private_ip(rg, vm_name, sub_id):
-              """Resolve a VM's private IP via Azure CLI NIC lookup."""
-              cmd = ["az", "vm", "nic", "list",
-                     "--resource-group", rg, "--vm-name", vm_name,
-                     "--query", "[0].id", "-o", "tsv",
-                     "--subscription", sub_id]
-              r = subprocess.run(cmd, capture_output=True, text=True, env=os.environ.copy())
-              if r.returncode != 0 or not r.stdout.strip():
-                  return None
-              nic_id = r.stdout.strip()
-              cmd2 = ["az", "network", "nic", "show", "--ids", nic_id,
-                      "--query", "ipConfigurations[0].privateIPAddress", "-o", "tsv",
-                      "--subscription", sub_id]
-              r2 = subprocess.run(cmd2, capture_output=True, text=True, env=os.environ.copy())
-              if r2.returncode != 0 or not r2.stdout.strip():
-                  return None
-              return r2.stdout.strip()
-
-          for vm in vms:
-              azure_vm_name = vm.get("target_vm_name", "")
-              os_hostname = vm.get("name", "")
-              port = int(vm.get("vm_winrm_port", 5985))
-
-              if not azure_vm_name:
-                  print("[WARN] No target_vm_name for VM entry, skipping TCP test")
-                  continue
-
-              # The runner cannot resolve the VM's domain FQDN (e.g. dca-tst1856.dtenet.com)
-              # since it is outside the corporate DNS scope. Resolve the private IP
-              # from Azure using the Azure resource name (target_vm_name).
-              connect_addr = None
-              if subscription_id and target_rg:
-                  print("[INFO] Resolving private IP for VM: %s (OS hostname: %s)" % (azure_vm_name, os_hostname))
-                  connect_addr = get_vm_private_ip(target_rg, azure_vm_name, subscription_id)
-                  if connect_addr:
-                      print("[INFO] Resolved private IP: %s" % connect_addr)
-                  else:
-                      print("[WARN] Could not resolve private IP for %s" % azure_vm_name)
-
-              if not connect_addr:
-                  print("[FAIL] Cannot determine connect address for %s" % azure_vm_name)
-                  failed.append(azure_vm_name)
-                  continue
-
-              print("[INFO] Testing WinRM TCP %s:%d (Azure VM: %s)" % (connect_addr, port, azure_vm_name))
-              try:
-                  with socket.create_connection((connect_addr, port), timeout=10):
-                      print("[OK] WinRM reachable: %s:%d" % (connect_addr, port))
-              except (socket.timeout, ConnectionRefusedError, OSError) as ex:
-                  print("[FAIL] WinRM not reachable on %s:%d - %s" % (connect_addr, port, ex))
-                  failed.append("%s (%s)" % (azure_vm_name, connect_addr))
-
-          if failed:
-              print("[FAIL] WinRM TCP test failed for: %s" % ", ".join(failed))
-              sys.exit(1)
-
-          print("[OK] All WinRM ports reachable")
-          PYEOF
-        shell: bash
-        env:
-          MANIFEST_FILE: ansible/vars/${{ inputs.manifest }}/manifest.yml
 
       # ------------------------------------------------------------------
       # Display configuration
@@ -354,8 +203,8 @@ jobs:
 
       # ------------------------------------------------------------------
       # Build ansible_extra_vars.json
-      # Disjoin step: uses SE-Admin + Delinea password (winrm_password injected by resolve step)
-      # Join step:    uses cpoe-automation + DOMAIN_ADMIN_PASSWORD secret
+      # Disjoin: Uses SE-Admin with -LocalCredential via Azure Run Command
+      # Join:    Uses cpoe-automation domain admin from DOMAIN_ADMIN_PASSWORD secret via Azure Run Command
       # ------------------------------------------------------------------
 
       - name: Build extra vars file for domain join workflow
