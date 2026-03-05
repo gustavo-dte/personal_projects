@@ -137,8 +137,9 @@
     - not (dry_run | default(false) | bool)
     - az_disjoin_result is defined
     - not (az_disjoin_result.skipped | default(false) | bool)
-    - az_disjoin_result.rc | default(0) | int != 0
-      or 'DISJOIN_FAILED:' in (az_disjoin_result.stdout | default(''))
+    - >-
+        (az_disjoin_result.rc | default(0) | int != 0)
+        or ('DISJOIN_FAILED:' in (az_disjoin_result.stdout | default('')))
 
 - name: "Step 2 - Restart VM via Azure CLI after disjoin"
   ansible.builtin.shell: >-
@@ -154,8 +155,9 @@
     - not (dry_run | default(false) | bool)
     - az_disjoin_result is defined
     - not (az_disjoin_result.skipped | default(false) | bool)
-    - az_disjoin_result.rc | default(0) | int == 0
-    - 'DISJOIN_FAILED:' not in (az_disjoin_result.stdout | default(''))
+    - >-
+        (az_disjoin_result.rc | default(0) | int == 0)
+        and ('DISJOIN_FAILED:' not in (az_disjoin_result.stdout | default('')))
 
 - name: "Step 2 - Wait for VM to come back after disjoin reboot"
   ansible.builtin.wait_for:
