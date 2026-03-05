@@ -237,7 +237,7 @@ jobs:
       - name: Run migration cutover with automatic skip logic
         id: cutover
         env:
-          ANSIBLE_PYTHON_INTERPRETER: /usr/bin/python3
+          ANSIBLE_PYTHON_INTERPRETER: /bin/python3
         run: |
           echo "Starting intelligent migration cutover..."
           echo "The playbook will automatically:"
