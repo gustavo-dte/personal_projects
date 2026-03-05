@@ -91,11 +91,12 @@ jobs:
       - name: Install Python dependencies (includes Azure CLI and SDK)
         run: |
           echo "=== Installing Python dependencies from requirements.txt ==="
-          pip install -r requirements.txt
+          # Use python3 explicitly to match Ansible's interpreter
+          python3 -m pip install --user -r requirements.txt
           echo ""
           echo "=== Installed Azure CLI and SDK versions ==="
           az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
-          pip list | grep -E "azure-"
+          python3 -m pip list | grep -E "azure-"
         shell: bash
 
       - name: Install Ansible collections from requirements.yml
