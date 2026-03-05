@@ -291,38 +291,38 @@ jobs:
               return r2.stdout.strip()
 
           for vm in vms:
-              azure_vm_name = vm.get("name", "")
-              target_vm_name = vm.get("target_vm_name", azure_vm_name)
+              azure_vm_name = vm.get("target_vm_name", "")
+              os_hostname = vm.get("name", "")
               port = int(vm.get("vm_winrm_port", 5985))
 
               if not azure_vm_name:
-                  print("[WARN] No name for VM entry, skipping TCP test")
+                  print("[WARN] No target_vm_name for VM entry, skipping TCP test")
                   continue
 
-              # Resolve private IP from Azure — the runner cannot resolve
-              # the VM's domain FQDN (dca-tst1856.dtenet.com) since it is
-              # outside the corporate DNS scope.
+              # The runner cannot resolve the VM's domain FQDN (e.g. dca-tst1856.dtenet.com)
+              # since it is outside the corporate DNS scope. Resolve the private IP
+              # from Azure using the Azure resource name (target_vm_name).
               connect_addr = None
               if subscription_id and target_rg:
-                  print("[INFO] Resolving private IP for VM: %s" % azure_vm_name)
+                  print("[INFO] Resolving private IP for VM: %s (OS hostname: %s)" % (azure_vm_name, os_hostname))
                   connect_addr = get_vm_private_ip(target_rg, azure_vm_name, subscription_id)
                   if connect_addr:
                       print("[INFO] Resolved private IP: %s" % connect_addr)
                   else:
-                      print("[WARN] Could not resolve private IP for %s, falling back to vm_winrm_connect_hostname" % azure_vm_name)
+                      print("[WARN] Could not resolve private IP for %s" % azure_vm_name)
 
-              # Fall back to manifest hostname if IP lookup failed
               if not connect_addr:
-                  connect_addr = vm.get("vm_winrm_connect_hostname") or azure_vm_name
+                  print("[FAIL] Cannot determine connect address for %s" % azure_vm_name)
+                  failed.append(azure_vm_name)
+                  continue
 
-              print("[INFO] Testing WinRM TCP %s:%d (VM: %s -> target: %s)" % (
-                  connect_addr, port, azure_vm_name, target_vm_name))
+              print("[INFO] Testing WinRM TCP %s:%d (Azure VM: %s)" % (connect_addr, port, azure_vm_name))
               try:
                   with socket.create_connection((connect_addr, port), timeout=10):
                       print("[OK] WinRM reachable: %s:%d" % (connect_addr, port))
               except (socket.timeout, ConnectionRefusedError, OSError) as ex:
                   print("[FAIL] WinRM not reachable on %s:%d - %s" % (connect_addr, port, ex))
-                  failed.append("%s (%s)" % (target_vm_name, connect_addr))
+                  failed.append("%s (%s)" % (azure_vm_name, connect_addr))
 
           if failed:
               print("[FAIL] WinRM TCP test failed for: %s" % ", ".join(failed))

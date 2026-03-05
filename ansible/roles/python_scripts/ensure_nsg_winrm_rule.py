@@ -313,9 +313,9 @@ def main() -> None:
 
     vms: List[Dict[str, Any]] = manifest.get("vms") or []
     for vm in vms:
-        azure_vm_name: str = vm.get("name", "")
+        azure_vm_name: str = vm.get("target_vm_name", "")
         if not azure_vm_name:
-            log.warning("[WARN] VM entry has no 'name' field, skipping")
+            log.warning("[WARN] VM entry has no 'target_vm_name' field, skipping")
             continue
 
         log.info("[INFO] Checking NSG for VM: %s", azure_vm_name)
