@@ -1,151 +1,262 @@
 ---
 # prepare_vm_state.yaml
 # ====================
-# Resolves credentials and reads current VM state (hostname, domain membership)
-# using Azure Run Command (SYSTEM) - no credentials needed at this stage.
+# Responsibilities:
+#   1. Resolves SE-Admin credentials (Delinea password fetched ONCE at pipeline
+#      start by resolve_delinea_secret_id.py — never re-fetched here)
+#   2. Enables WinRM on the target VM via az vm run-command invoke (SYSTEM, no creds)
+#   3. Tests WinRM connectivity and reads VM state (hostname + domain) as
+#      DOMAIN\SE-Admin using the Delinea password
 #
-# Credential roles per step:
-#   Step 1 (probe)     : Azure Run Command as SYSTEM - no creds required
-#   Step 2 (disjoin)   : Azure Run Command creates scheduled task as SYSTEM - no creds required
-#   Step 3 (rename)    : Azure Run Command as SYSTEM - no creds required
-#   Step 4 (join)      : Azure Run Command with domain admin credentials (cpoe-automation)
-#
-# Note: SE-Admin credentials are resolved for backward compatibility but not currently used.
-#       Disjoin now uses a scheduled task running as SYSTEM (avoids runCommand hang).
+# Credential flow (single Delinea fetch, reused for the full pipeline):
+#   Step 1  Enable WinRM   : az vm run-command invoke (SYSTEM)          — no creds
+#   Step 2  Test + probe   : WinRM DOMAIN\SE-Admin  + Delinea password
+#   Step 3  Disjoin        : WinRM DOMAIN\SE-Admin  + Delinea password  (disjoin_rename.yml)
+#   Step 4  Rename         : WinRM .\Administrator  + Delinea password  (disjoin_rename.yml)
+#   Step 5  Domain join    : WinRM .\Administrator  + Delinea password  (join.yml)
+#                            join op uses cpoe-automation + DOMAIN_ADMIN_PASSWORD secret
 
 # ------------------------------------------------------------------------------
 # Credential resolution
+# The password arrives via se_admin_password, written to GITHUB_ENV by
+# resolve_delinea_secret_id.py as winrm_value_<target_vm_name_lower>.
+# main.yaml reads it into vm_se_admin_passwords and passes it here.
 # ------------------------------------------------------------------------------
 
-- name: Resolve SE-Admin credentials (used for disjoin as local .\ Administrator)
+- name: "Credentials - Resolve SE-Admin for {{ target_vm_name }}"
   ansible.builtin.set_fact:
-    resolved_se_admin_username: "{{ se_admin_username if (se_admin_username is defined and se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
-    resolved_se_admin_password: "{{ se_admin_password if (se_admin_password is defined and se_admin_password | string | length > 0) else (se_admin_password | default('')) }}"
-    _domain_netbios: "{{ manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper }}"
+    resolved_se_admin_username: >-
+      {{ se_admin_username
+         if (se_admin_username is defined and se_admin_username | string | length > 0)
+         else 'SE-Admin' }}
+    resolved_se_admin_password: >-
+      {{ se_admin_password
+         if (se_admin_password is defined and se_admin_password | string | length > 0)
+         else '' }}
+    _domain_netbios: >-
+      {{ manifest_data.domainNameSetup.domain
+         | default('')
+         | split('.')
+         | first
+         | upper }}
   no_log: true
 
-- name: Set resolved_se_admin_password alias
-  ansible.builtin.set_fact:
-    resolved_se_admin_password: "{{ resolved_se_admin_password }}"
-  no_log: true
-
-- name: Validate SE-Admin credentials are provided
+- name: "Credentials - Fail if SE-Admin password missing for {{ target_vm_name }}"
   ansible.builtin.assert:
     that:
       - resolved_se_admin_username | length > 0
       - resolved_se_admin_password | length > 0
     fail_msg: |
-      SE-Admin credentials are missing for {{ target_vm_name }} ({{ target_vm_host }})
-      - Username : {{ 'PROVIDED' if (resolved_se_admin_username | length > 0) else 'MISSING' }}
-      - Password : {{ 'PROVIDED' if (resolved_se_admin_password | length > 0) else 'MISSING' }}
-      Ensure se_admin_username / se_admin_password are passed via GitHub Secrets or manifest.
-    quiet: false
+      SE-Admin password is missing for {{ target_vm_name }}.
+      Expected env var: winrm_value_{{ target_vm_name | lower }}
+      This must be set by resolve_delinea_secret_id.py before Ansible runs.
+      Username : {{ 'PROVIDED' if resolved_se_admin_username | length > 0 else 'MISSING' }}
+      Password : {{ 'PROVIDED' if resolved_se_admin_password | length > 0 else 'MISSING' }}
+  when: not (dry_run | default(false) | bool)
 
-# ------------------------------------------------------------------------------
-# Credential debug - printed for EVERY run so logs are unambiguous
-# ------------------------------------------------------------------------------
-
-- name: "[CREDENTIALS] All steps - credential plan for {{ target_vm_name }}"
+- name: "[CREDENTIALS] Credential plan for {{ target_vm_name }}"
   ansible.builtin.debug:
     msg: |
       +=============================================================+
-      |  CREDENTIAL PLAN FOR: {{ target_vm_name }}
+      |  CREDENTIAL PLAN: {{ target_vm_name }}
       +=============================================================+
-      |  Azure VM       : {{ target_vm_name }}
-      |  Connect IP     : {{ target_vm_host }}
+      |  Connect IP      : {{ target_vm_host }}
+      |  Delinea fetch   : ONCE at pipeline start — reused below
       +-------------------------------------------------------------+
-      |  STEP 1 - Hostname/domain probe
-      |    Method       : Azure Run Command (SYSTEM - no creds)
+      |  Step 1 - Enable WinRM
+      |    Method        : az vm run-command invoke (SYSTEM)
+      |    Creds         : none needed
       +-------------------------------------------------------------+
-      |  STEP 2 - Disjoin (if needed)
-      |    Method       : Azure Run Command (scheduled task as SYSTEM)
-      |    Note         : No creds needed; SYSTEM has local admin rights
-      |    Approach     : Scheduled task avoids runCommand hang during reboot
+      |  Step 2 - WinRM credential test + VM state probe
+      |    Method        : WinRM
+      |    User          : {{ _domain_netbios }}\{{ resolved_se_admin_username }}
+      |    Password src  : Delinea (single fetch, reused)
+      |    Password len  : {{ resolved_se_admin_password | string | length }} chars
       +-------------------------------------------------------------+
-      |  STEP 3 - Rename (if needed)
-      |    Method       : Azure Run Command (SYSTEM - no creds)
-      |    Azure VM     : {{ target_vm_name }}
+      |  Step 3 - Disjoin (if needed)
+      |    Method        : WinRM
+      |    User          : {{ _domain_netbios }}\{{ resolved_se_admin_username }}
+      |    Password src  : same Delinea password
       +-------------------------------------------------------------+
-      |  STEP 4 - Domain join (via Azure Run Command as SYSTEM)
-      |    Domain user  : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
-      |    Password src : DOMAIN_ADMIN_PASSWORD GitHub Secret
+      |  Step 4 - Rename (if needed)
+      |    Method        : WinRM
+      |    User          : .\Administrator
+      |    Password src  : same Delinea password
+      +-------------------------------------------------------------+
+      |  Step 5 - Domain join
+      |    WinRM user    : .\Administrator
+      |    Password src  : same Delinea password
+      |    Join creds    : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
+      |    Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
       +=============================================================+
 
 # ------------------------------------------------------------------------------
-# Dry-run / skip-hostname-setup shortcut
+# Dry-run / skip_hostname_setup shortcut — skip all live operations
 # ------------------------------------------------------------------------------
 
-- name: Set placeholder facts for dry run or skip_hostname_setup
+- name: "Set placeholder facts for dry-run or skip_hostname_setup"
   ansible.builtin.set_fact:
-    current_domain_status: { domain: 'WORKGROUP', part_of_domain: false, workgroup_name: 'WORKGROUP' }
-    current_hostname_info: { old_name: "{{ item.name }}" }
+    current_domain_status:
+      domain: 'WORKGROUP'
+      part_of_domain: false
+      workgroup_name: 'WORKGROUP'
+    current_hostname_info:
+      old_name: "{{ item.name }}"
     actual_vm_hostname: "{{ item.name }}"
-    formatted_local_admin_username: ".\\{{ local_admin_username | default('Administrator') }}"
   when: (dry_run | default(false) | bool) or (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
-# Read hostname + domain status via Azure Run Command (SYSTEM, no WinRM creds)
+# Step 1: Enable WinRM via az vm run-command invoke (SYSTEM — no creds needed)
+# Idempotent: winrm quickconfig -quiet is safe to run multiple times.
+# Opens port 5985, enables NTLM auth, restarts the WinRM service.
 # ------------------------------------------------------------------------------
 
-- name: "Step 1 - Read hostname and domain status via Azure Run Command"
+- name: "Step 1 - Enable WinRM via az run-command (SYSTEM)"
   ansible.builtin.shell: |
     az vm run-command invoke \
       --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
       --name "{{ target_vm_name }}" \
-      --command-id RunPowerShellScript \
       --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+      --command-id RunPowerShellScript \
       --scripts '
-        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Name, Domain, PartOfDomain, Workgroup
-        $domainName = if ($cs.PartOfDomain) {
-          try { [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().Name }
-          catch { $cs.Domain }
-        } else { $null }
-        @{
-          hostname       = $cs.Name
-          domain         = if ($domainName) { $domainName } else { "WORKGROUP" }
-          part_of_domain = [bool]$cs.PartOfDomain
-          workgroup_name = $cs.Workgroup
-        } | ConvertTo-Json -Compress
+        $ErrorActionPreference = "Stop"
+        try {
+          winrm quickconfig -quiet 2>&1 | Out-Null
+          Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
+          Set-Item WSMan:\localhost\Service\Auth\Basic       -Value $true -Force
+          Set-Item WSMan:\localhost\Service\Auth\NTLM        -Value $true -Force
+          netsh advfirewall firewall add rule `
+            name="WinRM HTTP" `
+            dir=in action=allow `
+            protocol=TCP localport=5985 2>&1 | Out-Null
+          Restart-Service WinRM -Force
+          Write-Output "WINRM_ENABLED"
+        }
+        catch {
+          Write-Output ("WINRM_ENABLE_FAILED:" + $_.Exception.Message)
+          exit 1
+        }
       ' \
-      --query "value[0].message" -o tsv 2>/dev/null
+      --query "value[0].message" -o tsv 2>&1
   delegate_to: localhost
-  register: az_preflight_result
-  changed_when: false
+  register: az_winrm_enable_result
   failed_when: false
+  changed_when: false
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
 
-- name: "Step 1 - Debug: raw Azure Run Command output"
+- name: "Step 1 - Debug: WinRM enable output"
   ansible.builtin.debug:
     msg: |
-      Azure Run Command preflight output for {{ target_vm_name }}:
-        rc     : {{ az_preflight_result.rc | default('N/A') }}
-        stdout : {{ az_preflight_result.stdout | default('(empty)') | trim }}
+      WinRM enable result for {{ target_vm_name }}:
+        rc     : {{ az_winrm_enable_result.rc | default('N/A') }}
+        output : {{ az_winrm_enable_result.stdout | default('(empty)') | trim }}
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
+    - az_winrm_enable_result is defined
 
-- name: "Step 1 - Fail if Azure Run Command returned no output"
+- name: "Step 1 - Fail if WinRM enable failed"
   ansible.builtin.fail:
     msg: |
-      Azure Run Command returned no output for {{ target_vm_name }}.
-      Verify the VM is running and the managed identity has RunCommand permissions.
-      rc     = {{ az_preflight_result.rc | default('N/A') }}
-      stderr = {{ az_preflight_result.stderr | default('') | truncate(300) }}
+      Failed to enable WinRM on {{ target_vm_name }} via az run-command.
+      Output : {{ az_winrm_enable_result.stdout | default('') | trim }}
+      stderr : {{ az_winrm_enable_result.stderr | default('') | truncate(300) }}
+      Ensure the managed identity has the VirtualMachineContributor or
+      RunCommand-level permission on this VM.
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - az_preflight_result.stdout is not defined or az_preflight_result.stdout | trim | length == 0
+    - az_winrm_enable_result is defined
+    - >-
+        (az_winrm_enable_result.rc | default(0) | int != 0)
+        or ('WINRM_ENABLE_FAILED:' in (az_winrm_enable_result.stdout | default('')))
 
-- name: "Step 1 - Parse JSON from Run Command output"
+- name: "Step 1 - Wait for WinRM port {{ winrm_port | default(5985) }} to be reachable"
+  ansible.builtin.wait_for:
+    host: "{{ target_vm_host }}"
+    port: "{{ winrm_port | default(5985) }}"
+    delay: 10
+    timeout: 120
+    state: started
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - az_winrm_enable_result is defined
+    - az_winrm_enable_result.rc | default(0) | int == 0
+
+# ------------------------------------------------------------------------------
+# Step 2: Test WinRM credentials + read VM state as DOMAIN\SE-Admin
+# Combines credential test and state probe in a single WinRM call.
+# Fails fast if the Delinea password is wrong or SE-Admin lacks local admin rights.
+# ------------------------------------------------------------------------------
+
+- name: "Step 2 - Test WinRM + read VM state (DOMAIN\\SE-Admin)"
+  ansible.windows.win_shell: |
+    $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
+            -Property Name, Domain, PartOfDomain, Workgroup
+    $domainName = if ($cs.PartOfDomain) {
+      try   { [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().Name }
+      catch { $cs.Domain }
+    } else { $null }
+    @{
+      hostname       = $cs.Name
+      domain         = if ($domainName) { $domainName } else { 'WORKGROUP' }
+      part_of_domain = [bool]$cs.PartOfDomain
+      workgroup_name = if ($cs.Workgroup) { $cs.Workgroup } else { 'WORKGROUP' }
+    } | ConvertTo-Json -Compress
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: "{{ _domain_netbios }}\\{{ resolved_se_admin_username }}"
+    ansible_password: "{{ resolved_se_admin_password }}"
+  register: winrm_probe_result
+  retries: 3
+  delay: 15
+  until: winrm_probe_result is succeeded
+  failed_when: false
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+
+- name: "Step 2 - Fail if WinRM credential test failed"
+  ansible.builtin.fail:
+    msg: |
+      WinRM credential test FAILED for {{ target_vm_name }} ({{ target_vm_host }}).
+      User    : {{ _domain_netbios }}\{{ resolved_se_admin_username }}
+      Port    : {{ winrm_port | default(5985) }}
+      Error   : {{ winrm_probe_result.msg | default(winrm_probe_result.stderr | default('unknown error')) }}
+      ---
+      Possible causes:
+        - WinRM enable (Step 1) failed silently
+        - SE-Admin is not in the local Administrators group on this VM
+        - Delinea password is stale — check resolve_delinea_secret_id.py output
+        - Network path to {{ target_vm_host }}:{{ winrm_port | default(5985) }} is blocked
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_probe_result is defined
+    - winrm_probe_result is failed
+
+- name: "Step 2 - Parse VM state JSON from WinRM probe"
   ansible.builtin.set_fact:
-    _preflight_data: "{{ az_preflight_result.stdout | trim | regex_search('\\{.*\\}') | from_json }}"
+    _preflight_data: "{{ winrm_probe_result.stdout | trim | from_json }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
+    - winrm_probe_result is defined
+    - winrm_probe_result is succeeded
+    - winrm_probe_result.stdout | default('') | trim | length > 0
 
-- name: "Step 1 - Set current_hostname_info and current_domain_status from Azure facts"
+- name: "Step 2 - Set current_hostname_info and current_domain_status"
   ansible.builtin.set_fact:
     actual_vm_hostname: "{{ _preflight_data.hostname }}"
     current_hostname_info:
@@ -154,24 +265,25 @@
       domain: "{{ _preflight_data.domain }}"
       part_of_domain: "{{ _preflight_data.part_of_domain }}"
       workgroup_name: "{{ _preflight_data.workgroup_name | default('WORKGROUP') }}"
-    formatted_local_admin_username: ".\\{{ local_admin_username | default('Administrator') }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
     - _preflight_data is defined
 
-- name: "Step 1 - Display VM state read from Azure"
+- name: "Step 2 - Display VM state (WinRM credential test PASSED)"
   ansible.builtin.debug:
     msg: |
       +-------------------------------------------------------------+
-      |  VM STATE (read via Azure Run Command as SYSTEM)
+      |  WinRM CREDENTIAL TEST : PASSED
+      |  VM STATE ({{ _domain_netbios }}\{{ resolved_se_admin_username }})
       |   Azure resource : {{ target_vm_name }}
       |   OS hostname    : {{ actual_vm_hostname | default('unknown') }}
       |   Domain         : {{ current_domain_status.domain | default('unknown') }}
       |   Part of domain : {{ current_domain_status.part_of_domain | default('unknown') }}
       |   Connect IP     : {{ target_vm_host }}
-      |   Disjoin needed : {{ current_domain_status.part_of_domain | default(false) | bool }}
       +-------------------------------------------------------------+
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
+    - winrm_probe_result is defined
+    - winrm_probe_result is succeeded
