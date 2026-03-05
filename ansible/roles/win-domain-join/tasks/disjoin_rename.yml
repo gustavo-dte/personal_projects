@@ -69,6 +69,76 @@
       +=============================================================+
 
 # ==============================================================================
+# Pre-Step 2: WinRM connectivity and credentials test
+# ==============================================================================
+
+- name: "[DEBUG] Pre-Step 2 - Test WinRM connectivity and credentials"
+  ansible.builtin.debug:
+    msg: |
+      +-------------------------------------------------------------+
+      |  PRE-STEP 2 - WINRM CONNECTIVITY TEST
+      |   Testing WinRM connection before disjoin operation
+      |   Target IP    : {{ target_vm_host }}
+      |   WinRM Port   : {{ winrm_port }}
+      |   Username     : .\{{ resolved_winrm_username }}
+      |   Password len : {{ resolved_winrm_value | string | length }} chars
+      +-------------------------------------------------------------+
+  when: not (dry_run | default(false) | bool)
+
+- name: "Pre-Step 2 - Test WinRM with ipconfig (SE-Admin)"
+  ansible.windows.win_shell: |
+    ipconfig /all
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_user: ".\\{{ resolved_winrm_username }}"
+    ansible_password: "{{ resolved_winrm_value }}"
+    ansible_winrm_server_cert_validation: ignore
+  register: winrm_test_result
+  failed_when: false
+  changed_when: false
+  no_log: false
+  when:
+    - not (dry_run | default(false) | bool)
+
+- name: "Pre-Step 2 - Display WinRM test result"
+  ansible.builtin.debug:
+    msg: |
+      WinRM connectivity test for {{ target_vm_name }}:
+        Status : {{ 'SUCCESS ✓' if winrm_test_result.rc | default(1) == 0 else 'FAILED ✗' }}
+        RC     : {{ winrm_test_result.rc | default('N/A') }}
+        {% if winrm_test_result.rc | default(1) == 0 %}
+        Output (first 500 chars):
+        {{ winrm_test_result.stdout | default('') | truncate(500) }}
+        {% else %}
+        Error  : {{ winrm_test_result.msg | default('Unknown error') }}
+        {% endif %}
+  when:
+    - not (dry_run | default(false) | bool)
+    - winrm_test_result is defined
+    - not (winrm_test_result.skipped | default(false) | bool)
+
+- name: "Pre-Step 2 - Warning if WinRM test failed"
+  ansible.builtin.debug:
+    msg: |
+      ⚠️  WARNING: WinRM connectivity test FAILED
+      This may indicate:
+        - SE-Admin credentials are incorrect
+        - WinRM is not accessible on {{ target_vm_host }}:{{ winrm_port }}
+        - Account '.\{{ resolved_winrm_username }}' doesn't have WinRM access
+      
+      Proceeding with disjoin using Azure Run Command (does not require WinRM).
+      However, post-disjoin verification may fail.
+  when:
+    - not (dry_run | default(false) | bool)
+    - winrm_test_result is defined
+    - not (winrm_test_result.skipped | default(false) | bool)
+    - winrm_test_result.rc | default(1) != 0
+
+# ==============================================================================
 # Step 2: Disjoin from domain via Azure Run Command
 # Uses -LocalCredential (SE-Admin) — does NOT require AD delegation rights.
 # Leaves the stale AD computer object in place; the join step reuses it.
