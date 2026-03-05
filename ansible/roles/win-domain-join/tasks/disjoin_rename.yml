@@ -83,7 +83,9 @@
       |   Username     : .\{{ resolved_winrm_username }}
       |   Password len : {{ resolved_winrm_value | string | length }} chars
       +-------------------------------------------------------------+
-  when: not (dry_run | default(false) | bool)
+  when:
+    - not (dry_run | default(false) | bool)
+    - current_domain_status.part_of_domain | default(false) | bool
 
 - name: "Pre-Step 2 - Test WinRM with ipconfig (SE-Admin)"
   ansible.windows.win_shell: |
@@ -103,6 +105,7 @@
   no_log: false
   when:
     - not (dry_run | default(false) | bool)
+    - current_domain_status.part_of_domain | default(false) | bool
 
 - name: "Pre-Step 2 - Display WinRM test result"
   ansible.builtin.debug:
