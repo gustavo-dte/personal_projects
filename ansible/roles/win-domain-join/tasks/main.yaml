@@ -22,17 +22,33 @@
         - item.vm_ip is defined
         - item.vm_ip | length > 0
 
-    - name: Get VM private IP from Azure CLI (uses target_vm_name as Azure resource name)
+    - name: Get VM private IP from Azure CLI (az vm show --show-details, falls back to NIC list)
       ansible.builtin.shell: |
+        # Primary: az vm show --show-details (works even when az vm nic list returns empty)
+        IP=$(az vm show \
+          --resource-group "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}" \
+          --name "{{ item.target_vm_name }}" \
+          --subscription "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}" \
+          --show-details \
+          --query "privateIps" -o tsv 2>/dev/null | tr ',' '\n' | head -1 | tr -d '[:space:]')
+
+        if [ -n "$IP" ]; then
+          echo "$IP"
+          exit 0
+        fi
+
+        # Fallback: NIC list -> NIC show
         NIC_ID=$(az vm nic list \
           --resource-group "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}" \
           --vm-name "{{ item.target_vm_name }}" \
           --subscription "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}" \
           --query "[0].id" -o tsv 2>/dev/null)
+
         if [ -z "$NIC_ID" ]; then
           echo ""
           exit 0
         fi
+
         az network nic show \
           --ids "$NIC_ID" \
           --subscription "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}" \
@@ -60,12 +76,30 @@
         - item.stdout is defined
         - item.stdout | trim | length > 0
 
+    - name: Debug IP resolution results
+      ansible.builtin.debug:
+        msg: |
+          VM: {{ item.item.name }} ({{ item.item.target_vm_name }})
+          IP resolved: {{ item.stdout | default('') | trim | length > 0 }}
+          IP value: {{ item.stdout | default('(empty)') | trim }}
+      loop: "{{ vm_private_ip_result.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name | default('unknown') }}"
+      when:
+        - not (item.skipped | default(false) | bool)
+
     - name: Fail if private IP could not be resolved for any VM
       ansible.builtin.fail:
-        msg: >
+        msg: |
           Could not resolve private IP for VM '{{ item.item.name }}'
-          (Azure resource: '{{ item.item.target_vm_name }}').
-          Verify target_vm_name matches the Azure resource name exactly.
+          (Azure resource: '{{ item.item.target_vm_name }}',
+           RG: '{{ item.item.vm_resource_group | default(manifest_data.target_resource_group) }}',
+           Sub: '{{ item.item.vm_subscription_id | default(manifest_data.target_subscription_id) }}').
+          Both az vm show --show-details and az vm nic list returned empty.
+          Verify:
+            - target_vm_name matches the Azure resource name exactly
+            - The managed identity has Reader or VM Contributor on this VM
+            - The VM exists in the expected resource group and subscription
       loop: "{{ vm_private_ip_result.results | default([]) }}"
       loop_control:
         label: "{{ item.item.name | default('unknown') }}"
@@ -137,16 +171,15 @@
       loop_control:
         label: "{{ item.name }}"
       vars:
-        target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host: "{{ vm_ip_map.get(item.name, item.delinea_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        se_admin_username: "{{ item.vm_se_admin_username if (item.vm_se_admin_username is defined and item.vm_se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
-        se_admin_password: "{{ (vm_se_admin_passwords | default({}))[item.name] | default('') if ((vm_se_admin_passwords | default({}))[item.name] | default('') | string | length > 0) else (se_admin_password | default('')) }}"
-        delinea_hostname: "{{ item.delinea_hostname | default('') }}"
-        skip_rename: true
+        target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
+        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        skip_rename:          true
         azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
+        azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
         azure_subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
       register: disjoin_results
-      no_log: true
 
     - name: Display disjoin summary
       ansible.builtin.debug:
@@ -190,17 +223,15 @@
       loop_control:
         label: "{{ item.name }}"
       vars:
-        target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:          "{{ vm_ip_map.get(item.name, item.delinea_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        se_admin_username:     "{{ item.vm_se_admin_username if (item.vm_se_admin_username is defined and item.vm_se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
-        se_admin_password:     "{{ (vm_se_admin_passwords | default({}))[item.name] | default('') if ((vm_se_admin_passwords | default({}))[item.name] | default('') | string | length > 0) else (se_admin_password | default('')) }}"
-        delinea_hostname: "{{ item.delinea_hostname | default('') }}"
-        skip_rename:             false
-        azure_resource_group:    "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
-        azure_vm_name:           "{{ item.target_vm_name | default(item.name) }}"
-        azure_subscription_id:   "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
+        target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
+        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        skip_rename:          false
+        azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
+        azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
+        azure_subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
       register: disjoin_and_rename_results
-      no_log: true
 
     - name: Display disjoin-and-rename summary
       ansible.builtin.debug:
@@ -258,18 +289,16 @@
       loop_control:
         label: "{{ item.name }}"
       vars:
-        target_vm_name:          "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:          "{{ vm_ip_map.get(item.name, item.delinea_hostname | default(item.vm_ansible_host | default(item.name))) }}"
-        se_admin_username:     "{{ item.vm_se_admin_username if (item.vm_se_admin_username is defined and item.vm_se_admin_username | string | length > 0) else (se_admin_username | default('SE-Admin')) }}"
-        se_admin_password:     "{{ (vm_se_admin_passwords | default({}))[item.name] | default('') if ((vm_se_admin_passwords | default({}))[item.name] | default('') | string | length > 0) else (se_admin_password | default('')) }}"
-        delinea_hostname: "{{ item.delinea_hostname | default('') }}"
-        azure_resource_group:    "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
-        azure_vm_name:           "{{ item.target_vm_name | default(item.name) }}"
-        azure_subscription_id:   "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
-        skip_rename:             "{{ not (force_rejoin | default(false) | bool) }}"
+        target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
+        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
+        azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
+        azure_subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
+        skip_rename:          "{{ not (force_rejoin | default(false) | bool) }}"
       ignore_errors: true
       register: domain_join_results
-      no_log: true
 
     - name: Display domain join summary
       ansible.builtin.debug:
