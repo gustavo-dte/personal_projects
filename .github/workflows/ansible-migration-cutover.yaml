@@ -96,11 +96,14 @@ jobs:
           python3 -c "import sys; print('Python executable:', sys.executable); print('Python path:', sys.path)"
           echo ""
           echo "=== Installing Python dependencies from requirements.txt ==="
-          # Use python3 explicitly to match Ansible's interpreter
-          python3 -m pip install --user -r requirements.txt
+          # Install to system Python (not --user) to ensure /usr/bin/python3 can access them
+          python3 -m pip install -r requirements.txt
           echo ""
           echo "=== Verifying installation location ==="
-          python3 -c "import sys; import site; print('User base:', site.USER_BASE); print('User site-packages:', site.USER_SITE)"
+          python3 -c "import sys, site; print('Site packages:', site.getsitepackages())"
+          echo ""
+          echo "=== Verifying Azure packages are importable ==="
+          python3 -c "import azure.mgmt.subscription; print('Azure SDK imported successfully')" || echo "Failed to import azure.mgmt.subscription"
           echo ""
           echo "=== Installed Azure CLI and SDK versions ==="
           az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
