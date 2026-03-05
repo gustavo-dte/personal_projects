@@ -4,19 +4,15 @@
 # Per-VM orchestrator: disjoin from domain, rename, reboot.
 #
 # Steps:
-#   Step 1 - prepare_winrm : Azure Run Command reads hostname + domain status (no WinRM creds)
-#   Pre-Step 2 - WinRM Test: Test WinRM connectivity with ipconfig (validates credentials)
-#   Step 2 - Disjoin       : WinRM direct Remove-Computer (no reboot needed)
-#   Step 3 - Rename        : WinRM direct Rename-Computer (.\Administrator)
-#                            -> az vm restart -> wait_for WinRM -> WinRM verify
+#   Step 1 - prepare_winrm : Azure Run Command reads hostname + domain status
+#   Step 2 - Disjoin       : Azure Run Command Remove-Computer with -LocalCredential
+#   Step 3 - Rename        : Azure Run Command Rename-Computer
+#                            -> az vm restart
 #
 # Credential design:
-#   WinRM Test: Connects via WinRM using .\SE-Admin (Delinea password) to verify connectivity
-#   Disjoin   : WinRM Remove-Computer using authenticated WinRM session with SE-Admin
-#             The authenticated user can disjoin without needing AD delegation rights.
-#             The stale computer object stays in AD; the join step reuses/overwrites it.
-#   Rename  : WinRM .\Administrator with SE-Admin password (from Delinea)
-#   Verify  : WinRM .\Administrator (SE-Admin password from Delinea)
+#   All operations use Azure Run Command (SYSTEM context)
+#   Disjoin uses -LocalCredential (SE-Admin from Delinea)
+#   The stale computer object stays in AD; the join step reuses/overwrites it.
 #
 # Required vars (set per-VM by main.yaml loop):
 #   target_vm_name        Azure resource name AND target OS hostname
@@ -190,8 +186,6 @@
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
-    - winrm_test_result is defined
-    - winrm_test_result.rc | default(1) == 0
 - name: "Step 2 - Fail if disjoin failed"
   ansible.builtin.fail:
     msg: |
@@ -326,11 +320,9 @@
         msg: |
           +-------------------------------------------------------------+
           |  Step 3 - RENAME
-          |   Rename method  : WinRM Direct (.\{{ rename_winrm_username | default('Administrator') }})
-          |   Verify method  : WinRM .\{{ rename_winrm_username | default('Administrator') }}
+          |   Method         : Azure Run Command (SYSTEM context)
           |   Connect IP     : {{ target_vm_host }}
-          |   WinRM port     : {{ winrm_port }}
-          |   ansible_user   : .\{{ rename_winrm_username | default('Administrator') }}
+          |   Azure VM       : {{ target_vm_name }}
           |   Password src   : Delinea / {{ item.vm_winrm_connect_hostname | default(item.name) }}
           |   Password len   : {{ resolved_winrm_value | string | length }} chars
           +-------------------------------------------------------------+
@@ -382,13 +374,9 @@
         - az_rename_result is defined
         - not (az_rename_result.skipped | default(false) | bool)
         - "'RENAME_OK' in (az_rename_result.stdout | default(''))"
-    - name: "Step 3 - Wait for WinRM after rename reboot"
-      ansible.builtin.wait_for:
-        port: "{{ winrm_port }}"
-        host: "{{ target_vm_host }}"
-        delay: "{{ post_rename_reboot_settle_seconds | default(60) | int }}"
-        timeout: 900
-        state: started
+    - name: "Step 3 - Wait 90 seconds for VM to stabilize after rename reboot"
+      ansible.builtin.pause:
+        seconds: 90
       when:
         - not (dry_run | default(false) | bool)
         - az_rename_restart_result is defined
