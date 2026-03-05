@@ -5,16 +5,19 @@
 #
 # Steps:
 #   Step 1 - prepare_winrm : Azure Run Command reads hostname + domain status (no WinRM creds)
-#   Step 2 - Disjoin       : Azure Run Command Remove-Computer -LocalCredential (SE-Admin)
+#   Pre-Step 2 - WinRM Test: Test WinRM connectivity with ipconfig (validates credentials)
+#   Step 2 - Disjoin       : WinRM direct Remove-Computer (if WinRM works)
+#                            OR Azure Run Command Remove-Computer -LocalCredential (if WinRM fails)
 #                            -> az vm restart -> wait_for WinRM
 #   Step 3 - Re-probe      : Azure Run Command re-reads hostname post-reboot
 #   Step 4 - Rename        : Azure Run Command Rename-Computer (SYSTEM)
 #                            -> az vm restart -> wait_for WinRM -> WinRM verify
 #
 # Credential design:
-#   Disjoin : -LocalCredential .\SE-Admin (Delinea password)
-#             -LocalCredential authenticates the local Remove-Computer call.
-#             It does NOT attempt to contact AD, so no AD delegation rights needed.
+#   WinRM Test: Connects via WinRM using .\SE-Admin (Delinea password) to verify connectivity
+#   Disjoin   : PRIMARY - WinRM Remove-Computer using authenticated WinRM session (faster)
+#               FALLBACK - Azure Run Command with -LocalCredential .\SE-Admin (if WinRM unavailable)
+#             The authenticated user can disjoin without needing AD delegation rights.
 #             The stale computer object stays in AD; the join step reuses/overwrites it.
 #   Rename  : SYSTEM via Azure Run Command (no creds needed)
 #   Verify  : WinRM .\Administrator (SE-Admin password from Delinea)
@@ -99,10 +102,15 @@
     ansible_user: ".\\{{ resolved_winrm_username }}"
     ansible_password: "{{ resolved_winrm_value }}"
     ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 30
+    ansible_winrm_operation_timeout_sec: 20
+    ansible_winrm_read_timeout_sec: 25
   register: winrm_test_result
   failed_when: false
   changed_when: false
   no_log: false
+  async: 45
+  poll: 5
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
@@ -171,7 +179,52 @@
     - not (dry_run | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2 - Disjoin via Azure Run Command (-LocalCredential SE-Admin)"
+- name: "Step 2 - Disjoin via WinRM (direct ansible connection)"
+  ansible.windows.win_powershell:
+    script: |
+      $ErrorActionPreference = "Stop"
+      
+      # Check if already in workgroup
+      $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
+      if (-not $cs.PartOfDomain) {
+        Write-Host "ALREADY_WORKGROUP"
+        return @{ Status = "ALREADY_WORKGROUP"; Changed = $false }
+      }
+      
+      try {
+        # Use current credentials (already authenticated via WinRM)
+        # -Force doesn't require explicit credentials when run as authenticated user
+        Remove-Computer -WorkgroupName "WORKGROUP" -Force -ErrorAction Stop
+        Write-Host "DISJOIN_OK"
+        return @{ Status = "DISJOIN_OK"; Changed = $true }
+      }
+      catch {
+        Write-Host "DISJOIN_FAILED:$($_.Exception.Message)"
+        throw $_
+      }
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ winrm_transport }}"
+    ansible_winrm_port: "{{ winrm_port }}"
+    ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+    ansible_user: ".\\{{ resolved_winrm_username }}"
+    ansible_password: "{{ resolved_winrm_value }}"
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 30
+    ansible_winrm_operation_timeout_sec: 300
+    ansible_winrm_read_timeout_sec: 310
+  register: az_disjoin_result
+  failed_when: false
+  changed_when: az_disjoin_result.output is defined and 'DISJOIN_OK' in (az_disjoin_result.output | default([]) | join(''))
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - current_domain_status.part_of_domain | default(false) | bool
+    - winrm_test_result is defined
+    - winrm_test_result.rc | default(1) == 0
+
+- name: "Step 2 - Fallback: Disjoin via Azure Run Command (if WinRM unavailable)"
   ansible.builtin.shell: |
     az vm run-command invoke \
       --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
@@ -207,13 +260,24 @@
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
+    - winrm_test_result is not defined or winrm_test_result.rc | default(1) != 0
 
-- name: "Step 2 - Debug: disjoin Run Command output"
+- name: "Step 2 - Debug: disjoin output"
   ansible.builtin.debug:
     msg: |
-      Disjoin Run Command output for {{ target_vm_name }}:
-        rc     : {{ az_disjoin_result.rc | default('N/A') }}
-        output : {{ az_disjoin_result.stdout | default('(empty)') | trim }}
+      Disjoin output for {{ target_vm_name }}:
+        Method  : {{ 'WinRM Direct' if (az_disjoin_result.output is defined) else 'Azure Run Command' }}
+        {% if az_disjoin_result.output is defined %}
+        Failed  : {{ az_disjoin_result.failed | default(false) }}
+        Changed : {{ az_disjoin_result.changed | default(false) }}
+        Output  : {{ az_disjoin_result.output | default([]) | join('') | trim }}
+        {% if az_disjoin_result.error is defined and az_disjoin_result.error | length > 0 %}
+        Error   : {{ az_disjoin_result.error | join('; ') }}
+        {% endif %}
+        {% else %}
+        RC      : {{ az_disjoin_result.rc | default('N/A') }}
+        Output  : {{ az_disjoin_result.stdout | default('(empty)') | trim }}
+        {% endif %}
   when:
     - not (dry_run | default(false) | bool)
     - az_disjoin_result is defined
@@ -223,8 +287,14 @@
   ansible.builtin.fail:
     msg: |
       Disjoin failed for {{ item.name }} ({{ target_vm_name }}).
+      Method : {{ 'WinRM Direct' if (az_disjoin_result.output is defined) else 'Azure Run Command' }}
+      {% if az_disjoin_result.output is defined %}
+      Output : {{ az_disjoin_result.output | default([]) | join('') | trim }}
+      Error  : {{ az_disjoin_result.error | default([]) | join('; ') }}
+      {% else %}
       Output : {{ az_disjoin_result.stdout | default('') | trim }}
-      stderr : {{ az_disjoin_result.stderr | default('') | truncate(300) }}
+      Stderr : {{ az_disjoin_result.stderr | default('') | truncate(300) }}
+      {% endif %}
       ---
       If 'Access is denied': SE-Admin is not in the local Administrators group.
       Fix on the VM: net localgroup Administrators {{ _domain_netbios }}\{{ resolved_winrm_username }} /add
@@ -234,8 +304,9 @@
     - az_disjoin_result is defined
     - not (az_disjoin_result.skipped | default(false) | bool)
     - >-
-        (az_disjoin_result.rc | default(0) | int != 0)
-        or ('DISJOIN_FAILED:' in (az_disjoin_result.stdout | default('')))
+        (az_disjoin_result.failed | default(false) | bool)
+        or (az_disjoin_result.rc | default(0) | int != 0 and az_disjoin_result.stdout is defined)
+        or ('DISJOIN_FAILED:' in (az_disjoin_result.output | default([]) | join('') if az_disjoin_result.output is defined else az_disjoin_result.stdout | default('')))
 
 - name: "Step 2 - Restart VM via Azure CLI after disjoin"
   ansible.builtin.shell: >-
@@ -251,8 +322,10 @@
     - not (dry_run | default(false) | bool)
     - az_disjoin_result is defined
     - not (az_disjoin_result.skipped | default(false) | bool)
-    - az_disjoin_result.rc | default(0) | int == 0
-    - "'DISJOIN_FAILED:' not in (az_disjoin_result.stdout | default(''))"
+    - not (az_disjoin_result.failed | default(false) | bool)
+    - >-
+        (az_disjoin_result.output is defined and 'DISJOIN_FAILED:' not in (az_disjoin_result.output | default([]) | join('')))
+        or (az_disjoin_result.stdout is defined and 'DISJOIN_FAILED:' not in (az_disjoin_result.stdout | default('')) and az_disjoin_result.rc | default(0) | int == 0)
 
 - name: "Step 2 - Wait for WinRM after disjoin reboot"
   ansible.builtin.wait_for:
