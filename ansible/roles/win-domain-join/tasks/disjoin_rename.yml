@@ -70,10 +70,11 @@
     msg: |
       +-------------------------------------------------------------+
       |  STEP 2 - DISJOIN
-      |   Method      : Azure Run Command (SYSTEM - no WinRM creds)
+      |   Method      : Azure Run Command + SE-Admin domain creds
       |   Azure VM    : {{ target_vm_name }}
       |   RG          : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
-      |   Subscription: {{ azure_subscription_id | default(manifest_data.target_subscription_id) }}
+      |   Disjoin user: {{ _domain_netbios }}\{{ resolved_winrm_username }}
+      |   Password len: {{ resolved_winrm_value | string | length }} chars
       +-------------------------------------------------------------+
   when: not (dry_run | default(false) | bool)
 
@@ -84,14 +85,18 @@
     - not (dry_run | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2 - Disjoin from domain via Azure Run Command"
+- name: "Step 2 - Disjoin from domain via Azure Run Command (SE-Admin domain creds)"
   ansible.builtin.shell: |
     az vm run-command invoke \
       --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
       --name "{{ azure_vm_name | default(target_vm_name) }}" \
       --command-id RunPowerShellScript \
       --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+      --parameters \
+        "DomainUser={{ _domain_netbios }}\{{ resolved_winrm_username }}" \
+        "DomainPass={{ resolved_winrm_value }}" \
       --scripts '
+        param($DomainUser, $DomainPass)
         $ErrorActionPreference = "Stop"
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
         if (-not $cs.PartOfDomain) {
@@ -99,7 +104,9 @@
           exit 0
         }
         try {
-          Remove-Computer -WorkgroupName "WORKGROUP" -Force -ErrorAction Stop
+          $secPass = ConvertTo-SecureString $DomainPass -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential($DomainUser, $secPass)
+          Remove-Computer -WorkgroupName "WORKGROUP" -UnjoinDomainCredential $cred -Force -ErrorAction Stop
           Write-Output "DISJOIN_OK"
         }
         catch {
@@ -112,6 +119,7 @@
   register: az_disjoin_result
   failed_when: false
   changed_when: false
+  no_log: true
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool

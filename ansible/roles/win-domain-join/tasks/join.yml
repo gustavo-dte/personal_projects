@@ -96,14 +96,18 @@
           |    RG          : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
           +-------------------------------------------------------------+
 
-    - name: "Step 2 - Disjoin via Azure Run Command"
+    - name: "Step 2 - Disjoin via Azure Run Command (SE-Admin domain creds)"
       ansible.builtin.shell: |
         az vm run-command invoke \
           --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
           --name "{{ target_vm_name }}" \
           --command-id RunPowerShellScript \
           --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+          --parameters \
+            "DomainUser={{ _domain_netbios }}\{{ resolved_winrm_username }}" \
+            "DomainPass={{ resolved_winrm_value }}" \
           --scripts '
+            param($DomainUser, $DomainPass)
             $ErrorActionPreference = "Stop"
             $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
             if (-not $cs.PartOfDomain) {
@@ -111,7 +115,9 @@
               exit 0
             }
             try {
-              Remove-Computer -WorkgroupName "WORKGROUP" -Force -ErrorAction Stop
+              $secPass = ConvertTo-SecureString $DomainPass -AsPlainText -Force
+              $cred = New-Object System.Management.Automation.PSCredential($DomainUser, $secPass)
+              Remove-Computer -WorkgroupName "WORKGROUP" -UnjoinDomainCredential $cred -Force -ErrorAction Stop
               Write-Output "DISJOIN_OK"
             }
             catch {
@@ -123,6 +129,7 @@
       delegate_to: localhost
       register: _disjoin_result
       failed_when: false
+      no_log: true
 
     - name: "Step 2 - Debug disjoin output"
       ansible.builtin.debug:
