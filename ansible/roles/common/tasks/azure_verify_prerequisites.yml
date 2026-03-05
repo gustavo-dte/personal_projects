@@ -106,13 +106,21 @@
 
 - name: Verify Azure Migrate project resource group exists (optional)
   block:
-    - name: Check if Azure Migrate project resource group exists
-      azure.azcollection.azure_rm_resourcegroup_info:
-        name: "{{ azure_migrate_project_resource_group }}"
-        subscription_id: "{{ azure_migrate_subscription_id | default(omit) }}"
-      register: migrate_rg_info
+    - name: Check if Azure Migrate project resource group exists (using Azure CLI)
+      ansible.builtin.command:
+        cmd: az group show --name "{{ azure_migrate_project_resource_group }}" --subscription "{{ azure_migrate_subscription_id | default(omit) }}" --output json
+      register: migrate_rg_info_raw
+      changed_when: false
       when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
       no_log: true
+
+    - name: Parse Azure Migrate project resource group info
+      ansible.builtin.set_fact:
+        migrate_rg_info:
+          resourcegroups:
+            - name: "{{ (migrate_rg_info_raw.stdout | from_json).name }}"
+              location: "{{ (migrate_rg_info_raw.stdout | from_json).location }}"
+      when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
 
     - name: Mock Azure Migrate project RG verification for dry run
       ansible.builtin.set_fact:
