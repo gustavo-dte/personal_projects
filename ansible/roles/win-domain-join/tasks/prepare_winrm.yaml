@@ -143,29 +143,27 @@
     - not (skip_hostname_setup | default(false) | bool)
     - az_preflight_result.stdout is not defined or az_preflight_result.stdout | trim | length == 0
 
-- name: "Step 1 - Extract JSON block from Run Command output"
+- name: "Step 1 - Parse JSON from Run Command output"
   ansible.builtin.set_fact:
-    _preflight_json: "{{ az_preflight_result.stdout | trim | regex_search('\\{[^}]+\\}') }}"
+    _preflight_data: "{{ az_preflight_result.stdout | trim | regex_search('\\{.*\\}') | from_json }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
 
 - name: "Step 1 - Set current_hostname_info and current_domain_status from Azure facts"
   ansible.builtin.set_fact:
-    actual_vm_hostname: "{{ (_preflight_json | from_json).hostname }}"
+    actual_vm_hostname: "{{ _preflight_data.hostname }}"
     current_hostname_info:
-      old_name: "{{ (_preflight_json | from_json).hostname }}"
+      old_name: "{{ _preflight_data.hostname }}"
     current_domain_status:
-      domain: "{{ (_preflight_json | from_json).domain }}"
-      part_of_domain: "{{ (_preflight_json | from_json).part_of_domain }}"
-      workgroup_name: "{{ (_preflight_json | from_json).workgroup_name | default('WORKGROUP') }}"
-    # Post-disjoin WinRM uses .\Administrator with SE-Admin password from Delinea
+      domain: "{{ _preflight_data.domain }}"
+      part_of_domain: "{{ _preflight_data.part_of_domain }}"
+      workgroup_name: "{{ _preflight_data.workgroup_name | default('WORKGROUP') }}"
     formatted_winrm_username: ".\\{{ rename_winrm_username | default('Administrator') }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - _preflight_json is defined
-    - _preflight_json | length > 0
+    - _preflight_data is defined
 
 - name: "Step 1 - Display VM state read from Azure"
   ansible.builtin.debug:
