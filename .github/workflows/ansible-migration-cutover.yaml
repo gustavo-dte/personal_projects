@@ -88,6 +88,25 @@ jobs:
           allow-no-subscriptions: true
           enable-AzPSSession: true
 
+      - name: Install Python dependencies (includes Azure CLI and SDK)
+        run: |
+          echo "=== Installing Python dependencies from requirements.txt ==="
+          pip install -r requirements.txt
+          echo ""
+          echo "=== Installed Azure CLI and SDK versions ==="
+          az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
+          pip list | grep -E "azure-"
+        shell: bash
+
+      - name: Install Ansible collections from requirements.yml
+        run: |
+          echo "=== Installing/Upgrading Ansible collections ==="
+          ansible-galaxy collection install -r ansible/requirements.yml --upgrade
+          echo ""
+          echo "=== Installed Azure collection version ==="
+          ansible-galaxy collection list | grep azure.azcollection || echo "Azure collection not found"
+        shell: bash
+
       # ── STEP 1: Intelligent Migration Status Detection ────────────────────
 
       - name: Check migration status and determine action
