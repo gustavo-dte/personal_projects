@@ -3,13 +3,19 @@
 # ====================
 # Responsibilities:
 #   1. Resolves SE-Admin credentials (Delinea password fetched ONCE at pipeline
-#      start by resolve_delinea_secret_id.py — never re-fetched here)
-#   2. Enables WinRM on the target VM via az vm run-command invoke (SYSTEM, no creds)
+#      start by resolve_delinea_secret_id.py - never re-fetched here)
+#   2. Checks if WinRM port is already reachable; if not, enables it via
+#      az vm extension set (CustomScriptExtension - async, non-blocking,
+#      never corrupts the VM on failure unlike run-command invoke)
 #   3. Tests WinRM connectivity and reads VM state (hostname + domain) as
 #      DOMAIN\SE-Admin using the Delinea password
 #
+# NO az vm run-command invoke is used anywhere in this file.
+# run-command invoke is synchronous and can hang or corrupt the VM on failure.
+#
 # Credential flow (single Delinea fetch, reused for the full pipeline):
-#   Step 1  Enable WinRM   : az vm run-command invoke (SYSTEM)          — no creds
+#   Step 1a WinRM probe    : wait_for port 5985 (no creds)
+#   Step 1b Enable WinRM   : az vm extension set CustomScriptExtension (async, only if port closed)
 #   Step 2  Test + probe   : WinRM DOMAIN\SE-Admin  + Delinea password
 #   Step 3  Disjoin        : WinRM DOMAIN\SE-Admin  + Delinea password  (disjoin_rename.yml)
 #   Step 4  Rename         : WinRM .\Administrator  + Delinea password  (disjoin_rename.yml)
@@ -18,9 +24,6 @@
 
 # ------------------------------------------------------------------------------
 # Credential resolution
-# The password arrives via se_admin_password, written to GITHUB_ENV by
-# resolve_delinea_secret_id.py as winrm_value_<target_vm_name_lower>.
-# main.yaml reads it into vm_se_admin_passwords and passes it here.
 # ------------------------------------------------------------------------------
 
 - name: "Credentials - Resolve SE-Admin for {{ target_vm_name }}"
@@ -61,11 +64,11 @@
       |  CREDENTIAL PLAN: {{ target_vm_name }}
       +=============================================================+
       |  Connect IP      : {{ target_vm_host }}
-      |  Delinea fetch   : ONCE at pipeline start — reused below
+      |  Delinea fetch   : ONCE at pipeline start - reused below
       +-------------------------------------------------------------+
-      |  Step 1 - Enable WinRM
-      |    Method        : az vm run-command invoke (SYSTEM)
-      |    Creds         : none needed
+      |  Step 1 - WinRM port probe
+      |    Method        : wait_for port {{ winrm_port | default(5985) }} (no creds)
+      |    If closed     : az vm extension set CustomScriptExtension (async)
       +-------------------------------------------------------------+
       |  Step 2 - WinRM credential test + VM state probe
       |    Method        : WinRM
@@ -91,7 +94,7 @@
       +=============================================================+
 
 # ------------------------------------------------------------------------------
-# Dry-run / skip_hostname_setup shortcut — skip all live operations
+# Dry-run / skip_hostname_setup shortcut
 # ------------------------------------------------------------------------------
 
 - name: "Set placeholder facts for dry-run or skip_hostname_setup"
@@ -103,110 +106,119 @@
     current_hostname_info:
       old_name: "{{ item.name }}"
     actual_vm_hostname: "{{ item.name }}"
+    _winrm_already_open: false
   when: (dry_run | default(false) | bool) or (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
-# Step 1: Enable WinRM via az vm run-command invoke (SYSTEM — no creds needed)
-# Idempotent: winrm quickconfig -quiet is safe to run multiple times.
-# Opens port 5985, enables NTLM auth, restarts the WinRM service.
+# Step 1a: Probe WinRM port - check if already open (most migrated VMs have WinRM)
+# Timeout is intentionally short (15s) - this is just a quick check.
 # ------------------------------------------------------------------------------
 
-- name: "Step 1 - Enable WinRM via az run-command (SYSTEM)"
-  ansible.builtin.shell: |
-    az vm run-command invoke \
-      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
-      --name "{{ target_vm_name }}" \
-      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
-      --command-id RunPowerShellScript \
-      --scripts '
-        $ErrorActionPreference = "Stop"
-        try {
-          # Step 1: ensure WinRM service is running before touching WSMan provider
-          $svc = Get-Service -Name WinRM -ErrorAction Stop
-          if ($svc.Status -ne "Running") {
-            Start-Service WinRM -ErrorAction Stop
-            Start-Sleep -Seconds 3
-          }
-
-          # Step 2: quickconfig (idempotent, safe to repeat)
-          & cmd /c "winrm quickconfig -quiet -force" 2>&1 | Out-Null
-
-          # Step 3: configure via winrm.cmd (avoids WSMan PS-drive path issues)
-          # winrm.cmd requires quoted values: @{Key="Value"}
-          & cmd /c 'winrm set winrm/config/service @{AllowUnencrypted="true"}' 2>&1 | Out-Null
-          & cmd /c 'winrm set winrm/config/service/auth @{Basic="true"}'        2>&1 | Out-Null
-          & cmd /c 'winrm set winrm/config/service/auth @{NTLM="true"}'         2>&1 | Out-Null
-
-          # Step 4: open firewall port 5985
-          netsh advfirewall firewall add rule `
-            name="WinRM HTTP" `
-            dir=in action=allow `
-            protocol=TCP localport=5985 2>&1 | Out-Null
-
-          # Step 5: restart WinRM to apply
-          Restart-Service WinRM -Force
-          Start-Sleep -Seconds 2
-
-          Write-Output "WINRM_ENABLED"
-        }
-        catch {
-          Write-Output ("WINRM_ENABLE_FAILED:" + $_.Exception.Message)
-          exit 1
-        }
-      ' \
-      --query "value[0].message" -o tsv 2>&1
-  delegate_to: localhost
-  register: az_winrm_enable_result
+- name: "Step 1 - Probe WinRM port {{ winrm_port | default(5985) }}"
+  ansible.builtin.wait_for:
+    host: "{{ target_vm_host }}"
+    port: "{{ winrm_port | default(5985) }}"
+    delay: 0
+    timeout: 15
+    state: started
+  register: winrm_port_probe
   failed_when: false
-  changed_when: false
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
 
-- name: "Step 1 - Debug: WinRM enable output"
+- name: "Step 1 - Set WinRM port status fact"
+  ansible.builtin.set_fact:
+    _winrm_already_open: "{{ winrm_port_probe is succeeded }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+
+- name: "Step 1 - Debug: WinRM port probe result"
   ansible.builtin.debug:
     msg: |
-      WinRM enable result for {{ target_vm_name }}:
-        rc     : {{ az_winrm_enable_result.rc | default('N/A') }}
-        output : {{ az_winrm_enable_result.stdout | default('(empty)') | trim }}
+      WinRM port probe {{ target_vm_name }} ({{ target_vm_host }}:{{ winrm_port | default(5985) }}):
+        Port open : {{ _winrm_already_open | default(false) }}
+        {{ 'WinRM already reachable - skipping enable step' if (_winrm_already_open | default(false) | bool) else 'Port closed - enabling WinRM via az vm extension set' }}
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - az_winrm_enable_result is defined
 
-- name: "Step 1 - Fail if WinRM enable failed"
-  ansible.builtin.fail:
-    msg: |
-      Failed to enable WinRM on {{ target_vm_name }} via az run-command.
-      Output : {{ az_winrm_enable_result.stdout | default('') | trim }}
-      stderr : {{ az_winrm_enable_result.stderr | default('') | truncate(300) }}
-      Ensure the managed identity has the VirtualMachineContributor or
-      RunCommand-level permission on this VM.
+# ------------------------------------------------------------------------------
+# Step 1b: Enable WinRM via az vm extension set (CustomScriptExtension)
+# Only runs if port 5985 was NOT reachable above.
+# az vm extension set delivers the script via the Azure VM Agent - it is async
+# from the VM's perspective and does NOT block or corrupt the VM on failure.
+# ------------------------------------------------------------------------------
+
+- name: "Step 1 - Enable WinRM via az vm extension set (only if port was closed)"
+  ansible.builtin.shell: >-
+    az vm extension set
+    --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
+    --vm-name "{{ target_vm_name }}"
+    --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+    --name CustomScriptExtension
+    --publisher Microsoft.Compute
+    --version 1.10
+    --settings
+    "{\"commandToExecute\":\"powershell -ExecutionPolicy Unrestricted -NoProfile -Command
+    \\\"$svc=Get-Service WinRM;if($svc.Status-ne'Running'){Start-Service WinRM};
+    winrm quickconfig -quiet -force 2>$null;
+    winrm set winrm/config/service '@{AllowUnencrypted=\\\\\\\"true\\\\\\\"}' 2>$null;
+    winrm set winrm/config/service/auth '@{Basic=\\\\\\\"true\\\\\\\"}' 2>$null;
+    winrm set winrm/config/service/auth '@{NTLM=\\\\\\\"true\\\\\\\"}' 2>$null;
+    netsh advfirewall firewall add rule name=WinRM-HTTP dir=in action=allow protocol=TCP localport=5985 2>$null;
+    Restart-Service WinRM -Force\\\"\"}"
+    2>&1
+  delegate_to: localhost
+  register: az_extension_result
+  failed_when: false
+  changed_when: az_extension_result.rc | default(0) | int == 0
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - az_winrm_enable_result is defined
-    - >-
-        (az_winrm_enable_result.rc | default(0) | int != 0)
-        or ('WINRM_ENABLE_FAILED:' in (az_winrm_enable_result.stdout | default('')))
+    - not (_winrm_already_open | default(false) | bool)
+
+- name: "Step 1 - Debug: extension set output"
+  ansible.builtin.debug:
+    msg: |
+      az vm extension set result for {{ target_vm_name }}:
+        rc     : {{ az_extension_result.rc | default('N/A') }}
+        output : {{ az_extension_result.stdout | default('(empty)') | trim | truncate(500) }}
+        stderr : {{ az_extension_result.stderr | default('') | trim | truncate(300) }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - az_extension_result is defined
+    - not (az_extension_result.skipped | default(false) | bool)
+
+- name: "Step 1 - Warn if extension set returned non-zero (will still attempt WinRM)"
+  ansible.builtin.debug:
+    msg: |
+      WARNING: az vm extension set rc={{ az_extension_result.rc | default('N/A') }}.
+      Still attempting WinRM - it may already be partially functional.
+      If WinRM also fails: verify the managed identity has VM Contributor on this VM.
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - az_extension_result is defined
+    - not (az_extension_result.skipped | default(false) | bool)
+    - az_extension_result.rc | default(0) | int != 0
 
 - name: "Step 1 - Wait for WinRM port {{ winrm_port | default(5985) }} to be reachable"
   ansible.builtin.wait_for:
     host: "{{ target_vm_host }}"
     port: "{{ winrm_port | default(5985) }}"
     delay: 10
-    timeout: 120
+    timeout: 180
     state: started
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - az_winrm_enable_result is defined
-    - az_winrm_enable_result.rc | default(0) | int == 0
 
 # ------------------------------------------------------------------------------
 # Step 2: Test WinRM credentials + read VM state as DOMAIN\SE-Admin
 # Combines credential test and state probe in a single WinRM call.
-# Fails fast if the Delinea password is wrong or SE-Admin lacks local admin rights.
 # ------------------------------------------------------------------------------
 
 - name: "Step 2 - Test WinRM + read VM state (DOMAIN\\SE-Admin)"
@@ -253,9 +265,9 @@
       Error   : {{ winrm_probe_result.msg | default(winrm_probe_result.stderr | default('unknown error')) }}
       ---
       Possible causes:
-        - WinRM enable (Step 1) failed silently
         - SE-Admin is not in the local Administrators group on this VM
-        - Delinea password is stale — check resolve_delinea_secret_id.py output
+        - Delinea password is stale - check resolve_delinea_secret_id.py output
+        - WinRM enable (Step 1) did not complete - check extension output above
         - Network path to {{ target_vm_host }}:{{ winrm_port | default(5985) }} is blocked
   when:
     - not (dry_run | default(false) | bool)

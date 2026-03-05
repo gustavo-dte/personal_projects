@@ -4,7 +4,7 @@
 # Per-VM orchestrator: disjoin from domain + rename — all via WinRM.
 #
 # Steps:
-#   Step 1 - prepare_vm_state  : az run-command enables WinRM (SYSTEM),
+#   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
 #                                WinRM credential test + VM state probe (SE-Admin)
 #   Step 2 - Disjoin           : WinRM DOMAIN\SE-Admin
 #                                Remove-Computer -LocalCredential (no AD delegation needed)
@@ -387,7 +387,7 @@
   ansible.builtin.debug:
     msg: |
       [DRY RUN] Would execute for {{ item.name }}:
-        Step 1: az run-command enable WinRM (SYSTEM)
+        Step 1: probe WinRM port; if closed -> az vm extension set (async)
                 WinRM test as {{ _domain_netbios | default('DOMAIN') }}\{{ resolved_se_admin_username | default('SE-Admin') }}
         Step 2: WinRM Remove-Computer -LocalCredential .\{{ resolved_se_admin_username | default('SE-Admin') }}
                 -> az vm restart -> wait WinRM

@@ -4,7 +4,7 @@
 # Per-VM domain join orchestrator — all operations via WinRM.
 #
 # Steps:
-#   Step 1 — prepare_vm_state  : az run-command enables WinRM (SYSTEM),
+#   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
 #                                WinRM credential test + VM state probe (SE-Admin)
 #   Step 2 — Domain join       : WinRM .\Administrator + SE-Admin password
 #                                Add-Computer with cpoe-automation domain creds
@@ -236,7 +236,7 @@
   ansible.builtin.debug:
     msg: |
       [DRY RUN] Would execute for {{ item.name }}:
-        Step 1: az run-command enable WinRM (SYSTEM)
+        Step 1: probe WinRM port; if closed -> az vm extension set (async)
                 WinRM test as {{ _domain_netbios | default('DOMAIN') }}\{{ resolved_se_admin_username | default('SE-Admin') }}
       {% if _needs_join | bool %}
         Step 2: WinRM Add-Computer as .\Administrator
