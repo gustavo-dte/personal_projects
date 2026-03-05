@@ -368,7 +368,7 @@
         - not (hostname_after_reboot.skipped | default(false) | bool)
         - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
 
-    - name: "Step 4 - Set formatted_winrm_username to .\Administrator after rename"
+    - name: 'Step 4 - Set formatted_winrm_username to .\Administrator after rename'
       ansible.builtin.set_fact:
         formatted_winrm_username: ".\\{{ rename_winrm_username | default('Administrator') }}"
       when: not (dry_run | default(false) | bool)
