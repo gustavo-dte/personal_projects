@@ -60,7 +60,7 @@
       +-------------------------------------------------------------+
       |  STEP 2 - Disjoin
       |    Method       : Azure Run Command + SE-Admin domain creds
-      |    ansible_user : {{ _domain_netbios }}\{{ resolved_winrm_username }}
+      |    ansible_user : <current_hostname>.{{ manifest_data.domainNameSetup.domain }}\{{ resolved_winrm_username }}
       |    Password src : Delinea / {{ item.vm_winrm_connect_hostname | default(item.name) }}
       |    Azure VM     : {{ target_vm_name }}
       +-------------------------------------------------------------+
