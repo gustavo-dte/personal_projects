@@ -51,20 +51,18 @@
       +=============================================================+
       |  CREDENTIAL PLAN FOR: {{ target_vm_name }}
       +=============================================================+
+      |  Azure VM       : {{ target_vm_name }}
       |  Connect IP     : {{ target_vm_host }}
-      |  WinRM port     : {{ winrm_port }}  transport: {{ winrm_transport }}
       +-------------------------------------------------------------+
       |  STEP 1 - Hostname/domain probe
       |    Method       : Azure Run Command (SYSTEM - no creds)
-      |    Azure VM     : {{ target_vm_name }}
       +-------------------------------------------------------------+
-      |  STEP 2 - Disjoin
-      |    Method       : Azure Run Command + SE-Admin domain creds
-      |    ansible_user : <current_hostname>.{{ manifest_data.domainNameSetup.domain }}\{{ resolved_winrm_username }}
+      |  STEP 2 - Disjoin (if needed)
+      |    Method       : Azure Run Command with SE-Admin -LocalCredential
+      |    SE-Admin     : .\{{ resolved_winrm_username }}
       |    Password src : Delinea / {{ item.vm_winrm_connect_hostname | default(item.name) }}
-      |    Azure VM     : {{ target_vm_name }}
       +-------------------------------------------------------------+
-      |  STEP 3 - Rename
+      |  STEP 3 - Rename (if needed)
       |    Method       : Azure Run Command (SYSTEM - no creds)
       |    Azure VM     : {{ target_vm_name }}
       +-------------------------------------------------------------+

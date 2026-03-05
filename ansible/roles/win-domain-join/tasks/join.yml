@@ -19,8 +19,8 @@
 # Step 1: Read current VM state via Azure Run Command (no WinRM creds needed)
 # ==============================================================================
 
-- name: "Step 1 - Resolve credentials and read VM state from Azure"
-  ansible.builtin.include_tasks: prepare_winrm.yaml
+- name: "Step 1 - Read VM state from Azure (no credentials needed)"
+  ansible.builtin.include_tasks: prepare_vm_state.yaml
 
 - name: "Step 1 - Compute workflow conditions"
   ansible.builtin.set_fact:
