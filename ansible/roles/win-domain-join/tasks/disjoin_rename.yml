@@ -287,7 +287,7 @@
   ansible.builtin.shell: >-
     az vm restart
     --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
-    --name "{{ item.name }}"
+    --name "{{ azure_vm_name | default(target_vm_name) }}"
     --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
     --no-wait
   delegate_to: localhost
