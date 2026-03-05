@@ -90,9 +90,17 @@ jobs:
 
       - name: Install Python dependencies (includes Azure CLI and SDK)
         run: |
+          echo "=== Python Environment Diagnostics ==="
+          which python3
+          python3 --version
+          python3 -c "import sys; print('Python executable:', sys.executable); print('Python path:', sys.path)"
+          echo ""
           echo "=== Installing Python dependencies from requirements.txt ==="
           # Use python3 explicitly to match Ansible's interpreter
           python3 -m pip install --user -r requirements.txt
+          echo ""
+          echo "=== Verifying installation location ==="
+          python3 -c "import sys; import site; print('User base:', site.USER_BASE); print('User site-packages:', site.USER_SITE)"
           echo ""
           echo "=== Installed Azure CLI and SDK versions ==="
           az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
@@ -225,6 +233,8 @@ jobs:
 
       - name: Run migration cutover with automatic skip logic
         id: cutover
+        env:
+          ANSIBLE_PYTHON_INTERPRETER: /usr/bin/python3
         run: |
           echo "Starting intelligent migration cutover..."
           echo "The playbook will automatically:"
