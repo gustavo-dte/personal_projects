@@ -21,10 +21,20 @@
 
 - name: Verify Azure subscription exists (when subscription ID is provided)
   block:
-    - name: Check if target subscription exists
-      azure.azcollection.azure_rm_subscription_info:
-        subscription_id: "{{ target_subscription_id }}"
-      register: subscription_info
+    - name: Check if target subscription exists (using Azure CLI)
+      ansible.builtin.command:
+        cmd: az account show --subscription "{{ target_subscription_id }}" --output json
+      register: subscription_info_raw
+      changed_when: false
+      when: not (dry_run | default(false))
+      no_log: true
+
+    - name: Parse subscription info
+      ansible.builtin.set_fact:
+        subscription_info:
+          subscriptions:
+            - display_name: "{{ (subscription_info_raw.stdout | from_json).name }}"
+              state: "{{ (subscription_info_raw.stdout | from_json).state }}"
       when: not (dry_run | default(false))
       no_log: true
 
@@ -52,13 +62,21 @@
 
 - name: Verify Azure resource group exists
   block:
-    - name: Check if target resource group exists
-      azure.azcollection.azure_rm_resourcegroup_info:
-        name: "{{ target_resource_group }}"
-        subscription_id: "{{ target_subscription_id | default(omit) }}"
-      register: resource_group_info
+    - name: Check if target resource group exists (using Azure CLI)
+      ansible.builtin.command:
+        cmd: az group show --name "{{ target_resource_group }}" --subscription "{{ target_subscription_id | default(omit) }}" --output json
+      register: resource_group_info_raw
+      changed_when: false
       when: not (dry_run | default(false))
       no_log: true
+
+    - name: Parse resource group info
+      ansible.builtin.set_fact:
+        resource_group_info:
+          resourcegroups:
+            - name: "{{ (resource_group_info_raw.stdout | from_json).name }}"
+              location: "{{ (resource_group_info_raw.stdout | from_json).location }}"
+      when: not (dry_run | default(false))
 
     - name: Mock resource group verification for dry run
       ansible.builtin.set_fact:

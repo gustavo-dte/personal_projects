@@ -96,8 +96,8 @@ jobs:
           python3 -c "import sys; print('Python executable:', sys.executable); print('Python path:', sys.path)"
           echo ""
           echo "=== Installing Python dependencies from requirements.txt ==="
-          # Install to system Python (not --user) to ensure /usr/bin/python3 can access them
-          python3 -m pip install -r requirements.txt
+          # Install to system Python (not --user) to ensure Ansible modules can access them
+          sudo python3 -m pip install -r requirements.txt
           echo ""
           echo "=== Verifying installation location ==="
           python3 -c "import sys, site; print('Site packages:', site.getsitepackages())"
