@@ -135,15 +135,15 @@
     - az_disjoin_result is defined
     - not (az_disjoin_result.skipped | default(false) | bool)
 
-- name: "[CREDENTIALS] Step 2 - Fallback: Disjoin with local Administrator"
+- name: "[CREDENTIALS] Step 2 - Fallback 1: Disjoin with NetBIOS format"
   ansible.builtin.debug:
     msg: |
       +-------------------------------------------------------------+
-      |  STEP 2 - DISJOIN FALLBACK (SE-Admin failed)
-      |   Method      : Azure Run Command + local Administrator
+      |  STEP 2 - DISJOIN FALLBACK 1 (FQDN format failed)
+      |   Method      : Azure Run Command + NetBIOS\username
       |   Azure VM    : {{ target_vm_name }}
       |   RG          : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
-      |   Disjoin user: .\Administrator
+      |   Disjoin user: {{ _domain_netbios }}\{{ resolved_winrm_username }}
       |   Password src: Same as SE-Admin (Delinea)
       |   Password len: {{ resolved_winrm_value | string | length }} chars
       +-------------------------------------------------------------+
@@ -155,7 +155,157 @@
         (az_disjoin_result.rc | default(0) | int != 0)
         or ('DISJOIN_FAILED:' in (az_disjoin_result.stdout | default('')))
 
-- name: "Step 2 - Fallback: Disjoin from domain via Azure Run Command (local Administrator)"
+- name: "Step 2 - Fallback 1: Disjoin from domain via Azure Run Command (NetBIOS format)"
+  ansible.builtin.shell: |
+    az vm run-command invoke \
+      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
+      --name "{{ azure_vm_name | default(target_vm_name) }}" \
+      --command-id RunPowerShellScript \
+      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+      --parameters \
+        "DomainUser={{ _domain_netbios }}\\{{ resolved_winrm_username }}" \
+        "DomainPass={{ resolved_winrm_value }}" \
+      --scripts '
+        param($DomainUser, $DomainPass)
+        $ErrorActionPreference = "Stop"
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
+        if (-not $cs.PartOfDomain) {
+          Write-Output "ALREADY_WORKGROUP"
+          exit 0
+        }
+        try {
+          $secPass = ConvertTo-SecureString $DomainPass -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential($DomainUser, $secPass)
+          Remove-Computer -WorkgroupName "WORKGROUP" -UnjoinDomainCredential $cred -Force -ErrorAction Stop
+          Write-Output "DISJOIN_OK_NETBIOS"
+        }
+        catch {
+          Write-Output ("DISJOIN_NETBIOS_FAILED:" + $_.Exception.Message)
+          exit 1
+        }
+      ' \
+      --query "value[0].message" -o tsv 2>&1
+  delegate_to: localhost
+  register: az_disjoin_netbios_result
+  failed_when: false
+  changed_when: false
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - az_disjoin_result is defined
+    - not (az_disjoin_result.skipped | default(false) | bool)
+    - current_domain_status.part_of_domain | default(false) | bool
+    - >-
+        (az_disjoin_result.rc | default(0) | int != 0)
+        or ('DISJOIN_FAILED:' in (az_disjoin_result.stdout | default('')))
+
+- name: "Step 2 - Debug: disjoin NetBIOS fallback Run Command output"
+  ansible.builtin.debug:
+    msg: |
+      Disjoin NetBIOS fallback Run Command output for {{ target_vm_name }}:
+        rc     : {{ az_disjoin_netbios_result.rc | default('N/A') }}
+        output : {{ az_disjoin_netbios_result.stdout | default('(empty)') | trim }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - az_disjoin_netbios_result is defined
+    - not (az_disjoin_netbios_result.skipped | default(false) | bool)
+
+- name: "[CREDENTIALS] Step 2 - Fallback 2: Disjoin with UPN format"
+  ansible.builtin.debug:
+    msg: |
+      +-------------------------------------------------------------+
+      |  STEP 2 - DISJOIN FALLBACK 2 (NetBIOS format failed)
+      |   Method      : Azure Run Command + UPN format
+      |   Azure VM    : {{ target_vm_name }}
+      |   RG          : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
+      |   Disjoin user: {{ resolved_winrm_username }}@{{ manifest_data.domainNameSetup.domain }}
+      |   Password src: Same as SE-Admin (Delinea)
+      |   Password len: {{ resolved_winrm_value | string | length }} chars
+      +-------------------------------------------------------------+
+  when:
+    - not (dry_run | default(false) | bool)
+    - az_disjoin_netbios_result is defined
+    - not (az_disjoin_netbios_result.skipped | default(false) | bool)
+    - >-
+        (az_disjoin_netbios_result.rc | default(0) | int != 0)
+        or ('DISJOIN_NETBIOS_FAILED:' in (az_disjoin_netbios_result.stdout | default('')))
+
+- name: "Step 2 - Fallback 2: Disjoin from domain via Azure Run Command (UPN format)"
+  ansible.builtin.shell: |
+    az vm run-command invoke \
+      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
+      --name "{{ azure_vm_name | default(target_vm_name) }}" \
+      --command-id RunPowerShellScript \
+      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+      --parameters \
+        "DomainUser={{ resolved_winrm_username }}@{{ manifest_data.domainNameSetup.domain }}" \
+        "DomainPass={{ resolved_winrm_value }}" \
+      --scripts '
+        param($DomainUser, $DomainPass)
+        $ErrorActionPreference = "Stop"
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
+        if (-not $cs.PartOfDomain) {
+          Write-Output "ALREADY_WORKGROUP"
+          exit 0
+        }
+        try {
+          $secPass = ConvertTo-SecureString $DomainPass -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential($DomainUser, $secPass)
+          Remove-Computer -WorkgroupName "WORKGROUP" -UnjoinDomainCredential $cred -Force -ErrorAction Stop
+          Write-Output "DISJOIN_OK_UPN"
+        }
+        catch {
+          Write-Output ("DISJOIN_UPN_FAILED:" + $_.Exception.Message)
+          exit 1
+        }
+      ' \
+      --query "value[0].message" -o tsv 2>&1
+  delegate_to: localhost
+  register: az_disjoin_upn_result
+  failed_when: false
+  changed_when: false
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - az_disjoin_netbios_result is defined
+    - not (az_disjoin_netbios_result.skipped | default(false) | bool)
+    - current_domain_status.part_of_domain | default(false) | bool
+    - >-
+        (az_disjoin_netbios_result.rc | default(0) | int != 0)
+        or ('DISJOIN_NETBIOS_FAILED:' in (az_disjoin_netbios_result.stdout | default('')))
+
+- name: "Step 2 - Debug: disjoin UPN fallback Run Command output"
+  ansible.builtin.debug:
+    msg: |
+      Disjoin UPN fallback Run Command output for {{ target_vm_name }}:
+        rc     : {{ az_disjoin_upn_result.rc | default('N/A') }}
+        output : {{ az_disjoin_upn_result.stdout | default('(empty)') | trim }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - az_disjoin_upn_result is defined
+    - not (az_disjoin_upn_result.skipped | default(false) | bool)
+
+- name: "[CREDENTIALS] Step 2 - Fallback 3: Disjoin with local Administrator"
+  ansible.builtin.debug:
+    msg: |
+      +-------------------------------------------------------------+
+      |  STEP 2 - DISJOIN FALLBACK 3 (All domain formats failed)
+      |   Method      : Azure Run Command + local Administrator
+      |   Azure VM    : {{ target_vm_name }}
+      |   RG          : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
+      |   Disjoin user: .\Administrator
+      |   Password src: Same as SE-Admin (Delinea)
+      |   Password len: {{ resolved_winrm_value | string | length }} chars
+      +-------------------------------------------------------------+
+  when:
+    - not (dry_run | default(false) | bool)
+    - az_disjoin_upn_result is defined
+    - not (az_disjoin_upn_result.skipped | default(false) | bool)
+    - >-
+        (az_disjoin_upn_result.rc | default(0) | int != 0)
+        or ('DISJOIN_UPN_FAILED:' in (az_disjoin_upn_result.stdout | default('')))
+
+- name: "Step 2 - Fallback 3: Disjoin from domain via Azure Run Command (local Administrator)"
   ansible.builtin.shell: |
     az vm run-command invoke \
       --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
@@ -177,55 +327,68 @@
           $secPass = ConvertTo-SecureString $DomainPass -AsPlainText -Force
           $cred = New-Object System.Management.Automation.PSCredential($DomainUser, $secPass)
           Remove-Computer -WorkgroupName "WORKGROUP" -UnjoinDomainCredential $cred -Force -ErrorAction Stop
-          Write-Output "DISJOIN_OK_FALLBACK"
+          Write-Output "DISJOIN_OK_LOCAL_ADMIN"
         }
         catch {
-          Write-Output ("DISJOIN_FALLBACK_FAILED:" + $_.Exception.Message)
+          Write-Output ("DISJOIN_LOCAL_ADMIN_FAILED:" + $_.Exception.Message)
           exit 1
         }
       ' \
       --query "value[0].message" -o tsv 2>&1
   delegate_to: localhost
-  register: az_disjoin_fallback_result
+  register: az_disjoin_localadmin_result
   failed_when: false
   changed_when: false
   no_log: true
   when:
     - not (dry_run | default(false) | bool)
-    - az_disjoin_result is defined
-    - not (az_disjoin_result.skipped | default(false) | bool)
+    - az_disjoin_upn_result is defined
+    - not (az_disjoin_upn_result.skipped | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
     - >-
-        (az_disjoin_result.rc | default(0) | int != 0)
-        or ('DISJOIN_FAILED:' in (az_disjoin_result.stdout | default('')))
+        (az_disjoin_upn_result.rc | default(0) | int != 0)
+        or ('DISJOIN_UPN_FAILED:' in (az_disjoin_upn_result.stdout | default('')))
 
-- name: "Step 2 - Debug: disjoin fallback Run Command output"
+- name: "Step 2 - Debug: disjoin local admin fallback Run Command output"
   ansible.builtin.debug:
     msg: |
-      Disjoin fallback Run Command output for {{ target_vm_name }}:
-        rc     : {{ az_disjoin_fallback_result.rc | default('N/A') }}
-        output : {{ az_disjoin_fallback_result.stdout | default('(empty)') | trim }}
+      Disjoin local admin fallback Run Command output for {{ target_vm_name }}:
+        rc     : {{ az_disjoin_localadmin_result.rc | default('N/A') }}
+        output : {{ az_disjoin_localadmin_result.stdout | default('(empty)') | trim }}
   when:
     - not (dry_run | default(false) | bool)
-    - az_disjoin_fallback_result is defined
-    - not (az_disjoin_fallback_result.skipped | default(false) | bool)
+    - az_disjoin_localadmin_result is defined
+    - not (az_disjoin_localadmin_result.skipped | default(false) | bool)
 
-- name: "Step 2 - Fail if both disjoin attempts failed"
+- name: "Step 2 - Fail if all disjoin attempts failed"
   ansible.builtin.fail:
     msg: |
-      Disjoin failed for {{ item.name }} ({{ target_vm_name }}).
-      Primary attempt (SE-Admin): {{ az_disjoin_result.stdout | default('') | trim }}
-      Fallback attempt (.\Administrator): {{ az_disjoin_fallback_result.stdout | default('N/A') | trim }}
+      All disjoin attempts failed for {{ item.name }} ({{ target_vm_name }}).
       
-      Both domain account (SE-Admin) and local Administrator failed to disjoin the VM.
-      Verify credentials in Delinea and ensure Administrator account has proper permissions.
+      1. FQDN format ({{ current_hostname_info.old_name | lower }}.{{ manifest_data.domainNameSetup.domain }}\{{ resolved_winrm_username }}):
+         {{ az_disjoin_result.stdout | default('') | trim }}
+      
+      2. NetBIOS format ({{ _domain_netbios }}\{{ resolved_winrm_username }}):
+         {{ az_disjoin_netbios_result.stdout | default('N/A') | trim }}
+      
+      3. UPN format ({{ resolved_winrm_username }}@{{ manifest_data.domainNameSetup.domain }}):
+         {{ az_disjoin_upn_result.stdout | default('N/A') | trim }}
+      
+      4. Local Administrator (.\Administrator):
+         {{ az_disjoin_localadmin_result.stdout | default('N/A') | trim }}
+      
+      All authentication methods failed. Verify:
+      - SE-Admin credentials in Delinea Secret Server
+      - Local Administrator password matches Delinea
+      - Domain connectivity and trust relationships
+      - Account permissions for domain disjoin operations
   when:
     - not (dry_run | default(false) | bool)
-    - az_disjoin_fallback_result is defined
-    - not (az_disjoin_fallback_result.skipped | default(false) | bool)
+    - az_disjoin_localadmin_result is defined
+    - not (az_disjoin_localadmin_result.skipped | default(false) | bool)
     - >-
-        (az_disjoin_fallback_result.rc | default(0) | int != 0)
-        or ('DISJOIN_FALLBACK_FAILED:' in (az_disjoin_fallback_result.stdout | default('')))
+        (az_disjoin_localadmin_result.rc | default(0) | int != 0)
+        or ('DISJOIN_LOCAL_ADMIN_FAILED:' in (az_disjoin_localadmin_result.stdout | default('')))
 
 - name: "Step 2 - Restart VM via Azure CLI after disjoin"
   ansible.builtin.shell: >-
@@ -246,8 +409,18 @@
         )
         or
         (
-          (az_disjoin_fallback_result is defined and not (az_disjoin_fallback_result.skipped | default(false) | bool) and
-           az_disjoin_fallback_result.rc | default(0) | int == 0 and 'DISJOIN_FALLBACK_FAILED:' not in (az_disjoin_fallback_result.stdout | default('')))
+          (az_disjoin_netbios_result is defined and not (az_disjoin_netbios_result.skipped | default(false) | bool) and
+           az_disjoin_netbios_result.rc | default(0) | int == 0 and 'DISJOIN_NETBIOS_FAILED:' not in (az_disjoin_netbios_result.stdout | default('')))
+        )
+        or
+        (
+          (az_disjoin_upn_result is defined and not (az_disjoin_upn_result.skipped | default(false) | bool) and
+           az_disjoin_upn_result.rc | default(0) | int == 0 and 'DISJOIN_UPN_FAILED:' not in (az_disjoin_upn_result.stdout | default('')))
+        )
+        or
+        (
+          (az_disjoin_localadmin_result is defined and not (az_disjoin_localadmin_result.skipped | default(false) | bool) and
+           az_disjoin_localadmin_result.rc | default(0) | int == 0 and 'DISJOIN_LOCAL_ADMIN_FAILED:' not in (az_disjoin_localadmin_result.stdout | default('')))
         )
 
 - name: "Step 2 - Wait for VM to come back after disjoin reboot"
