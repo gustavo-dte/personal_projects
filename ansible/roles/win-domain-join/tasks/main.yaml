@@ -180,6 +180,13 @@
           - (manifest_data.vms | default([])) | length > 0
         fail_msg: "disjoin_and_rename requires manifest with at least one VM in vms."
 
+    - name: Set domain admin username for disjoin fallback (if available)
+      ansible.builtin.set_fact:
+        domain_admin_username: "{{ (manifest_data.domainNameSetup.domain_admin_username | default('') | trim) }}"
+      when:
+        - manifest_data.domainNameSetup is defined
+        - manifest_data.domainNameSetup.domain_admin_username is defined
+
     - name: Disjoin then rename each Windows server
       ansible.builtin.include_tasks: disjoin_rename.yml
       loop: "{{ manifest_data.vms }}"
