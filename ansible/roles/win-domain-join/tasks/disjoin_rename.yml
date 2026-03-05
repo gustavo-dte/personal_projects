@@ -6,20 +6,16 @@
 # Steps:
 #   Step 1 - prepare_winrm : Azure Run Command reads hostname + domain status (no WinRM creds)
 #   Pre-Step 2 - WinRM Test: Test WinRM connectivity with ipconfig (validates credentials)
-#   Step 2 - Disjoin       : WinRM direct Remove-Computer (if WinRM works)
-#                            OR Azure Run Command Remove-Computer -LocalCredential (if WinRM fails)
-#                            -> az vm restart -> wait_for WinRM
-#   Step 3 - Re-probe      : Azure Run Command re-reads hostname post-reboot
-#   Step 4 - Rename        : Azure Run Command Rename-Computer (SYSTEM)
+#   Step 2 - Disjoin       : WinRM direct Remove-Computer (no reboot needed)
+#   Step 3 - Rename        : WinRM direct Rename-Computer (.\Administrator)
 #                            -> az vm restart -> wait_for WinRM -> WinRM verify
 #
 # Credential design:
 #   WinRM Test: Connects via WinRM using .\SE-Admin (Delinea password) to verify connectivity
-#   Disjoin   : PRIMARY - WinRM Remove-Computer using authenticated WinRM session (faster)
-#               FALLBACK - Azure Run Command with -LocalCredential .\SE-Admin (if WinRM unavailable)
+#   Disjoin   : WinRM Remove-Computer using authenticated WinRM session with SE-Admin
 #             The authenticated user can disjoin without needing AD delegation rights.
 #             The stale computer object stays in AD; the join step reuses/overwrites it.
-#   Rename  : SYSTEM via Azure Run Command (no creds needed)
+#   Rename  : WinRM .\Administrator with SE-Admin password (from Delinea)
 #   Verify  : WinRM .\Administrator (SE-Admin password from Delinea)
 #
 # Required vars (set per-VM by main.yaml loop):
@@ -224,64 +220,16 @@
     - winrm_test_result is defined
     - winrm_test_result.rc | default(1) == 0
 
-- name: "Step 2 - Fallback: Disjoin via Azure Run Command (if WinRM unavailable)"
-  ansible.builtin.shell: |
-    az vm run-command invoke \
-      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
-      --name "{{ azure_vm_name | default(target_vm_name) }}" \
-      --command-id RunPowerShellScript \
-      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
-      --parameters "LocalUser={{ resolved_winrm_username }}" "LocalPass={{ resolved_winrm_value }}" \
-      --scripts '
-        param($LocalUser, $LocalPass)
-        $ErrorActionPreference = "Stop"
-        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
-        if (-not $cs.PartOfDomain) {
-          Write-Output "ALREADY_WORKGROUP"
-          exit 0
-        }
-        try {
-          $secPass   = ConvertTo-SecureString $LocalPass -AsPlainText -Force
-          $localCred = New-Object System.Management.Automation.PSCredential(".\$LocalUser", $secPass)
-          Remove-Computer -WorkgroupName "WORKGROUP" -LocalCredential $localCred -Force -ErrorAction Stop
-          Write-Output "DISJOIN_OK"
-        }
-        catch {
-          Write-Output ("DISJOIN_FAILED:" + $_.Exception.Message)
-          exit 1
-        }
-      ' \
-      --query "value[0].message" -o tsv 2>&1
-  delegate_to: localhost
-  register: az_disjoin_result
-  failed_when: false
-  changed_when: false
-  no_log: true
-  retries: 5
-  delay: 5
-  until: >-
-    az_disjoin_result.rc == 0
-    or ('conflict' not in (az_disjoin_result.stderr | default('') | lower))
-  when:
-    - not (dry_run | default(false) | bool)
-    - current_domain_status.part_of_domain | default(false) | bool
-    - winrm_test_result is not defined or winrm_test_result.rc | default(1) != 0
-
 - name: "Step 2 - Debug: disjoin output"
   ansible.builtin.debug:
     msg: |
       Disjoin output for {{ target_vm_name }}:
-        Method  : {{ 'WinRM Direct' if (az_disjoin_result.output is defined) else 'Azure Run Command' }}
-        {% if az_disjoin_result.output is defined %}
+        Method  : WinRM Direct
         Failed  : {{ az_disjoin_result.failed | default(false) }}
         Changed : {{ az_disjoin_result.changed | default(false) }}
         Output  : {{ az_disjoin_result.output | default([]) | join('') | trim }}
         {% if az_disjoin_result.error is defined and az_disjoin_result.error | length > 0 %}
         Error   : {{ az_disjoin_result.error | join('; ') }}
-        {% endif %}
-        {% else %}
-        RC      : {{ az_disjoin_result.rc | default('N/A') }}
-        Output  : {{ az_disjoin_result.stdout | default('(empty)') | trim }}
         {% endif %}
   when:
     - not (dry_run | default(false) | bool)
@@ -292,14 +240,9 @@
   ansible.builtin.fail:
     msg: |
       Disjoin failed for {{ item.name }} ({{ target_vm_name }}).
-      Method : {{ 'WinRM Direct' if (az_disjoin_result.output is defined) else 'Azure Run Command' }}
-      {% if az_disjoin_result.output is defined %}
+      Method : WinRM Direct
       Output : {{ az_disjoin_result.output | default([]) | join('') | trim }}
       Error  : {{ az_disjoin_result.error | default([]) | join('; ') }}
-      {% else %}
-      Output : {{ az_disjoin_result.stdout | default('') | trim }}
-      Stderr : {{ az_disjoin_result.stderr | default('') | truncate(300) }}
-      {% endif %}
       ---
       If 'Access is denied': SE-Admin is not in the local Administrators group.
       Fix on the VM: net localgroup Administrators {{ _domain_netbios }}\{{ resolved_winrm_username }} /add
@@ -310,103 +253,21 @@
     - not (az_disjoin_result.skipped | default(false) | bool)
     - >-
         (az_disjoin_result.failed | default(false) | bool)
-        or (az_disjoin_result.rc | default(0) | int != 0 and az_disjoin_result.stdout is defined)
-        or ('DISJOIN_FAILED:' in (az_disjoin_result.output | default([]) | join('') if az_disjoin_result.output is defined else az_disjoin_result.stdout | default('')))
-
-- name: "Step 2 - Restart VM via Azure CLI after disjoin"
-  ansible.builtin.shell: >-
-    az vm restart
-    --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
-    --name "{{ azure_vm_name | default(target_vm_name) }}"
-    --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
-    --no-wait
-  delegate_to: localhost
-  register: az_restart_disjoin_result
-  failed_when: false
-  when:
-    - not (dry_run | default(false) | bool)
-    - az_disjoin_result is defined
-    - not (az_disjoin_result.skipped | default(false) | bool)
-    - not (az_disjoin_result.failed | default(false) | bool)
-    - >-
-        (az_disjoin_result.output is defined and 'DISJOIN_FAILED:' not in (az_disjoin_result.output | default([]) | join('')))
-        or (az_disjoin_result.stdout is defined and 'DISJOIN_FAILED:' not in (az_disjoin_result.stdout | default('')) and az_disjoin_result.rc | default(0) | int == 0)
-
-- name: "Step 2 - Wait for WinRM after disjoin reboot"
-  ansible.builtin.wait_for:
-    port: "{{ winrm_port }}"
-    host: "{{ target_vm_host }}"
-    delay: 60
-    timeout: 600
-    state: started
-  when:
-    - not (dry_run | default(false) | bool)
-    - az_restart_disjoin_result is defined
-    - not (az_restart_disjoin_result.skipped | default(false) | bool)
-    - az_restart_disjoin_result.rc | default(0) | int == 0
+        or ('DISJOIN_FAILED:' in (az_disjoin_result.output | default([]) | join('')))
 
 # ==============================================================================
-# Step 3: Re-probe hostname post-disjoin via Azure Run Command
+# Step 3: Rename hostname via WinRM (.\Administrator), reboot, verify
 # ==============================================================================
 
-- name: "Step 3 - Re-read hostname via Azure Run Command after disjoin reboot"
-  ansible.builtin.shell: |
-    az vm run-command invoke \
-      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
-      --name "{{ azure_vm_name | default(target_vm_name) }}" \
-      --command-id RunPowerShellScript \
-      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
-      --scripts '$env:COMPUTERNAME' \
-      --query "value[0].message" -o tsv 2>/dev/null
-  delegate_to: localhost
-  register: az_post_disjoin_hostname
-  changed_when: false
-  failed_when: false
-  retries: 5
-  delay: 5
-  until: >-
-    az_post_disjoin_hostname.rc == 0
-    or ('conflict' not in (az_post_disjoin_hostname.stderr | default('') | lower))
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_rename | default(false) | bool)
-    - az_disjoin_result is defined
-    - not (az_disjoin_result.skipped | default(false) | bool)
-
-- name: "Step 3 - Update current_hostname_info from post-disjoin probe"
-  ansible.builtin.set_fact:
-    current_hostname_info:
-      old_name: "{{ az_post_disjoin_hostname.stdout | trim }}"
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_rename | default(false) | bool)
-    - az_post_disjoin_hostname is defined
-    - not (az_post_disjoin_hostname.skipped | default(false) | bool)
-    - az_post_disjoin_hostname.stdout | default('') | trim | length > 0
-
-- name: "Step 3 - Display post-disjoin hostname"
-  ansible.builtin.debug:
-    msg: |
-      Post-disjoin hostname : '{{ current_hostname_info.old_name | default('unknown') }}'
-      Target hostname       : '{{ target_vm_name }}'
-      Rename needed         : {{ (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper) }}
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_rename | default(false) | bool)
-
-# ==============================================================================
-# Step 4: Rename hostname via Azure Run Command (SYSTEM), verify via WinRM
-# ==============================================================================
-
-- name: "Step 4 - Rename hostname"
+- name: "Step 3 - Rename hostname"
   when: not (skip_rename | default(false) | bool)
   block:
-    - name: "[CREDENTIALS] Step 4 - Rename and verify"
+    - name: "[CREDENTIALS] Step 3 - Rename and verify"
       ansible.builtin.debug:
         msg: |
           +-------------------------------------------------------------+
-          |  STEP 4 - RENAME
-          |   Rename method  : Azure Run Command (SYSTEM - no creds needed)
+          |  Step 3 - RENAME
+          |   Rename method  : WinRM Direct (.\{{ rename_winrm_username | default('Administrator') }})
           |   Verify method  : WinRM .\{{ rename_winrm_username | default('Administrator') }}
           |   Connect IP     : {{ target_vm_host }}
           |   WinRM port     : {{ winrm_port }}
@@ -415,74 +276,81 @@
           |   Password len   : {{ resolved_winrm_value | string | length }} chars
           +-------------------------------------------------------------+
 
-    - name: "Step 4 - Skip rename (hostname already matches target)"
+    - name: "Step 3 - Skip rename (hostname already matches target)"
       ansible.builtin.debug:
-        msg: "Step 4: Rename skipped - '{{ current_hostname_info.old_name }}' already matches '{{ target_vm_name }}'."
+        msg: "Step 3: Rename skipped - '{{ current_hostname_info.old_name }}' already matches '{{ target_vm_name }}'."
       when: (current_hostname_info.old_name | default('') | upper) == (target_vm_name | upper)
 
-    - name: "Step 4 - Rename via Azure Run Command (SYSTEM)"
-      ansible.builtin.shell: |
-        script_file="$(mktemp)"
-        cat > "$script_file" <<'PS'
-        $ErrorActionPreference = "Stop"
-        try {
-          Rename-Computer -NewName "{{ target_vm_name }}" -Force -ErrorAction Stop
-        }
-        catch {
-          Write-Output ("RENAME_EXCEPTION:" + $_.Exception.Message)
-          exit 1
-        }
-        $pending = (Get-ItemProperty `
-          -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName" `
-          -Name ComputerName).ComputerName
-        $active = (Get-ItemProperty `
-          -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName" `
-          -Name ComputerName).ComputerName
-        if (($pending -ieq "{{ target_vm_name }}") -or ($active -ieq "{{ target_vm_name }}")) {
-          Write-Output ("RENAME_CONFIRMED:pending=" + $pending + ";active=" + $active)
-          exit 0
-        }
-        Write-Output ("RENAME_NOT_CONFIRMED:pending=" + $pending + ";active=" + $active)
-        exit 2
-        PS
-        az vm run-command invoke \
-          --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
-          --name "{{ azure_vm_name | default(target_vm_name) }}" \
-          --command-id RunPowerShellScript \
-          --scripts @"$script_file" \
-          --query "value[0].message" -o tsv \
-          --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
-        rc=$?
-        rm -f "$script_file"
-        exit $rc
-      delegate_to: localhost
+    - name: "Step 3 - Rename via WinRM (direct ansible connection)"
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = "Stop"
+          
+          # Get current hostnames
+          $pending = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName" -Name ComputerName).ComputerName
+          $active = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName" -Name ComputerName).ComputerName
+          
+          # Check if already renamed
+          if (($pending -ieq "{{ target_vm_name }}") -or ($active -ieq "{{ target_vm_name }}")) {
+            Write-Host "ALREADY_RENAMED:pending=$pending;active=$active"
+            return @{ Status = "ALREADY_RENAMED"; Pending = $pending; Active = $active; Changed = $false }
+          }
+          
+          try {
+            Rename-Computer -NewName "{{ target_vm_name }}" -Force -ErrorAction Stop
+            $pendingAfter = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName" -Name ComputerName).ComputerName
+            $activeAfter = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName" -Name ComputerName).ComputerName
+            
+            if ($pendingAfter -ieq "{{ target_vm_name }}") {
+              Write-Host "RENAME_CONFIRMED:pending=$pendingAfter;active=$activeAfter"
+              return @{ Status = "RENAME_CONFIRMED"; Pending = $pendingAfter; Active = $activeAfter; Changed = $true }
+            } else {
+              Write-Host "RENAME_NOT_CONFIRMED:pending=$pendingAfter;active=$activeAfter"
+              throw "Hostname in registry does not match target after Rename-Computer"
+            }
+          }
+          catch {
+            Write-Host "RENAME_EXCEPTION:$($_.Exception.Message)"
+            throw $_
+          }
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_port: "{{ winrm_port }}"
+        ansible_winrm_scheme: "{{ 'https' if winrm_port | int == 5986 else 'http' }}"
+        ansible_user: ".\\{{ rename_winrm_username | default('Administrator') }}"
+        ansible_password: "{{ resolved_winrm_value }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 30
+        ansible_winrm_operation_timeout_sec: 120
+        ansible_winrm_read_timeout_sec: 130
       register: az_rename_result
       failed_when: false
-      changed_when: false
-      retries: 5
-      delay: 5
-      until: >-
-        az_rename_result.rc == 0
-        or ('conflict' not in (az_rename_result.stderr | default('') | lower))
+      changed_when: az_rename_result.output is defined and 'RENAME_CONFIRMED' in (az_rename_result.output | default([]) | join(''))
+      no_log: true
       when:
         - not (dry_run | default(false) | bool)
         - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
 
-    - name: "Step 4 - Fail if rename not confirmed"
+    - name: "Step 3 - Fail if rename not confirmed"
       ansible.builtin.fail:
         msg: |
           Hostname rename not confirmed for {{ item.name }} ({{ target_vm_name }}).
-          Output : {{ az_rename_result.stdout | default('') | trim }}
-          stderr : {{ az_rename_result.stderr | default('') | truncate(300) }}
+          Output : {{ az_rename_result.output | default([]) | join('') | trim }}
+          {% if az_rename_result.error is defined and az_rename_result.error | length > 0 %}
+          Error  : {{ az_rename_result.error | join('; ') }}
+          {% endif %}
       when:
         - not (dry_run | default(false) | bool)
         - az_rename_result is defined
         - not (az_rename_result.skipped | default(false) | bool)
         - >-
-            (az_rename_result.rc | default(1) | int != 0)
-            or ('RENAME_CONFIRMED:' not in (az_rename_result.stdout | default('')))
+            (az_rename_result.failed | default(false) | bool)
+            or ('RENAME_CONFIRMED' not in (az_rename_result.output | default([]) | join(''))
+                and 'ALREADY_RENAMED' not in (az_rename_result.output | default([]) | join('')))
 
-    - name: "Step 4 - Restart VM via Azure CLI after rename"
+    - name: "Step 3 - Restart VM via Azure CLI after rename"
       ansible.builtin.shell: >-
         az vm restart
         --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
@@ -498,7 +366,7 @@
         - not (az_rename_result.skipped | default(false) | bool)
         - "'RENAME_CONFIRMED:' in (az_rename_result.stdout | default(''))"
 
-    - name: "Step 4 - Wait for WinRM after rename reboot"
+    - name: "Step 3 - Wait for WinRM after rename reboot"
       ansible.builtin.wait_for:
         port: "{{ winrm_port }}"
         host: "{{ target_vm_host }}"
@@ -511,7 +379,7 @@
         - not (az_rename_restart_result.skipped | default(false) | bool)
         - az_rename_restart_result.rc | default(0) | int == 0
 
-    - name: 'Step 4 - Verify hostname via WinRM (.\Administrator) after rename reboot'
+    - name: 'Step 3 - Verify hostname via WinRM (.\Administrator) after rename reboot'
       ansible.windows.win_shell: |
         (Get-CimInstance -ClassName Win32_ComputerSystem -Property Name).Name
       delegate_to: "{{ target_vm_host }}"
@@ -535,7 +403,7 @@
         - not (az_rename_restart_result.skipped | default(false) | bool)
         - az_rename_restart_result.rc | default(0) | int == 0
 
-    - name: "Step 4 - Fail if hostname did not change after reboot"
+    - name: "Step 3 - Fail if hostname did not change after reboot"
       ansible.builtin.fail:
         msg: |
           Hostname on {{ target_vm_host }} is still
@@ -547,7 +415,7 @@
         - not (hostname_after_reboot.skipped | default(false) | bool)
         - (hostname_after_reboot.stdout | default('') | trim | upper) != (target_vm_name | upper)
 
-    - name: 'Step 4 - Set formatted_winrm_username for downstream tasks'
+    - name: 'Step 3 - Set formatted_winrm_username for downstream tasks'
       ansible.builtin.set_fact:
         formatted_winrm_username: ".\\{{ rename_winrm_username | default('Administrator') }}"
       when: not (dry_run | default(false) | bool)
@@ -575,7 +443,7 @@
         Step 2: Disjoin from '{{ current_domain_status.domain | default('WORKGROUP') }}'
                 -> Remove-Computer -LocalCredential .\{{ resolved_winrm_username }} -> az vm restart
       {% if not (skip_rename | default(false) | bool) %}
-        Step 4: Rename '{{ current_hostname_info.old_name | default('unknown') }}' -> '{{ target_vm_name }}'
+        Step 3: Rename '{{ current_hostname_info.old_name | default('unknown') }}' -> '{{ target_vm_name }}'
                 -> az vm restart -> WinRM verify .\Administrator
       {% endif %}
       No changes were made.

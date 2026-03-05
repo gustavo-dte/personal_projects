@@ -127,7 +127,7 @@ uninstall_tools_list:
 # List of VMs to replicate
 vms:
   - name: dca-tst1856                         # Current OS hostname (VMware source name) — used for WinRM connection and Delinea secret lookup
-    target_vm_name: VMCUWINWEBD10             # Azure resource name AND target OS hostname — used for all az vm CLI calls; VM renamed to this after disjoin
+    target_vm_name: VMCUWINWEBD11             # Azure resource name AND target OS hostname — used for all az vm CLI calls; VM renamed to this after disjoin
     vm_winrm_port: 5985                       # WinRM HTTP port (Windows Firewall configured via Azure Run Command)
     vm_winrm_username: se-admin               # WinRM username while domain-joined; password fetched from Delinea using vm_winrm_connect_hostname
     vm_winrm_connect_hostname: dca-tst1856.dtenet.com  # Current FQDN on dtenet.com — used for Delinea secret lookup (SE-Admin\dca-tst1856.dtenet.com)
@@ -222,7 +222,7 @@ load_balancers:
     # List of VM target_vm_names to associate with this load balancer
     # The template will automatically resolve these to NIC IDs
     vm_names:
-      - VMCUWINWEBD10
+      - VMCUWINWEBD11
 
     # Optional: Backend address pools configuration
     # If not specified, a default pool will be created with the VMs from vm_names
