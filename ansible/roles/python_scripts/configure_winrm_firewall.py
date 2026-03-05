@@ -2,7 +2,7 @@
 """
 configure_winrm_firewall.py
 ===========================
-Version: 2.2.0 (2026-03-04)
+Version: 2.3.0 (2025-01-10)
 
 Configures Windows Firewall on Azure VMs to allow WinRM (5985) and RDP (3389)
 using the Azure Run Command API (works regardless of NSG or Windows Firewall state).
@@ -11,6 +11,10 @@ For each VM in the manifest it:
   1. Verifies the VM exists in Azure.
   2. Runs a PowerShell script via Azure Run Command to open WinRM/RDP firewall rules.
   3. Ensures the WinRM service is running and PSRemoting is enabled.
+
+Implements exponential backoff retry logic (up to 10 attempts with delays of
+5, 10, 20, 40, 80 seconds) to handle Azure Run Command conflicts when multiple
+operations execute on the same VM simultaneously.
 
 Environment variables read:
   MANIFEST    Manifest directory name under ansible/vars/
@@ -288,6 +292,9 @@ def _run_command_on_vm(
 ) -> Optional[str]:
     """Run the WinRM PowerShell configuration on a VM via Azure Run Command.
 
+    Implements exponential backoff retry logic to handle Azure Run Command
+    conflicts when multiple operations execute on the same VM simultaneously.
+
     Args:
         resource_group:  Azure resource group containing the VM.
         vm_name:         Azure VM name.
@@ -296,34 +303,83 @@ def _run_command_on_vm(
     Returns:
         Truncated output message string on success, None on failure.
     """
-    result = _az(
-        "vm",
-        "run-command",
-        "invoke",
-        "--resource-group",
-        resource_group,
-        "--name",
-        vm_name,
-        "--command-id",
-        "RunPowerShellScript",
-        "--scripts",
-        _PS_CONFIGURE_WINRM,
-        subscription_id=subscription_id,
-    )
-    if result.returncode != 0:
-        log.error(
-            "[ERROR] Failed to configure Windows Firewall on VM %s: %s",
+    max_retries = 10
+    base_delay = 5  # seconds
+    
+    for attempt in range(1, max_retries + 1):
+        result = _az(
+            "vm",
+            "run-command",
+            "invoke",
+            "--resource-group",
+            resource_group,
+            "--name",
             vm_name,
+            "--command-id",
+            "RunPowerShellScript",
+            "--scripts",
+            _PS_CONFIGURE_WINRM,
+            subscription_id=subscription_id,
+        )
+        
+        if result.returncode == 0:
+            # Success - parse and return output
+            try:
+                output = json.loads(result.stdout)
+                messages: str = output.get("value", [{}])[0].get("message", "")
+                if attempt > 1:
+                    log.info(
+                        "[OK] Azure Run Command succeeded on attempt %d/%d",
+                        attempt,
+                        max_retries,
+                    )
+                return messages[:300] if messages else ""
+            except (json.JSONDecodeError, IndexError):
+                return ""
+        
+        # Check if this is a Run Command conflict error
+        stderr_lower = result.stderr.lower()
+        is_conflict = (
+            "conflict" in stderr_lower
+            or "execution is in progress" in stderr_lower
+            or "run command extension" in stderr_lower
+        )
+        
+        if is_conflict and attempt < max_retries:
+            # Calculate exponential backoff delay
+            delay = base_delay * (2 ** (attempt - 1))  # 5, 10, 20, 40, 80...
+            log.warning(
+                "[WARN] Azure Run Command conflict detected on VM %s (attempt %d/%d)",
+                vm_name,
+                attempt,
+                max_retries,
+            )
+            log.info(
+                "[INFO] Another Run Command is in progress. Retrying in %d seconds...",
+                delay,
+            )
+            time.sleep(delay)
+            continue
+        
+        # Non-conflict error or final attempt - log and fail
+        log.error(
+            "[ERROR] Failed to configure Windows Firewall on VM %s (attempt %d/%d): %s",
+            vm_name,
+            attempt,
+            max_retries,
             result.stderr[:300],
         )
-        return None
-
-    try:
-        output = json.loads(result.stdout)
-        messages: str = output.get("value", [{}])[0].get("message", "")
-        return messages[:300] if messages else ""
-    except (json.JSONDecodeError, IndexError):
-        return ""
+        
+        if attempt < max_retries and not is_conflict:
+            # Non-conflict error - don't retry
+            return None
+    
+    # Exhausted all retries
+    log.error(
+        "[ERROR] Failed after %d attempts. Another Run Command may still be executing.",
+        max_retries,
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +389,7 @@ def _run_command_on_vm(
 
 def main() -> None:
     """Entry point: configure Windows Firewall on every VM listed in the manifest."""
-    log.info("[INFO] configure_winrm_firewall.py v2.2.0 (2026-03-04)")
+    log.info("[INFO] configure_winrm_firewall.py v2.3.0 (2025-01-10)")
 
     manifest_name = os.environ.get("MANIFEST", "").strip()
     if not manifest_name:

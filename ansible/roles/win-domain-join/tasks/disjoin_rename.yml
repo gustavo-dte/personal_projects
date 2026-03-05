@@ -257,6 +257,11 @@
   failed_when: false
   changed_when: false
   no_log: true
+  retries: 5
+  delay: 5
+  until: >-
+    az_disjoin_result.rc == 0
+    or ('conflict' not in (az_disjoin_result.stderr | default('') | lower))
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
@@ -357,6 +362,11 @@
   register: az_post_disjoin_hostname
   changed_when: false
   failed_when: false
+  retries: 5
+  delay: 5
+  until: >-
+    az_post_disjoin_hostname.rc == 0
+    or ('conflict' not in (az_post_disjoin_hostname.stderr | default('') | lower))
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_rename | default(false) | bool)
@@ -449,6 +459,11 @@
       register: az_rename_result
       failed_when: false
       changed_when: false
+      retries: 5
+      delay: 5
+      until: >-
+        az_rename_result.rc == 0
+        or ('conflict' not in (az_rename_result.stderr | default('') | lower))
       when:
         - not (dry_run | default(false) | bool)
         - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
