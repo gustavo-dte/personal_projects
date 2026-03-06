@@ -103,36 +103,55 @@
       Write-Output "ALREADY_WORKGROUP"
       exit 0
     }
+    
+    # Domain credential for AD unjoin authorization
+    # Convert UPN (user@domain.com) to DOMAIN\Username if needed
+    $domainUser = $env:DOMAIN_USER
+    if ($domainUser -match '@') {
+      # Extract username and domain from UPN format
+      $username = ($domainUser -split '@')[0]
+      $domain = ($domainUser -split '@')[1] -replace '\.com$', '' -replace '\.', ''
+      $domainUser = "$domain\$username".ToUpper()
+      Write-Output "DOMAIN_USER_CONVERTED: $($env:DOMAIN_USER) -> $domainUser"
+    }
+    $secPassDomain = ConvertTo-SecureString $env:DOMAIN_PASS -AsPlainText -Force
+    $domainCred = New-Object System.Management.Automation.PSCredential(
+                    $domainUser, $secPassDomain)
+    
+    # Try with SE-Admin first
     try {
-      # Local credential for local authorization
+      Write-Output "ATTEMPT_1: Using .\$env:LOCAL_USER for local credential"
       $secPassLocal = ConvertTo-SecureString $env:LOCAL_PASS -AsPlainText -Force
       $localCred = New-Object System.Management.Automation.PSCredential(
                      ".\$env:LOCAL_USER", $secPassLocal)
-      
-      # Domain credential for AD unjoin authorization
-      # Convert UPN (user@domain.com) to DOMAIN\Username if needed
-      $domainUser = $env:DOMAIN_USER
-      if ($domainUser -match '@') {
-        # Extract username and domain from UPN format
-        $username = ($domainUser -split '@')[0]
-        $domain = ($domainUser -split '@')[1] -replace '\.com$', '' -replace '\.', ''
-        $domainUser = "$domain\$username".ToUpper()
-        Write-Output "DOMAIN_USER_CONVERTED: $($env:DOMAIN_USER) -> $domainUser"
-      }
-      
-      $secPassDomain = ConvertTo-SecureString $env:DOMAIN_PASS -AsPlainText -Force
-      $domainCred = New-Object System.Management.Automation.PSCredential(
-                      $domainUser, $secPassDomain)
       
       Remove-Computer -WorkgroupName "WORKGROUP" `
                       -LocalCredential $localCred `
                       -UnjoinDomainCredential $domainCred `
                       -Force -ErrorAction Stop
-      Write-Output "DISJOIN_OK"
+      Write-Output "DISJOIN_OK: Succeeded with .\$env:LOCAL_USER"
+      exit 0
     }
     catch {
-      Write-Output ("DISJOIN_FAILED:" + $_.Exception.Message)
-      exit 1
+      Write-Output "ATTEMPT_1_FAILED: .\$env:LOCAL_USER failed - $($_.Exception.Message)"
+      
+      # Fallback to Administrator with same password
+      try {
+        Write-Output "ATTEMPT_2: Retrying with .\Administrator (same password)"
+        $localCredAdmin = New-Object System.Management.Automation.PSCredential(
+                           ".\Administrator", $secPassLocal)
+        
+        Remove-Computer -WorkgroupName "WORKGROUP" `
+                        -LocalCredential $localCredAdmin `
+                        -UnjoinDomainCredential $domainCred `
+                        -Force -ErrorAction Stop
+        Write-Output "DISJOIN_OK: Succeeded with .\Administrator"
+        exit 0
+      }
+      catch {
+        Write-Output ("DISJOIN_FAILED: Both attempts failed. Last error: " + $_.Exception.Message)
+        exit 1
+      }
     }
   delegate_to: "{{ target_vm_host }}"
   vars:
