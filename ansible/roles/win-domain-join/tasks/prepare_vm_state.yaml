@@ -75,8 +75,8 @@
       +-------------------------------------------------------------+
       |  Step 3 - Disjoin (if needed)
       |    Method        : WinRM
-      |    User          : {{ _domain_netbios }}\{{ resolved_se_admin_username }}
-      |    Password src  : same Delinea password
+      |    User          : .\{{ resolved_se_admin_username }} (LOCAL account)
+      |    Password src  : same Delinea password (local account password)
       +-------------------------------------------------------------+
       |  Step 4 - Rename (if needed)
       |    Method        : WinRM
