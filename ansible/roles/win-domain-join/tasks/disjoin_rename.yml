@@ -6,14 +6,14 @@
 # Steps:
 #   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
 #                                WinRM credential test + VM state probe (SE-Admin)
-#   Step 2 - Disjoin           : WinRM DOMAIN\SE-Admin
-#                                Remove-Computer -LocalCredential (no AD delegation needed)
+#   Step 2 - Disjoin           : WinRM .\SE-Admin (local account)
+#                                Remove-Computer -LocalCredential + -UnjoinDomainCredential
 #                                -> az vm restart -> wait_for WinRM
 #   Step 3 - Rename            : WinRM .\Administrator + SE-Admin password
 #                                Rename-Computer -> az vm restart -> wait_for WinRM -> verify
 #
 # Credential flow (Delinea fetched ONCE at pipeline start, reused throughout):
-#   Disjoin : DOMAIN\SE-Admin  + resolved_se_admin_password
+#   Disjoin : .\SE-Admin (WinRM + LocalCredential) + domain admin (UnjoinDomainCredential)
 #   Rename  : .\Administrator  + resolved_se_admin_password
 #
 # Required vars (set per-VM by main.yaml loop):
@@ -66,9 +66,9 @@
 # ==============================================================================
 # Step 2: Disjoin from domain via WinRM as .\SE-Admin (local account)
 # WinRM connects with LOCAL credentials because the password is for local account.
-# Remove-Computer -LocalCredential authenticates the local operation only —
-# no AD delegation rights required. Stale AD computer object stays in place;
-# the join step reuses or overwrites it.
+# Remove-Computer requires:
+#   -LocalCredential: for local authorization to execute the command
+#   -UnjoinDomainCredential: for domain authorization to remove computer from AD
 # ==============================================================================
 
 - name: "[CREDENTIALS] Step 2 - Disjoin"
@@ -76,13 +76,13 @@
     msg: |
       +-------------------------------------------------------------+
       |  STEP 2 - DISJOIN
-      |   Method      : WinRM + Remove-Computer -LocalCredential
-      |   WinRM user  : .\{{ resolved_se_admin_username }} (LOCAL account)
-      |   Local cred  : .\{{ resolved_se_admin_username }}
-      |   Why local?  : Password from Delinea is for LOCAL account, not domain
-      |   Password src: Delinea (single fetch at pipeline start, reused)
-      |   Password len: {{ resolved_se_admin_password | string | length }} chars
-      |   Connect IP  : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
+      |   Method           : WinRM + Remove-Computer
+      |   WinRM user       : .\{{ resolved_se_admin_username }} (LOCAL account)
+      |   Local cred       : .\{{ resolved_se_admin_username }} (for local authorization)
+      |   Domain unjoin cred: {{ domain_admin_username }} (to remove from AD)
+      |   Password src     : Delinea (local), GitHub Secret (domain)
+      |   Password len     : {{ resolved_se_admin_password | string | length }} chars
+      |   Connect IP       : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
       +-------------------------------------------------------------+
   when:
     - not (dry_run | default(false) | bool)
@@ -95,7 +95,7 @@
     - not (dry_run | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2 - Disjoin via WinRM (.\\SE-Admin local, -LocalCredential)"
+- name: "Step 2 - Disjoin via WinRM (.\\SE-Admin local, with domain unjoin creds)"
   ansible.windows.win_shell: |
     $ErrorActionPreference = "Stop"
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
@@ -104,11 +104,19 @@
       exit 0
     }
     try {
-      $secPass   = ConvertTo-SecureString $env:LOCAL_PASS -AsPlainText -Force
+      # Local credential for local authorization
+      $secPassLocal = ConvertTo-SecureString $env:LOCAL_PASS -AsPlainText -Force
       $localCred = New-Object System.Management.Automation.PSCredential(
-                     ".\$env:LOCAL_USER", $secPass)
+                     ".\$env:LOCAL_USER", $secPassLocal)
+      
+      # Domain credential for AD unjoin authorization
+      $secPassDomain = ConvertTo-SecureString $env:DOMAIN_PASS -AsPlainText -Force
+      $domainCred = New-Object System.Management.Automation.PSCredential(
+                      $env:DOMAIN_USER, $secPassDomain)
+      
       Remove-Computer -WorkgroupName "WORKGROUP" `
                       -LocalCredential $localCred `
+                      -UnjoinDomainCredential $domainCred `
                       -Force -ErrorAction Stop
       Write-Output "DISJOIN_OK"
     }
@@ -130,6 +138,8 @@
   environment:
     LOCAL_USER: "{{ hostvars['localhost']['resolved_se_admin_username'] }}"
     LOCAL_PASS: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+    DOMAIN_USER: "{{ hostvars['localhost']['domain_admin_username'] }}"
+    DOMAIN_PASS: "{{ hostvars['localhost']['domain_admin_value'] }}"
   register: winrm_disjoin_result
   failed_when: false
   # no_log: true

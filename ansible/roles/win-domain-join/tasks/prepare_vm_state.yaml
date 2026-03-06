@@ -76,7 +76,8 @@
       |  Step 3 - Disjoin (if needed)
       |    Method        : WinRM
       |    User          : .\{{ resolved_se_admin_username }} (LOCAL account)
-      |    Password src  : same Delinea password (local account password)
+      |    Local cred    : .\{{ resolved_se_admin_username }} (Delinea password)
+      |    Domain unjoin : domain admin (GitHub Secret - to remove from AD)
       +-------------------------------------------------------------+
       |  Step 4 - Rename (if needed)
       |    Method        : WinRM
