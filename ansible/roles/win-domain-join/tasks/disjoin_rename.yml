@@ -6,14 +6,13 @@
 # Steps:
 #   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
 #                                WinRM credential test + VM state probe (SE-Admin)
-#   Step 2 - Disjoin           : WinRM .\SE-Admin (local account)
-#                                Remove-Computer -LocalCredential + -UnjoinDomainCredential
+#   Step 2 - Disjoin           : microsoft.ad.membership module via WinRM (.\ SE-Admin)
 #                                -> az vm restart -> wait_for WinRM
 #   Step 3 - Rename            : WinRM .\Administrator + SE-Admin password
 #                                Rename-Computer -> az vm restart -> wait_for WinRM -> verify
 #
 # Credential flow (Delinea fetched ONCE at pipeline start, reused throughout):
-#   Disjoin : .\SE-Admin (WinRM + LocalCredential) + domain admin (UnjoinDomainCredential)
+#   Disjoin : .\SE-Admin (WinRM) + domain admin (optional, for AD object removal)
 #   Rename  : .\Administrator  + resolved_se_admin_password
 #
 # Required vars (set per-VM by main.yaml loop):
@@ -64,25 +63,19 @@
       +=============================================================+
 
 # ==============================================================================
-# Step 2: Disjoin from domain via WinRM as .\SE-Admin (local account)
-# WinRM connects with LOCAL credentials because the password is for local account.
-# Remove-Computer requires:
-#   -LocalCredential: for local authorization to execute the command
-#   -UnjoinDomainCredential: for domain authorization to remove computer from AD
+# Step 2: Disjoin from domain via microsoft.ad.membership module
+# WinRM connects with LOCAL credentials (.\SE-Admin).
+# Domain admin credentials are optional (for AD object removal).
 # ==============================================================================
 
 - name: "[CREDENTIALS] Step 2 - Disjoin"
   ansible.builtin.debug:
     msg: |
       +-------------------------------------------------------------+
-      |  STEP 2 - DISJOIN (3 fallback attempts)
-      |   Method           : WinRM + Remove-Computer (PowerShell)
-      |                      then microsoft.ad.membership module
+      |  STEP 2 - DISJOIN
+      |   Method           : microsoft.ad.membership module
       |   WinRM user       : .\{{ resolved_se_admin_username }} (LOCAL account)
-      |   Attempt 1        : .\{{ resolved_se_admin_username }} + domain cred
-      |   Attempt 2        : .\Administrator + domain cred
-      |   Attempt 3        : microsoft.ad.membership with domain cred
-      |   Domain unjoin cred: {{ domain_admin_username }} (to remove from AD)
+      |   Domain unjoin cred: {{ domain_admin_username | default('(optional)') }}
       |   Password src     : Delinea (local), GitHub Secret (domain)
       |   Password len     : {{ resolved_se_admin_password | string | length }} chars
       |   Connect IP       : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
@@ -98,64 +91,12 @@
     - not (dry_run | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2 - Disjoin via WinRM (.\\SE-Admin local, with domain unjoin creds)"
-  ansible.windows.win_shell: |
-    $ErrorActionPreference = "Stop"
-    $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain
-    if (-not $cs.PartOfDomain) {
-      Write-Output "ALREADY_WORKGROUP"
-      exit 0
-    }
-    
-    # Domain credential for AD unjoin authorization
-    # Convert UPN (user@domain.com) to DOMAIN\Username if needed
-    $domainUser = $env:DOMAIN_USER
-    if ($domainUser -match '@') {
-      # Extract username and domain from UPN format
-      $username = ($domainUser -split '@')[0]
-      $domain = ($domainUser -split '@')[1] -replace '\.com$', '' -replace '\.', ''
-      $domainUser = "$domain\$username".ToUpper()
-      Write-Output "DOMAIN_USER_CONVERTED: $($env:DOMAIN_USER) -> $domainUser"
-    }
-    $secPassDomain = ConvertTo-SecureString $env:DOMAIN_PASS -AsPlainText -Force
-    $domainCred = New-Object System.Management.Automation.PSCredential(
-                    $domainUser, $secPassDomain)
-    
-    # Try with SE-Admin first
-    try {
-      Write-Output "ATTEMPT_1: Using .\$env:LOCAL_USER for local credential"
-      $secPassLocal = ConvertTo-SecureString $env:LOCAL_PASS -AsPlainText -Force
-      $localCred = New-Object System.Management.Automation.PSCredential(
-                     ".\$env:LOCAL_USER", $secPassLocal)
-      
-      Remove-Computer -WorkgroupName "WORKGROUP" `
-                      -LocalCredential $localCred `
-                      -UnjoinDomainCredential $domainCred `
-                      -Force -ErrorAction Stop
-      Write-Output "DISJOIN_OK: Succeeded with .\$env:LOCAL_USER"
-      exit 0
-    }
-    catch {
-      Write-Output "ATTEMPT_1_FAILED: .\$env:LOCAL_USER failed - $($_.Exception.Message)"
-      
-      # Fallback to Administrator with same password
-      try {
-        Write-Output "ATTEMPT_2: Retrying with .\Administrator (same password)"
-        $localCredAdmin = New-Object System.Management.Automation.PSCredential(
-                           ".\Administrator", $secPassLocal)
-        
-        Remove-Computer -WorkgroupName "WORKGROUP" `
-                        -LocalCredential $localCredAdmin `
-                        -UnjoinDomainCredential $domainCred `
-                        -Force -ErrorAction Stop
-        Write-Output "DISJOIN_OK: Succeeded with .\Administrator"
-        exit 0
-      }
-      catch {
-        Write-Output ("DISJOIN_FAILED: Both attempts failed. Last error: " + $_.Exception.Message)
-        exit 1
-      }
-    }
+- name: "Step 2 - Disjoin via microsoft.ad.membership module"
+  microsoft.ad.membership:
+    workgroup_name: WORKGROUP
+    state: workgroup
+    domain_admin_user: "{{ hostvars['localhost']['domain_admin_username'] | default(omit) }}"
+    domain_admin_password: "{{ hostvars['localhost']['domain_admin_value'] | default(omit) }}"
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
@@ -167,97 +108,23 @@
     ansible_winrm_read_timeout: 70
     ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
     ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-  environment:
-    LOCAL_USER: "{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-    LOCAL_PASS: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-    DOMAIN_USER: "{{ hostvars['localhost']['domain_admin_username'] }}"
-    DOMAIN_PASS: "{{ hostvars['localhost']['domain_admin_value'] }}"
-  register: winrm_disjoin_result
-  failed_when: false
+  register: disjoin_result
   # no_log: true
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
 
-- name: "Step 2 - Debug: disjoin output (PowerShell attempts)"
+- name: "Step 2 - Debug: disjoin result"
   ansible.builtin.debug:
     msg: |
       Disjoin result for {{ target_vm_name }}:
-        output : {{ winrm_disjoin_result.stdout | default('(empty)') | trim }}
-        stderr : {{ winrm_disjoin_result.stderr | default('') | trim }}
+        changed: {{ disjoin_result.changed | default(false) }}
+        reboot_required: {{ disjoin_result.reboot_required | default(false) }}
+        msg: {{ disjoin_result.msg | default('') }}
   when:
     - not (dry_run | default(false) | bool)
-    - winrm_disjoin_result is defined
-    - not (winrm_disjoin_result.skipped | default(false) | bool)
-
-- name: "Step 2 - ATTEMPT 3: Fallback to Ansible microsoft.ad.membership module"
-  microsoft.ad.membership:
-    workgroup_name: WORKGROUP
-    state: workgroup
-    domain_admin_user: "{{ hostvars['localhost']['domain_admin_username'] }}"
-    domain_admin_password: "{{ hostvars['localhost']['domain_admin_value'] }}"
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 60
-    ansible_winrm_read_timeout: 70
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-  register: ansible_module_disjoin_result
-  failed_when: false
-  when:
-    - not (dry_run | default(false) | bool)
-    - winrm_disjoin_result is defined
-    - not (winrm_disjoin_result.skipped | default(false) | bool)
-    - >-
-        (winrm_disjoin_result.rc | default(0) | int != 0)
-        or ('DISJOIN_FAILED:' in (winrm_disjoin_result.stdout | default('')))
-
-- name: "Step 2 - Debug: Ansible module disjoin result"
-  ansible.builtin.debug:
-    msg: |
-      Ansible module disjoin result:
-        changed: {{ ansible_module_disjoin_result.changed | default(false) }}
-        reboot_required: {{ ansible_module_disjoin_result.reboot_required | default(false) }}
-        msg: {{ ansible_module_disjoin_result.msg | default('') }}
-  when:
-    - not (dry_run | default(false) | bool)
-    - ansible_module_disjoin_result is defined
-    - not (ansible_module_disjoin_result.skipped | default(false) | bool)
-
-- name: "Step 2 - Fail if all disjoin attempts failed"
-  ansible.builtin.fail:
-    msg: |
-      All disjoin attempts failed for {{ item.name }} ({{ target_vm_name }}).
-      
-      PowerShell attempts output:
-      {{ winrm_disjoin_result.stdout | default('') | trim }}
-      
-      Ansible module result:
-      {{ ansible_module_disjoin_result.msg | default('Not executed') }}
-      ---
-      Possible causes:
-      - Incorrect local SE-Admin password (verify Delinea secret)
-      - Domain admin credentials invalid (verify GitHub Secret)
-      - Insufficient permissions for domain unjoin operation
-  when:
-    - not (dry_run | default(false) | bool)
-    - winrm_disjoin_result is defined
-    - not (winrm_disjoin_result.skipped | default(false) | bool)
-    - >-
-        (
-          (winrm_disjoin_result.rc | default(0) | int != 0)
-          or ('DISJOIN_FAILED:' in (winrm_disjoin_result.stdout | default('')))
-        )
-        and
-        (
-          ansible_module_disjoin_result.failed | default(true)
-          or not ansible_module_disjoin_result.changed | default(false)
-        )
+    - disjoin_result is defined
+    - not (disjoin_result.skipped | default(false) | bool)
 
 - name: "Step 2 - Reboot VM via az vm restart after disjoin"
   ansible.builtin.shell: >-
@@ -270,24 +137,9 @@
   failed_when: az_disjoin_reboot.rc | default(0) | int != 0
   when:
     - not (dry_run | default(false) | bool)
-    - >-
-        (
-          winrm_disjoin_result is defined
-          and not (winrm_disjoin_result.skipped | default(false) | bool)
-          and (
-            ('DISJOIN_OK' in (winrm_disjoin_result.stdout | default('')))
-            or ('ALREADY_WORKGROUP' in (winrm_disjoin_result.stdout | default('')))
-          )
-        )
-        or
-        (
-          ansible_module_disjoin_result is defined
-          and not (ansible_module_disjoin_result.skipped | default(false) | bool)
-          and (
-            ansible_module_disjoin_result.changed | default(false)
-            or ansible_module_disjoin_result.reboot_required | default(false)
-          )
-        )
+    - disjoin_result is defined
+    - not (disjoin_result.skipped | default(false) | bool)
+    - disjoin_result.changed | default(false) or disjoin_result.reboot_required | default(false)
 
 - name: "Step 2 - Wait for WinRM to come back after disjoin reboot"
   ansible.builtin.wait_for:
@@ -310,9 +162,9 @@
       workgroup_name: 'WORKGROUP'
   when:
     - not (dry_run | default(false) | bool)
-    - winrm_disjoin_result is defined
-    - not (winrm_disjoin_result.skipped | default(false) | bool)
-    - "'DISJOIN_OK' in (winrm_disjoin_result.stdout | default(''))"
+    - disjoin_result is defined
+    - not (disjoin_result.skipped | default(false) | bool)
+    - disjoin_result.changed | default(false)
 
 # ==============================================================================
 # Step 3: Rename hostname via WinRM as .\Administrator + SE-Admin password
@@ -497,7 +349,7 @@
       [DRY RUN] Would execute for {{ item.name }}:
         Step 1: probe WinRM port; if closed -> az vm extension set (async)
                 WinRM test as {{ _domain_netbios | default('DOMAIN') }}\{{ resolved_se_admin_username | default('SE-Admin') }}
-        Step 2: WinRM Remove-Computer -LocalCredential .\{{ resolved_se_admin_username | default('SE-Admin') }}
+        Step 2: microsoft.ad.membership module (WinRM .\{{ resolved_se_admin_username | default('SE-Admin') }})
                 -> az vm restart -> wait WinRM
       {% if not (skip_rename | default(false) | bool) %}
         Step 3: WinRM Rename-Computer as .\Administrator
