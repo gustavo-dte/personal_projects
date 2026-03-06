@@ -131,7 +131,7 @@
     LOCAL_PASS: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: winrm_disjoin_result
   failed_when: false
-  no_log: true
+  # no_log: true
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
