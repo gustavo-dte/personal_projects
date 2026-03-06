@@ -252,7 +252,7 @@
   delay: 15
   until: winrm_probe_result is succeeded
   failed_when: false
-  no_log: true
+  # no_log: true  # Temporarily disabled for GHA debugging
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
