@@ -59,8 +59,8 @@
     - not (_needs_join | bool)
 
 # ==============================================================================
-# Step 2: Domain join via WinRM as .\SE-Admin + SE-Admin password
-# Add-Computer uses cpoe-automation + DOMAIN_ADMIN_PASSWORD for the AD operation.
+# Step 2: Domain join via WinRM as cpoe-automation (domain admin)
+# WinRM connection and Add-Computer both use domain admin credentials.
 # Reboot via az vm restart, then wait for WinRM.
 # ==============================================================================
 
@@ -130,7 +130,7 @@
         OU_PATH: "{{ domain_ou_path | default('') }}"
       register: winrm_join_result
       failed_when: false
-      no_log: true
+      # no_log: true
 
     - name: "Step 2 - Debug join result"
       ansible.builtin.debug:
@@ -204,7 +204,7 @@
       delay: 20
       until: winrm_verify_result is succeeded
       failed_when: false
-      no_log: true
+      # no_log: true
 
     - name: "Step 3 - Display final VM state"
       ansible.builtin.debug:
