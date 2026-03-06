@@ -29,21 +29,10 @@
 
 - name: "Credentials - Resolve SE-Admin for {{ target_vm_name }}"
   ansible.builtin.set_fact:
-    resolved_se_admin_username: >-
-      {{ se_admin_username
-         if (se_admin_username is defined and se_admin_username | string | length > 0)
-         else 'SE-Admin' }}
-    resolved_se_admin_password: >-
-      {{ se_admin_password
-         if (se_admin_password is defined and se_admin_password | string | length > 0)
-         else '' }}
-    _domain_netbios: >-
-      {{ manifest_data.domainNameSetup.domain
-         | default('')
-         | split('.')
-         | first
-         | upper }}
-  no_log: true
+    resolved_se_admin_username: "{{ se_admin_username if (se_admin_username is defined and se_admin_username | string | length > 0) else 'SE-Admin' }}"
+    resolved_se_admin_password: "{{ se_admin_password if (se_admin_password is defined and se_admin_password | string | length > 0) else '' }}"
+    _domain_netbios: "{{ (manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper) if manifest_data.domainNameSetup.domain is defined else 'DTENET' }}"
+  no_log: false  # Temporarily disable for debugging - username is not sensitive
 
 - name: "Credentials - Fail if SE-Admin password missing for {{ target_vm_name }}"
   ansible.builtin.assert:
