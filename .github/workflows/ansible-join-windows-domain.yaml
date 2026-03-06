@@ -143,9 +143,9 @@ jobs:
           export MANIFEST_INPUT="${{ inputs.manifest }}"
           export DRY_RUN_INPUT="${{ inputs.dry_run }}"
           export FORCE_REJOIN_INPUT="${{ inputs.force_rejoin }}"
-          export DOMAIN_ADMIN_PASSWORD_INPUT="${{ secrets.DOMAIN_ADMIN_PASSWORD }}"
+          export DOMAIN_ADMIN_VALUE_INPUT="${{ secrets.DOMAIN_ADMIN_PASSWORD }}"
           export DOMAIN_OU_PATH_INPUT="${{ secrets.DOMAIN_OU_PATH }}"
-          python3 -c "import json, os, pathlib; to_bool=lambda v: str(v).strip().lower() in ('true','1','yes'); extra_vars={ 'manifest': os.environ['MANIFEST_INPUT'], 'dry_run': to_bool(os.environ['DRY_RUN_INPUT']), 'force_rejoin': to_bool(os.environ['FORCE_REJOIN_INPUT']), 'domain_admin_password': os.environ['DOMAIN_ADMIN_PASSWORD_INPUT'], 'domain_ou_path': os.environ['DOMAIN_OU_PATH_INPUT'] }; pathlib.Path('ansible_extra_vars.json').write_text(json.dumps(extra_vars), encoding='utf-8')"
+          python3 -c "import json, os, pathlib; to_bool=lambda v: str(v).strip().lower() in ('true','1','yes'); extra_vars={ 'manifest': os.environ['MANIFEST_INPUT'], 'dry_run': to_bool(os.environ['DRY_RUN_INPUT']), 'force_rejoin': to_bool(os.environ['FORCE_REJOIN_INPUT']), 'domain_admin_value': os.environ['DOMAIN_ADMIN_VALUE_INPUT'], 'domain_ou_path': os.environ['DOMAIN_OU_PATH_INPUT'] }; pathlib.Path('ansible_extra_vars.json').write_text(json.dumps(extra_vars), encoding='utf-8')"
           chmod 600 ansible_extra_vars.json
           python3 -m json.tool ansible_extra_vars.json > /dev/null && echo "[OK] JSON is valid" || (echo "[FAIL] JSON validation failed" && exit 1)
 
