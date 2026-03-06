@@ -329,7 +329,7 @@
   ansible.windows.win_shell: |
     $hostname = $env:COMPUTERNAME
     $domain = (Get-WmiObject Win32_ComputerSystem).Domain
-    Write-Output "TEST_OK:{{ se_admin_username }}:$hostname:$domain"
+    Write-Output "TEST_OK:{{ se_admin_username }}:${hostname}:${domain}"
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
@@ -353,7 +353,7 @@
   ansible.windows.win_shell: |
     $hostname = $env:COMPUTERNAME
     $domain = (Get-WmiObject Win32_ComputerSystem).Domain
-    Write-Output "TEST_OK:Administrator:$hostname:$domain"
+    Write-Output "TEST_OK:Administrator:${hostname}:${domain}"
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
@@ -367,6 +367,7 @@
     ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: admin_test_result
   failed_when: false
+  ignore_unreachable: true
   no_log: true
   when:
     - not (dry_run | default(false) | bool)
