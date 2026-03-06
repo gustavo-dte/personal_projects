@@ -75,10 +75,13 @@
   ansible.builtin.debug:
     msg: |
       +-------------------------------------------------------------+
-      |  STEP 2 - DISJOIN
-      |   Method           : WinRM + Remove-Computer
+      |  STEP 2 - DISJOIN (3 fallback attempts)
+      |   Method           : WinRM + Remove-Computer (PowerShell)
+      |                      then Ansible win_domain_membership module
       |   WinRM user       : .\{{ resolved_se_admin_username }} (LOCAL account)
-      |   Local cred       : .\{{ resolved_se_admin_username }} (for local authorization)
+      |   Attempt 1        : .\{{ resolved_se_admin_username }} + domain cred
+      |   Attempt 2        : .\Administrator + domain cred
+      |   Attempt 3        : Ansible module with domain cred
       |   Domain unjoin cred: {{ domain_admin_username }} (to remove from AD)
       |   Password src     : Delinea (local), GitHub Secret (domain)
       |   Password len     : {{ resolved_se_admin_password | string | length }} chars
@@ -176,7 +179,7 @@
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
 
-- name: "Step 2 - Debug: disjoin output"
+- name: "Step 2 - Debug: disjoin output (PowerShell attempts)"
   ansible.builtin.debug:
     msg: |
       Disjoin result for {{ target_vm_name }}:
@@ -187,17 +190,25 @@
     - winrm_disjoin_result is defined
     - not (winrm_disjoin_result.skipped | default(false) | bool)
 
-- name: "Step 2 - Fail if disjoin failed"
-  ansible.builtin.fail:
-    msg: |
-      Disjoin failed for {{ item.name }} ({{ target_vm_name }}).
-      Output : {{ winrm_disjoin_result.stdout | default('') | trim }}
-      stderr : {{ winrm_disjoin_result.stderr | default('') | truncate(300) }}
-      ---
-      Possible causes:
-      - Incorrect local SE-Admin password (verify Delinea secret)
-      - Domain admin credentials invalid (verify GitHub Secret)
-      - SE-Admin is already a local administrator on domain-joined VMs
+- name: "Step 2 - ATTEMPT 3: Fallback to Ansible win_domain_membership module"
+  ansible.windows.win_domain_membership:
+    workgroup_name: WORKGROUP
+    state: workgroup
+    domain_admin_user: "{{ hostvars['localhost']['domain_admin_username'] }}"
+    domain_admin_password: "{{ hostvars['localhost']['domain_admin_value'] }}"
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+  register: ansible_module_disjoin_result
+  failed_when: false
   when:
     - not (dry_run | default(false) | bool)
     - winrm_disjoin_result is defined
@@ -205,6 +216,48 @@
     - >-
         (winrm_disjoin_result.rc | default(0) | int != 0)
         or ('DISJOIN_FAILED:' in (winrm_disjoin_result.stdout | default('')))
+
+- name: "Step 2 - Debug: Ansible module disjoin result"
+  ansible.builtin.debug:
+    msg: |
+      Ansible module disjoin result:
+        changed: {{ ansible_module_disjoin_result.changed | default(false) }}
+        reboot_required: {{ ansible_module_disjoin_result.reboot_required | default(false) }}
+        msg: {{ ansible_module_disjoin_result.msg | default('') }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - ansible_module_disjoin_result is defined
+    - not (ansible_module_disjoin_result.skipped | default(false) | bool)
+
+- name: "Step 2 - Fail if all disjoin attempts failed"
+  ansible.builtin.fail:
+    msg: |
+      All disjoin attempts failed for {{ item.name }} ({{ target_vm_name }}).
+      
+      PowerShell attempts output:
+      {{ winrm_disjoin_result.stdout | default('') | trim }}
+      
+      Ansible module result:
+      {{ ansible_module_disjoin_result.msg | default('Not executed') }}
+      ---
+      Possible causes:
+      - Incorrect local SE-Admin password (verify Delinea secret)
+      - Domain admin credentials invalid (verify GitHub Secret)
+      - Insufficient permissions for domain unjoin operation
+  when:
+    - not (dry_run | default(false) | bool)
+    - winrm_disjoin_result is defined
+    - not (winrm_disjoin_result.skipped | default(false) | bool)
+    - >-
+        (
+          (winrm_disjoin_result.rc | default(0) | int != 0)
+          or ('DISJOIN_FAILED:' in (winrm_disjoin_result.stdout | default('')))
+        )
+        and
+        (
+          ansible_module_disjoin_result.failed | default(true)
+          or not ansible_module_disjoin_result.changed | default(false)
+        )
 
 - name: "Step 2 - Reboot VM via az vm restart after disjoin"
   ansible.builtin.shell: >-
@@ -217,11 +270,24 @@
   failed_when: az_disjoin_reboot.rc | default(0) | int != 0
   when:
     - not (dry_run | default(false) | bool)
-    - winrm_disjoin_result is defined
-    - not (winrm_disjoin_result.skipped | default(false) | bool)
     - >-
-        ('DISJOIN_OK' in (winrm_disjoin_result.stdout | default('')))
-        or ('ALREADY_WORKGROUP' in (winrm_disjoin_result.stdout | default('')))
+        (
+          winrm_disjoin_result is defined
+          and not (winrm_disjoin_result.skipped | default(false) | bool)
+          and (
+            ('DISJOIN_OK' in (winrm_disjoin_result.stdout | default('')))
+            or ('ALREADY_WORKGROUP' in (winrm_disjoin_result.stdout | default('')))
+          )
+        )
+        or
+        (
+          ansible_module_disjoin_result is defined
+          and not (ansible_module_disjoin_result.skipped | default(false) | bool)
+          and (
+            ansible_module_disjoin_result.changed | default(false)
+            or ansible_module_disjoin_result.reboot_required | default(false)
+          )
+        )
 
 - name: "Step 2 - Wait for WinRM to come back after disjoin reboot"
   ansible.builtin.wait_for:
