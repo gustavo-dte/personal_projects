@@ -124,11 +124,11 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ _domain_netbios }}\\{{ resolved_se_admin_username }}"
-    ansible_password: "{{ resolved_se_admin_password }}"
+    ansible_user: "{{ hostvars['localhost']['_domain_netbios'] }}\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   environment:
-    LOCAL_USER: "{{ resolved_se_admin_username }}"
-    LOCAL_PASS: "{{ resolved_se_admin_password }}"
+    LOCAL_USER: "{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    LOCAL_PASS: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: winrm_disjoin_result
   failed_when: false
   no_log: true
@@ -261,7 +261,7 @@
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
         ansible_user: ".\\Administrator"
-        ansible_password: "{{ resolved_se_admin_password }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: winrm_rename_result
       failed_when: false
       no_log: true
@@ -335,7 +335,7 @@
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
         ansible_user: ".\\Administrator"
-        ansible_password: "{{ resolved_se_admin_password }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: hostname_verify_result
       retries: 5
       delay: 20
