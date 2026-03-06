@@ -81,11 +81,11 @@
       +-------------------------------------------------------------+
       |  Step 4 - Rename (if needed)
       |    Method        : WinRM
-      |    User          : .\Administrator
+      |    User          : .\{{ resolved_se_admin_username }}
       |    Password src  : same Delinea password
       +-------------------------------------------------------------+
       |  Step 5 - Domain join
-      |    WinRM user    : .\Administrator
+      |    WinRM user    : .\{{ resolved_se_admin_username }}
       |    Password src  : same Delinea password
       |    Join creds    : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
       |    Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)

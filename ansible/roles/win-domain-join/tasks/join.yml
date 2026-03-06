@@ -6,14 +6,14 @@
 # Steps:
 #   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
 #                                WinRM credential test + VM state probe (SE-Admin)
-#   Step 2 — Domain join       : WinRM .\Administrator + SE-Admin password
+#   Step 2 — Domain join       : WinRM .\SE-Admin + SE-Admin password
 #                                Add-Computer with cpoe-automation domain creds
 #                                -> az vm restart -> wait_for WinRM
-#   Step 3 — Verify            : WinRM .\Administrator + SE-Admin password
+#   Step 3 — Verify            : WinRM .\SE-Admin + SE-Admin password
 #                                confirms PartOfDomain=true
 #
 # Credential flow (Delinea fetched ONCE at pipeline start, reused throughout):
-#   WinRM transport : .\Administrator + resolved_se_admin_password (Delinea)
+#   WinRM transport : .\SE-Admin + resolved_se_admin_password (Delinea)
 #   Domain join op  : cpoe-automation (DOMAIN_ADMIN_PASSWORD GitHub Secret)
 
 # ==============================================================================
@@ -59,7 +59,7 @@
     - not (_needs_join | bool)
 
 # ==============================================================================
-# Step 2: Domain join via WinRM as .\Administrator + SE-Admin password
+# Step 2: Domain join via WinRM as .\SE-Admin + SE-Admin password
 # Add-Computer uses cpoe-automation + DOMAIN_ADMIN_PASSWORD for the AD operation.
 # Reboot via az vm restart, then wait for WinRM.
 # ==============================================================================
@@ -74,7 +74,7 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
-          |   WinRM user    : .\Administrator
+          |   WinRM user    : .\{{ resolved_se_admin_username }}
           |   WinRM pass src: Delinea SE-Admin password (single fetch, reused)
           |   WinRM pass len: {{ resolved_se_admin_password | string | length }} chars
           |   Connect IP    : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
@@ -84,7 +84,7 @@
           |   Target OU     : {{ domain_ou_path | default('(default)') }}
           +-------------------------------------------------------------+
 
-    - name: "Step 2 - Join domain via WinRM (.\\.Administrator)"
+    - name: "Step 2 - Join domain via WinRM (.\\{{ resolved_se_admin_username }})"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Domain, PartOfDomain
@@ -121,7 +121,7 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
-        ansible_user: ".\\Administrator"
+        ansible_user: ".\\{{ resolved_se_admin_username }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
@@ -197,7 +197,7 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
-        ansible_user: ".\\Administrator"
+        ansible_user: ".\\{{ resolved_se_admin_username }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: winrm_verify_result
       retries: 3
