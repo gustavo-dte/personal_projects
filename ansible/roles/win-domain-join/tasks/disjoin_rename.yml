@@ -38,13 +38,13 @@
     az vm user update \
       --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
       --name "{{ azure_vm_name | default(target_vm_name) }}" \
-      --username "{{ resolved_se_admin_username }}" \
-      --password "{{ resolved_se_admin_password }}" \
+      --username "{{ hostvars['localhost']['resolved_se_admin_username'] }}" \
+      --password "{{ hostvars['localhost']['resolved_se_admin_password'] }}" \
       --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
   delegate_to: localhost
   register: password_sync_result
   failed_when: password_sync_result.rc != 0
-  no_log: true
+  no_log: false
   when:
     - not (dry_run | default(false) | bool)
     - sync_vm_password | default(true) | bool
@@ -57,7 +57,7 @@
       +=============================================================+
       {% if not (password_sync_result is skipped) %}
       |  VM               : {{ target_vm_name }}
-      |  User             : {{ resolved_se_admin_username }}
+      |  User             : {{ hostvars['localhost']['resolved_se_admin_username'] }}
       |  Status           : VM password synced to match Delinea
       |  Purpose          : Prevent 'credentials rejected' errors
       |                     after Delinea password rotation
