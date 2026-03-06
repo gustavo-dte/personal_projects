@@ -320,9 +320,34 @@
     - disjoin_result.changed | default(false)
 
 # ==============================================================================
-# Step 2.5: Test both Administrator and SE-Admin credentials in WORKGROUP
+# Step 2.5: Test both SE-Admin and Administrator credentials in WORKGROUP
 # Purpose: Validate which credentials work after disjoin
+# Note: Test SE-Admin FIRST to ensure workflow continues even if Administrator fails
 # ==============================================================================
+
+- name: "Step 2.5 - Test .\\{{ resolved_se_admin_username }} credentials (expected to SUCCEED)"
+  ansible.windows.win_shell: |
+    $hostname = $env:COMPUTERNAME
+    $domain = (Get-WmiObject Win32_ComputerSystem).Domain
+    Write-Output "TEST_OK:{{ se_admin_username }}:$hostname:$domain"
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+  register: seadmin_test_result
+  failed_when: false
+  # no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - not (current_domain_status.part_of_domain | default(false) | bool)
 
 - name: "Step 2.5 - Test .\\Administrator credentials (expected to FAIL in WORKGROUP)"
   ansible.windows.win_shell: |
@@ -348,30 +373,6 @@
     - not (skip_hostname_setup | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2.5 - Test .\\{{ resolved_se_admin_username }} credentials (expected to SUCCEED)"
-  ansible.windows.win_shell: |
-    $hostname = $env:COMPUTERNAME
-    $domain = (Get-WmiObject Win32_ComputerSystem).Domain
-    Write-Output "TEST_OK:{{ se_admin_username }}:$hostname:$domain"
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 60
-    ansible_winrm_read_timeout: 70
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-  register: seadmin_test_result
-  failed_when: false
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (current_domain_status.part_of_domain | default(false) | bool)
-
 - name: "Step 2.5 - Display credential test results in WORKGROUP"
   ansible.builtin.debug:
     msg: |
@@ -382,16 +383,16 @@
       |  IP               : {{ target_vm_host }}
       |  Domain Status    : {{ current_domain_status.domain | default('WORKGROUP') }}
       +-------------------------------------------------------------+
-      |  Test 1: .\Administrator + SE-Admin password
+      |  Test 1: .\{{ se_admin_username }} + SE-Admin password
+      |    Result        : {{ 'PASSED' if (seadmin_test_result.rc | default(1) == 0) else 'FAILED' }}
+      |    RC            : {{ seadmin_test_result.rc | default('N/A') }}
+      |    Output        : {{ seadmin_test_result.stdout | default('N/A') | trim }}
+      +-------------------------------------------------------------+
+      |  Test 2: .\Administrator + SE-Admin password
       |    Result        : {{ 'FAILED' if (admin_test_result.rc | default(1) != 0) else 'PASSED' }}
       |    RC            : {{ admin_test_result.rc | default('N/A') }}
       |    Output        : {{ admin_test_result.stdout | default('N/A') | trim }}
       |    Error         : {{ 'credential rejected' if (admin_test_result.rc | default(1) != 0) else 'none' }}
-      +-------------------------------------------------------------+
-      |  Test 2: .\{{ se_admin_username }} + SE-Admin password
-      |    Result        : {{ 'PASSED' if (seadmin_test_result.rc | default(1) == 0) else 'FAILED' }}
-      |    RC            : {{ seadmin_test_result.rc | default('N/A') }}
-      |    Output        : {{ seadmin_test_result.stdout | default('N/A') | trim }}
       +-------------------------------------------------------------+
       |  CONCLUSION: Use .\{{ se_admin_username }} for all operations
       +=============================================================+
