@@ -138,6 +138,13 @@
 # Domain admin credentials are optional (for AD object removal).
 # ==============================================================================
 
+- name: "Step 2 - Check if domain admin credentials are available"
+  ansible.builtin.set_fact:
+    _has_domain_admin_creds: "{{ (hostvars['localhost']['domain_admin_username'] is defined and hostvars['localhost']['domain_admin_username'] | length > 0 and hostvars['localhost']['domain_admin_value'] is defined and hostvars['localhost']['domain_admin_value'] | length > 0) }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - current_domain_status.part_of_domain | default(false) | bool
+
 - name: "[CREDENTIALS] Step 2 - Disjoin"
   ansible.builtin.debug:
     msg: |
@@ -145,7 +152,8 @@
       |  STEP 2 - DISJOIN
       |   Method           : microsoft.ad.membership module
       |   WinRM user       : .\{{ resolved_se_admin_username }} (LOCAL account)
-      |   Domain unjoin cred: {{ domain_admin_username | default('(optional)') }}
+      |   Domain unjoin cred: {{ domain_admin_username | default('(not provided - will not remove from AD)') }}
+      |   Domain creds     : {{ 'YES - will remove from AD' if _has_domain_admin_creds | default(false) else 'NO - AD object will remain (clean up manually)' }}
       |   Password src     : Delinea (local), GitHub Secret (domain)
       |   Password len     : {{ resolved_se_admin_password | string | length }} chars
       |   Connect IP       : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
@@ -161,12 +169,12 @@
     - not (dry_run | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2 - Disjoin via microsoft.ad.membership module"
+- name: "Step 2 - Disjoin via microsoft.ad.membership module (WITH domain admin creds)"
   microsoft.ad.membership:
     workgroup_name: WORKGROUP
     state: workgroup
-    domain_admin_user: "{{ hostvars['localhost']['domain_admin_username'] | default(omit) }}"
-    domain_admin_password: "{{ hostvars['localhost']['domain_admin_value'] | default(omit) }}"
+    domain_admin_user: "{{ hostvars['localhost']['domain_admin_username'] }}"
+    domain_admin_password: "{{ hostvars['localhost']['domain_admin_value'] }}"
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
@@ -183,6 +191,41 @@
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
+    - _has_domain_admin_creds | default(false) | bool
+
+- name: "Step 2 - Disjoin via microsoft.ad.membership module (WITHOUT domain admin creds)"
+  microsoft.ad.membership:
+    workgroup_name: WORKGROUP
+    state: workgroup
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+  register: disjoin_result
+  # no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - current_domain_status.part_of_domain | default(false) | bool
+    - not (_has_domain_admin_creds | default(false) | bool)
+
+- name: "Step 2 - Warning: AD object will remain (no domain admin creds provided)"
+  ansible.builtin.debug:
+    msg: |
+      ⚠️  WARNING: Domain admin credentials were not provided.
+      The VM has been disjoined locally, but the computer object remains in Active Directory.
+      Manual cleanup required: Remove '{{ target_vm_name }}' from AD.
+  when:
+    - not (dry_run | default(false) | bool)
+    - disjoin_result is defined
+    - not (disjoin_result.skipped | default(false) | bool)
+    - not (_has_domain_admin_creds | default(false) | bool)
 
 - name: "Step 2 - Debug: disjoin result"
   ansible.builtin.debug:
