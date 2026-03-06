@@ -77,11 +77,11 @@
       +-------------------------------------------------------------+
       |  STEP 2 - DISJOIN (3 fallback attempts)
       |   Method           : WinRM + Remove-Computer (PowerShell)
-      |                      then Ansible win_domain_membership module
+      |                      then microsoft.ad.membership module
       |   WinRM user       : .\{{ resolved_se_admin_username }} (LOCAL account)
       |   Attempt 1        : .\{{ resolved_se_admin_username }} + domain cred
       |   Attempt 2        : .\Administrator + domain cred
-      |   Attempt 3        : Ansible module with domain cred
+      |   Attempt 3        : microsoft.ad.membership with domain cred
       |   Domain unjoin cred: {{ domain_admin_username }} (to remove from AD)
       |   Password src     : Delinea (local), GitHub Secret (domain)
       |   Password len     : {{ resolved_se_admin_password | string | length }} chars
@@ -190,8 +190,8 @@
     - winrm_disjoin_result is defined
     - not (winrm_disjoin_result.skipped | default(false) | bool)
 
-- name: "Step 2 - ATTEMPT 3: Fallback to Ansible win_domain_membership module"
-  ansible.windows.win_domain_membership:
+- name: "Step 2 - ATTEMPT 3: Fallback to Ansible microsoft.ad.membership module"
+  microsoft.ad.membership:
     workgroup_name: WORKGROUP
     state: workgroup
     domain_admin_user: "{{ hostvars['localhost']['domain_admin_username'] }}"
