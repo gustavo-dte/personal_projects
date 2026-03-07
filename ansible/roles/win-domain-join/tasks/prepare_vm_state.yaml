@@ -223,7 +223,56 @@
     - not (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
-# Step 2: Test WinRM credentials + read VM state as DOMAIN\SE-Admin
+# Step 1.5: Sync VM local account password to match Delinea (rotation protection)
+# az vm user update writes the password directly via Azure VM Agent (no WinRM needed).
+# This guarantees the local se-admin password on the VM matches Delinea before
+# any WinRM connection is attempted, preventing auth failures after rotation.
+# ------------------------------------------------------------------------------
+
+- name: "Step 1.5 - Sync .\\{{ resolved_se_admin_username }} password via az vm user update"
+  ansible.builtin.shell: >
+    az vm user update
+    --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
+    --name "{{ target_vm_name }}"
+    --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
+    --username "{{ resolved_se_admin_username }}"
+    --password "{{ resolved_se_admin_password }}"
+    2>&1
+  delegate_to: localhost
+  register: az_user_update_result
+  failed_when: false
+  changed_when: az_user_update_result.rc | default(0) | int == 0
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - resolved_se_admin_password | length > 0
+
+- name: "Step 1.5 - Debug: password sync result"
+  ansible.builtin.debug:
+    msg: |
+      az vm user update for {{ target_vm_name }}:
+        rc     : {{ az_user_update_result.rc | default('N/A') }}
+        status : {{ 'SUCCESS - VM password synced to Delinea' if (az_user_update_result.rc | default(1) | int == 0) else 'FAILED - will attempt WinRM anyway' }}
+        stderr : {{ az_user_update_result.stderr | default('') | trim | truncate(200) }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - az_user_update_result is defined
+    - not (az_user_update_result.skipped | default(false) | bool)
+
+- name: "Step 1.5 - Wait 10s for password change to propagate before WinRM test"
+  ansible.builtin.pause:
+    seconds: 10
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - az_user_update_result is defined
+    - not (az_user_update_result.skipped | default(false) | bool)
+    - az_user_update_result.rc | default(1) | int == 0
+
+# ------------------------------------------------------------------------------
+# Step 2: Test WinRM credentials + read VM state as .\SE-Admin
 # Combines credential test and state probe in a single WinRM call.
 # ------------------------------------------------------------------------------
 
