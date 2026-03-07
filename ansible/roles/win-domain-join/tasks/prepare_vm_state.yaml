@@ -261,9 +261,9 @@
     - az_user_update_result is defined
     - not (az_user_update_result.skipped | default(false) | bool)
 
-- name: "Step 1.5 - Wait 10s for password change to propagate before WinRM test"
+- name: "Step 1.5 - Wait 30s for VMAccess extension + password change to fully apply"
   ansible.builtin.pause:
-    seconds: 10
+    seconds: 30
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -276,7 +276,105 @@
 # Combines credential test and state probe in a single WinRM call.
 # ------------------------------------------------------------------------------
 
-- name: "Step 2 - Test WinRM + read VM state (.\\SE-Admin local)"
+# Try NTLM first (preferred), fall back to Basic if NTLM is rejected.
+# Basic auth requires AllowUnencrypted=true on the WinRM listener (set by our
+# extension / configure_winrm_firewall.py), so it should be available.
+- name: "Step 2a - Test WinRM via NTLM (.\\{{ resolved_se_admin_username }})"
+  ansible.windows.win_shell: echo ntlm_ok
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 30
+    ansible_user: ".\\{{ resolved_se_admin_username }}"
+    ansible_password: "{{ resolved_se_admin_password }}"
+  register: winrm_ntlm_probe
+  failed_when: false
+  ignore_unreachable: true
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+
+- name: "Step 2a - Debug: NTLM probe result"
+  ansible.builtin.debug:
+    msg: "NTLM probe: rc={{ winrm_ntlm_probe.rc | default('N/A') }} unreachable={{ winrm_ntlm_probe.unreachable | default(false) }} stdout={{ winrm_ntlm_probe.stdout | default('(empty)') | trim }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_ntlm_probe is defined
+
+- name: "Step 2b - Fallback: Test WinRM via Basic auth (.\\{{ resolved_se_admin_username }})"
+  ansible.windows.win_shell: echo basic_ok
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: basic
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 30
+    ansible_user: ".\\{{ resolved_se_admin_username }}"
+    ansible_password: "{{ resolved_se_admin_password }}"
+  register: winrm_basic_probe
+  failed_when: false
+  ignore_unreachable: true
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_ntlm_probe is defined
+    - (winrm_ntlm_probe.rc | default(1) | int != 0) or (winrm_ntlm_probe.unreachable | default(false) | bool)
+
+- name: "Step 2b - Debug: Basic probe result"
+  ansible.builtin.debug:
+    msg: "Basic probe: rc={{ winrm_basic_probe.rc | default('N/A') }} unreachable={{ winrm_basic_probe.unreachable | default(false) }} stdout={{ winrm_basic_probe.stdout | default('(empty)') | trim }}"
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_basic_probe is defined
+    - not (winrm_basic_probe.skipped | default(false) | bool)
+
+- name: "Step 2 - Set effective WinRM transport (ntlm if it worked, else basic)"
+  ansible.builtin.set_fact:
+    _effective_winrm_transport: >-
+      {{ 'ntlm'
+         if (winrm_ntlm_probe is defined
+             and winrm_ntlm_probe.rc | default(1) | int == 0
+             and not (winrm_ntlm_probe.unreachable | default(false) | bool))
+         else 'basic' }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+
+- name: "Step 2 - Fail if both NTLM and Basic auth rejected"
+  ansible.builtin.fail:
+    msg: |
+      Both NTLM and Basic WinRM authentication failed for {{ target_vm_name }} ({{ target_vm_host }}).
+      User     : .\{{ resolved_se_admin_username }}
+      NTLM rc  : {{ winrm_ntlm_probe.rc | default('N/A') }} unreachable={{ winrm_ntlm_probe.unreachable | default(false) }}
+      Basic rc : {{ winrm_basic_probe.rc | default('N/A') }} unreachable={{ winrm_basic_probe.unreachable | default(false) }}
+      ---
+      NTLM msg : {{ winrm_ntlm_probe.msg | default('none') }}
+      Basic msg: {{ winrm_basic_probe.msg | default('none') }}
+      ---
+      Possible causes:
+        - az vm user update failed silently (check Step 1.5 output)
+        - WinRM AllowUnencrypted=false (Basic needs it true)
+        - SE-Admin account locked or disabled on the VM
+        - Password complexity policy rejected the Delinea password
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - winrm_ntlm_probe is defined
+    - winrm_basic_probe is defined
+    - (winrm_ntlm_probe.rc | default(1) | int != 0) or (winrm_ntlm_probe.unreachable | default(false) | bool)
+    - (winrm_basic_probe.rc | default(1) | int != 0) or (winrm_basic_probe.unreachable | default(false) | bool)
+
+- name: "Step 2 - Read VM state (.\\{{ resolved_se_admin_username }} via {{ _effective_winrm_transport | default('ntlm') }})"
   ansible.windows.win_shell: |
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
             -Property Name, Domain, PartOfDomain, Workgroup
@@ -293,12 +391,11 @@
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
-    ansible_winrm_transport: ntlm
+    ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
     ansible_winrm_port: "{{ winrm_port | default(5985) }}"
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
-    ansible_winrm_read_timeout: 70
     ansible_user: ".\\{{ resolved_se_admin_username }}"
     ansible_password: "{{ resolved_se_admin_password }}"
   register: winrm_probe_result
@@ -306,7 +403,7 @@
   delay: 15
   until: winrm_probe_result is succeeded
   failed_when: false
-  # no_log: true  # Temporarily disabled for GHA debugging
+  # no_log: true
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)

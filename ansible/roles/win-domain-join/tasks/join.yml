@@ -117,12 +117,11 @@
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: ntlm
+        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_winrm_read_timeout: 70
         ansible_user: ".\\{{ resolved_se_admin_username }}"
         ansible_password: "{{ resolved_se_admin_password }}"
       environment:
@@ -193,12 +192,11 @@
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: ntlm
+        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_winrm_read_timeout: 70
         ansible_user: ".\\{{ resolved_se_admin_username }}"
         ansible_password: "{{ resolved_se_admin_password }}"
       register: winrm_verify_result
