@@ -5,8 +5,6 @@
 # Per-VM orchestrator: disjoin from domain + rename — all via WinRM.
 #
 # Steps:
-#   Step 0 - Password Sync     : az vm user update to sync VM password with Delinea
-#                                (fixes password rotation issues)
 #   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
 #                                WinRM credential test + VM state probe (SE-Admin)
 #   Step 2 - Disjoin           : microsoft.ad.membership module via WinRM (.\ SE-Admin)
@@ -29,54 +27,6 @@
 #   azure_resource_group       Azure resource group
 #   azure_vm_name              Azure resource name
 #   azure_subscription_id      Azure subscription ID
-
-# ==============================================================================
-# Step 0: Sync VM password to match Delinea (fixes password rotation issues)
-# ==============================================================================
-
-# - name: "Step 0 - Sync VM local admin password to match Delinea"
-#   ansible.builtin.shell: |
-#     az vm user update \
-#       --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
-#       --name "{{ azure_vm_name | default(target_vm_name) }}" \
-#       --username "{{ se_admin_username }}" \
-#       --password "{{ se_admin_password }}" \
-#       --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
-#   delegate_to: localhost
-#   register: password_sync_result
-#   failed_when: password_sync_result.rc != 0
-#   no_log: false
-#   when:
-#     - not (dry_run | default(false) | bool)
-#     - sync_vm_password | default(true) | bool
-
-# - name: "Step 0 - Display password sync status"
-#   ansible.builtin.debug:
-#     msg: |
-#       +=============================================================+
-#       |  PASSWORD SYNC: {{ 'SKIPPED' if (password_sync_result is skipped) else 'COMPLETED' }}
-#       +=============================================================+
-#       {% if not (password_sync_result is skipped) %}
-#       |  VM               : {{ target_vm_name }}
-#       |  User             : {{ se_admin_username }}
-#       |  Status           : VM password synced to match Delinea
-#       |  Purpose          : Prevent 'credentials rejected' errors
-#       |                     after Delinea password rotation
-#       +=============================================================+
-#       {% else %}
-#       |  Reason           : sync_vm_password={{ sync_vm_password | default(true) }}
-#       |  Note             : If WinRM fails due to credential rejection,
-#       |                     run with -e "sync_vm_password=true"
-#       +=============================================================+
-#       {% endif %}
-
-# - name: "Step 0 - Wait for password propagation"
-#   ansible.builtin.pause:
-#     seconds: 10
-#   when:
-#     - not (dry_run | default(false) | bool)
-#     - password_sync_result is defined
-#     - not (password_sync_result.skipped | default(false) | bool)
 
 # ==============================================================================
 # Step 1: Enable WinRM, test WinRM credentials, read VM state
@@ -350,31 +300,6 @@
     - not (skip_hostname_setup | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2.5 - Test .\\Administrator credentials (expected to FAIL in WORKGROUP)"
-  ansible.windows.win_shell: |
-    $hostname = $env:COMPUTERNAME
-    $domain = (Get-WmiObject Win32_ComputerSystem).Domain
-    Write-Output "TEST_OK:Administrator:${hostname}:${domain}"
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 60
-    ansible_winrm_read_timeout: 70
-    ansible_user: ".\\Administrator"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-  register: admin_test_result
-  failed_when: false
-  ignore_unreachable: true
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (current_domain_status.part_of_domain | default(false) | bool)
-
 - name: "Step 2.5 - Display credential test results in WORKGROUP"
   ansible.builtin.debug:
     msg: |
@@ -390,19 +315,13 @@
       |    RC            : {{ seadmin_test_result.rc | default('N/A') }}
       |    Output        : {{ seadmin_test_result.stdout | default('N/A') | trim }}
       +-------------------------------------------------------------+
-      |  Test 2: .\Administrator + SE-Admin password
-      |    Result        : {{ 'FAILED' if (admin_test_result.rc | default(1) != 0) else 'PASSED' }}
-      |    RC            : {{ admin_test_result.rc | default('N/A') }}
-      |    Output        : {{ admin_test_result.stdout | default('N/A') | trim }}
-      |    Error         : {{ 'credential rejected' if (admin_test_result.rc | default(1) != 0) else 'none' }}
-      +-------------------------------------------------------------+
       |  CONCLUSION: Use .\{{ se_admin_username }} for all operations
       +=============================================================+
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
-    - admin_test_result is defined or seadmin_test_result is defined
+    - seadmin_test_result is defined
 
 - name: "Step 2.5 - Fail if SE-Admin credentials don't work in WORKGROUP"
   ansible.builtin.fail:

@@ -4,29 +4,17 @@ build_extra_vars.py
 ===================
 Builds ansible_extra_vars.json from environment variables for the domain join workflow.
 
-Reads workflow inputs and secrets from environment variables and writes them
-to a JSON file that is passed to the ansible-playbook command via -e @ansible_extra_vars.json.
-
 Environment variables read:
   MANIFEST_INPUT            Manifest directory name (required)
-  DRY_RUN_INPUT             Dry run flag: 'true', '1', 'yes' → boolean (required)
-  FORCE_REJOIN_INPUT        Force rejoin flag: 'true', '1', 'yes' → boolean (required)
-  DOMAIN_ADMIN_VALUE_INPUT  Domain admin password from GitHub secret (required)
-  DOMAIN_OU_PATH_INPUT      Domain OU path from GitHub secret (optional, can be empty)
+  DRY_RUN_INPUT             'true' / '1' / 'yes' → True (required)
+  FORCE_REJOIN_INPUT        'true' / '1' / 'yes' → True (required)
+  DOMAIN_ADMIN_VALUE_INPUT  Domain admin password (required, never logged)
+  DOMAIN_OU_PATH_INPUT      Domain OU path (optional)
 
 Output:
-  ansible_extra_vars.json   Written to current working directory (mode 0o600)
+  ansible_extra_vars.json   Written to cwd with mode 0o600.
 
-Exits with code 0 on success.
-Exits with code 1 on missing required variables or JSON validation failure.
-
-Usage:
-  export MANIFEST_INPUT="domain_join_test"
-  export DRY_RUN_INPUT="false"
-  export FORCE_REJOIN_INPUT="true"
-  export DOMAIN_ADMIN_VALUE_INPUT="P@ssw0rd!"
-  export DOMAIN_OU_PATH_INPUT="OU=Computers,DC=dtenet,DC=com"
-  python3 ansible/roles/python_scripts/build_extra_vars.py
+Exits 0 on success, 1 on any error.
 """
 
 from __future__ import annotations
@@ -36,90 +24,58 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+from typing import Any
 
 OUTPUT_FILE = "ansible_extra_vars.json"
-REQUIRED_VARS = ("MANIFEST_INPUT", "DRY_RUN_INPUT", "FORCE_REJOIN_INPUT", "DOMAIN_ADMIN_VALUE_INPUT")
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
+REQUIRED_VARS = (
+    "MANIFEST_INPUT",
+    "DRY_RUN_INPUT",
+    "FORCE_REJOIN_INPUT",
+    "DOMAIN_ADMIN_VALUE_INPUT",
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
+
+def _env(name: str) -> str:
+    return (os.getenv(name) or "").strip()
 
 
-def str_to_bool(value: str) -> bool:
-    """Convert string to boolean. 'true', '1', 'yes' → True (case-insensitive)."""
-    return str(value).strip().lower() in ("true", "1", "yes")
+def _to_bool(value: str) -> bool:
+    return value.strip().lower() in ("true", "1", "yes")
 
 
-def validate_required_vars() -> None:
-    """Check that all required environment variables are set."""
-    missing = [var for var in REQUIRED_VARS if not os.environ.get(var, "").strip()]
+def _validate_env() -> None:
+    missing = [v for v in REQUIRED_VARS if not _env(v)]
     if missing:
-        log.error(f"Missing required environment variables: {', '.join(missing)}")
+        log.error("[ERROR] Missing required environment variables: %s", ", ".join(missing))
         sys.exit(1)
 
 
-def build_extra_vars() -> Dict[str, Any]:
-    """Build the extra_vars dictionary from environment variables."""
-    validate_required_vars()
-
-    extra_vars = {
-        "manifest": os.environ["MANIFEST_INPUT"].strip(),
-        "dry_run": str_to_bool(os.environ["DRY_RUN_INPUT"]),
-        "force_rejoin": str_to_bool(os.environ["FORCE_REJOIN_INPUT"]),
-        "domain_admin_value": os.environ["DOMAIN_ADMIN_VALUE_INPUT"],
-        "domain_ou_path": os.environ.get("DOMAIN_OU_PATH_INPUT", "").strip(),
+def _build() -> dict[str, Any]:
+    return {
+        "manifest": _env("MANIFEST_INPUT"),
+        "dry_run": _to_bool(_env("DRY_RUN_INPUT")),
+        "force_rejoin": _to_bool(_env("FORCE_REJOIN_INPUT")),
+        "domain_admin_value": _env("DOMAIN_ADMIN_VALUE_INPUT"),  # written to file, never logged
+        "domain_ou_path": _env("DOMAIN_OU_PATH_INPUT"),
     }
 
-    return extra_vars
 
-
-def write_extra_vars(extra_vars: Dict[str, Any]) -> None:
-    """Write extra_vars to JSON file with restricted permissions."""
-    output_path = Path(OUTPUT_FILE)
-
-    # Write JSON
-    json_str = json.dumps(extra_vars)
-    output_path.write_text(json_str, encoding="utf-8")
-
-    # Set permissions to 0o600 (read/write for owner only)
-    output_path.chmod(0o600)
-
-    log.info(f"[OK] Written {OUTPUT_FILE}")
-
-
-def validate_json() -> None:
-    """Validate that the output JSON is syntactically correct."""
-    try:
-        output_path = Path(OUTPUT_FILE)
-        json.loads(output_path.read_text(encoding="utf-8"))
-        log.info(f"[OK] JSON validation passed")
-    except (json.JSONDecodeError, FileNotFoundError) as e:
-        log.error(f"[FAIL] JSON validation failed: {e}")
-        sys.exit(1)
+def _write(data: dict[str, Any]) -> None:
+    path = Path(OUTPUT_FILE)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+    log.info("[OK] %s written (mode 0600)", OUTPUT_FILE)
 
 
 def main() -> None:
-    """Entry point."""
-    try:
-        extra_vars = build_extra_vars()
-        write_extra_vars(extra_vars)
-        validate_json()
-        log.info("[SUCCESS] ansible_extra_vars.json built successfully")
-    except Exception as e:
-        log.error(f"[ERROR] {e}")
-        sys.exit(1)
+    _validate_env()
+    data = _build()
+    _write(data)
+    log.info("[SUCCESS] ansible_extra_vars.json built — manifest=%s dry_run=%s force_rejoin=%s",
+             data["manifest"], data["dry_run"], data["force_rejoin"])
 
 
 if __name__ == "__main__":

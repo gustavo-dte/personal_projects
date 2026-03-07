@@ -1,55 +1,27 @@
 #!/usr/bin/env python3
-# TODO: Pending to add unitests for this script.
 """
 resolve_delinea_secret_id.py
 ============================
-Version: 2.0.0 (2026-03-04)
+Resolves Delinea Secret Server passwords for SE-Admin accounts and writes them to GITHUB_ENV.
 
-Resolves Delinea Secret Server secrets for SE-Admin accounts and writes them to GITHUB_ENV.
+Modes:
+  Multi-VM (default): MANIFEST env var set → loads manifest, resolves per-VM passwords.
+  Single-VM (legacy): DELINEA_CREDS_PATH or DELINEA_CREDS_MACHINE set → resolves one secret ID.
 
-Supports two modes:
-  1. Multi-VM mode (DEFAULT): Loads manifest, resolves per-VM passwords from Delinea.
-     - If vm_delinea_secret_id is set in manifest: uses that secret ID directly.
-     - Otherwise: dynamically searches Delinea based on vm_winrm_connect_hostname.
-  2. Single-VM mode (LEGACY):  Resolves one secret ID using DELINEA_CREDS_PATH or
-     DELINEA_CREDS_MACHINE (backward compatible).
+Exits 0 on success, 1 on any error. Passwords are never logged.
 
-Exits with code 1 on:
-  - Missing Delinea credentials
-  - Multi-VM: Missing MANIFEST env var
-  - Multi-VM: Cannot load manifest YAML
-  - Single-VM: Neither DELINEA_CREDS_PATH nor DELINEA_CREDS_MACHINE is set
-  - DELINEA_CREDS_MACHINE set without DELINEA_CREDS_NAME or DELINEA_ACCOUNT
-  - No records returned by the Delinea API
-  - No secret matched the applied filters
-  - Multiple secrets matched and cannot be disambiguated
-
-Exits with code 0 on:
-  - Secret ID / passwords successfully resolved and written to GITHUB_ENV
-
-Resolution strategy (in order):
-  1. Exact name match against DELINEA_CREDS_PATH or constructed FQDN\\Account pattern
-  2. Machine-based filtering using DELINEA_CREDS_MACHINE + NAME/ACCOUNT
-
-Environment variables read:
-  MANIFEST                (Multi-VM mode) Manifest directory name under ansible/vars/
-  DELINEA_BASE_URL        Base URL of the Delinea Secret Server instance
-  DELINEA_USERNAME        Service account used to authenticate
-  DELINEA_PASSWORD        Password for the service account (multi-VM mode)
-  DELINEA_VALUE           Password for the service account (single-VM legacy mode)
-  DELINEA_DOMAIN_SUFFIX   Domain suffix to append to hostnames (default: .dtenet.com)
-  DELINEA_CREDS_PATH     (Single-VM) Name / path search term
-  DELINEA_CREDS_MACHINE  (Single-VM) Machine FQDN to narrow matching
-  DELINEA_CREDS_NAME     (Optional) Secret name filter (preferred over ACCOUNT)
-  DELINEA_ACCOUNT  (Optional) Account name filter (fallback if NAME not set)
-  GITHUB_ENV              Path to the GitHub Actions env file (set automatically by the runner)
-
-Usage:
-  # Multi-VM mode (reads manifest)
-  MANIFEST=domain_join_test python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
-
-  # Single-VM mode (legacy - backward compatible)
-  DELINEA_CREDS_PATH="path" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+Environment variables:
+  MANIFEST               Multi-VM manifest directory under ansible/vars/
+  DELINEA_BASE_URL       Delinea Secret Server base URL
+  DELINEA_USERNAME       Service account username
+  DELINEA_PASSWORD       Service account password (preferred)
+  DELINEA_VALUE          Service account password (legacy fallback)
+  DELINEA_DOMAIN_SUFFIX  Domain suffix for FQDN construction (default: .dtenet.com)
+  DELINEA_CREDS_PATH     Single-VM: exact secret name to match
+  DELINEA_CREDS_MACHINE  Single-VM: machine FQDN filter
+  DELINEA_CREDS_NAME     Single-VM: secret name filter (used with MACHINE)
+  DELINEA_ACCOUNT        Single-VM: account name filter (fallback to CREDS_NAME)
+  GITHUB_ENV             Path to GitHub Actions env file (set automatically by runner)
 """
 
 from __future__ import annotations
@@ -60,116 +32,76 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
+import yaml
 from requests.exceptions import HTTPError, RequestException
-
-try:
-    import yaml
-except ImportError as e:
-    raise ImportError(
-        "PyYAML is required but not installed. "
-        "Install it with: pip install PyYAML"
-    ) from e
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Custom exceptions
+# Exceptions
 # ---------------------------------------------------------------------------
 
 
 class DelineaError(Exception):
-    """Raised for recoverable Delinea API or resolution errors."""
+    """Delinea API or secret resolution failure."""
 
 
 class ConfigurationError(Exception):
-    """Raised when required environment configuration is missing or invalid."""
+    """Missing or invalid environment configuration."""
 
 
 # ---------------------------------------------------------------------------
-# Environment helpers
+# Config
 # ---------------------------------------------------------------------------
 
 
-def _env(var: str) -> str:
-    """Return a stripped environment variable value, defaulting to empty string.
-
-    Args:
-        var: Environment variable name.
-
-    Returns:
-        Stripped string value, or empty string when unset.
-    """
-    return (os.getenv(var) or "").strip()
-
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+def _env(name: str) -> str:
+    return (os.getenv(name) or "").strip()
 
 
 @dataclass(frozen=True)
 class Config:
-    """Immutable runtime configuration built from environment variables."""
-
     base_url: str
     username: str
-    password: str  # pragma: allowlist secret
+    password: str
     search_text: str
     machine_filter: str
     secret_name_filter: str
     account_filter: str
-    github_env: Optional[str]
+    github_env: str | None
     manifest: str
     domain_suffix: str
     multi_vm_mode: bool
 
     @classmethod
     def from_env(cls) -> Config:
-        """Build and validate a Config from environment variables.
-
-        Returns:
-            A fully validated, frozen Config instance.
-
-        Raises:
-            ConfigurationError: If required variables are missing or the
-                combination of inputs is logically inconsistent.
-        """
         base_url = _env("DELINEA_BASE_URL").rstrip("/")
         username = _env("DELINEA_USERNAME")
-
-        # Support both DELINEA_PASSWORD (preferred) and DELINEA_VALUE (legacy).
-        password = _env("DELINEA_PASSWORD") or _env("DELINEA_VALUE")  # pragma: allowlist secret
+        password = _env("DELINEA_PASSWORD") or _env("DELINEA_VALUE")
 
         if not all([base_url, username, password]):
             raise ConfigurationError(
-                "Missing Delinea configuration — set DELINEA_BASE_URL, "
-                "DELINEA_USERNAME, and DELINEA_PASSWORD"
+                "Missing Delinea config — set DELINEA_BASE_URL, DELINEA_USERNAME, DELINEA_PASSWORD"
             )
 
         manifest = _env("MANIFEST")
-        multi_vm_mode = bool(manifest)
-
         search_text = _env("DELINEA_CREDS_PATH")
         machine_filter = _env("DELINEA_CREDS_MACHINE").lower()
 
-        if not multi_vm_mode and not search_text and not machine_filter:
+        if not manifest and not search_text and not machine_filter:
             raise ConfigurationError(
-                "No search criteria — set MANIFEST for multi-VM mode, or "
-                "set DELINEA_CREDS_PATH or DELINEA_CREDS_MACHINE for single-VM mode"
+                "No search criteria — set MANIFEST, DELINEA_CREDS_PATH, or DELINEA_CREDS_MACHINE"
             )
 
         return cls(
             base_url=base_url,
             username=username,
-            password=password,  # pragma: allowlist secret
+            password=password,
             search_text=search_text,
             machine_filter=machine_filter,
             secret_name_filter=_env("DELINEA_CREDS_NAME").lower(),
@@ -177,228 +109,36 @@ class Config:
             github_env=os.getenv("GITHUB_ENV"),
             manifest=manifest,
             domain_suffix=_env("DELINEA_DOMAIN_SUFFIX") or ".dtenet.com",
-            multi_vm_mode=multi_vm_mode,
+            multi_vm_mode=bool(manifest),
         )
 
 
 # ---------------------------------------------------------------------------
-# GitHub Actions environment export
+# GitHub env export
 # ---------------------------------------------------------------------------
 
 
-def _write_github_env(github_env: Optional[str], key: str, value: str) -> None:
-    """Export a value to the GitHub Actions environment file.
-
-    When github_env is None (running outside of Actions), logs a warning and
-    returns without error so local runs stay non-fatal.
-
-    Args:
-        github_env: Path to the GITHUB_ENV file, or None if not in Actions.
-        key:        Environment variable name to export.
-        value:      Value to export (may be sensitive; masked by caller).
-
-    Raises:
-        OSError: If the GITHUB_ENV file cannot be written.
-    """
+def _write_github_env(github_env: str | None, key: str, value: str) -> None:
     if not github_env:
-        log.warning("[WARN] GITHUB_ENV not set — skipping environment variable export")
+        log.warning("[WARN] GITHUB_ENV not set — skipping export of %s", key)
         return
-
-    with open(github_env, "a", encoding="utf-8") as fh:  # pragma: allowlist secret
-        fh.write("%s=%s\n" % (key, value))
+    with open(github_env, "a", encoding="utf-8") as fh:
+        fh.write(f"{key}={value}\n")
 
 
 # ---------------------------------------------------------------------------
-# Validation helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 
 def _sanitize_secret_id(value: str) -> str:
-    """Validate and return a Delinea secret ID as a pure numeric string.
-
-    Rejects anything that is not a non-empty sequence of digits, establishing
-    an explicit sanitization boundary so only opaque identifiers — never
-    sensitive values — reach GITHUB_ENV.
-
-    Args:
-        value: Raw string representation of the secret ID from the API.
-
-    Returns:
-        The same digits-only string, safe to store in GITHUB_ENV.
-
-    Raises:
-        ValueError: If value contains non-numeric characters or is empty.
-    """
     stripped = (value or "").strip()
     if not re.fullmatch(r"\d+", stripped):
-        raise ValueError(
-            "Unexpected secret ID format — expected numeric identifier, "
-            "got: '%s'" % stripped[:20]
-        )
+        raise ValueError(f"Expected numeric secret ID, got: '{stripped[:20]}'")
     return stripped
 
 
-# ---------------------------------------------------------------------------
-# Delinea API client
-# ---------------------------------------------------------------------------
-
-
-def _acquire_token(base_url: str, username: str, password: str) -> str:  # pragma: allowlist secret
-    """Authenticate against Delinea and return a bearer token.
-
-    Args:
-        base_url:  Base URL of the Delinea Secret Server instance.
-        username:  Service account username.
-        password:  Service account password for OAuth2 grant_type.  # pragma: allowlist secret
-
-    Returns:
-        Bearer token string.
-
-    Raises:
-        DelineaError: On any network, HTTP, or missing-token failure.
-    """
-    try:
-        resp = requests.post(
-            "%s/oauth2/token" % base_url,
-            data={
-                "grant_type": "password",
-                "username": username,
-                "password": password,  # pragma: allowlist secret
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except HTTPError as ex:
-        raise DelineaError(
-            "Delinea authentication failed (HTTP %s)" % ex.response.status_code
-        ) from ex
-    except RequestException as ex:
-        raise DelineaError("Delinea authentication request failed: %s" % ex) from ex
-
-    token: Optional[str] = resp.json().get("access_token")
-    if not token:
-        raise DelineaError("No access_token in Delinea authentication response")
-
-    return token
-
-
-def _search_secrets(
-    base_url: str,
-    auth: Dict[str, str],
-    seed: str,
-) -> List[Dict[str, Any]]:
-    """Search Delinea for secrets matching seed.
-
-    Args:
-        base_url: Base URL of the Delinea Secret Server instance.
-        auth:     Authorization header dict containing the bearer token.
-        seed:     Search term passed to the Delinea API.
-
-    Returns:
-        List of secret record dicts returned by the API (may be empty).
-
-    Raises:
-        DelineaError: On any network or HTTP failure.
-    """
-    try:
-        resp = requests.get(
-            "%s/api/v1/secrets" % base_url,
-            params={"filter.includeRestricted": "true", "filter.searchtext": seed},
-            headers=auth,
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except HTTPError as ex:
-        raise DelineaError(
-            "Secret search failed (HTTP %s)" % ex.response.status_code
-        ) from ex
-    except RequestException as ex:
-        raise DelineaError("Secret search request failed: %s" % ex) from ex
-
-    return resp.json().get("records") or []
-
-
-def _fetch_detail(
-    base_url: str,
-    auth: Dict[str, str],
-    delinea_id: int,
-) -> Dict[str, Any]:
-    """Fetch full detail for a single secret by numeric ID.
-
-    Args:
-        base_url:   Base URL of the Delinea Secret Server instance.
-        auth:       Authorization header dict containing the bearer token.
-        delinea_id: Numeric Delinea secret ID.
-
-    Returns:
-        Full secret detail dict as returned by the API.
-
-    Raises:
-        DelineaError: On any network or HTTP failure.
-    """
-    try:
-        resp = requests.get(
-            "%s/api/v1/secrets/%s" % (base_url, delinea_id),
-            headers=auth,
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except HTTPError as ex:
-        error_body = ""
-        try:
-            error_body = " - " + ex.response.text
-        except Exception:  # noqa: BLE001
-            pass
-        raise DelineaError(
-            "Failed to fetch secret %s (HTTP %s)%s"
-            % (delinea_id, ex.response.status_code, error_body)
-        ) from ex
-    except RequestException as ex:
-        raise DelineaError("Failed to fetch secret %s: %s" % (delinea_id, ex)) from ex
-
-    return resp.json()
-
-
-def _extract_password(detail: Dict[str, Any]) -> str:  # pragma: allowlist secret
-    """Extract the password field value from a secret detail response.
-
-    Args:
-        detail: Full secret detail dict as returned by _fetch_detail.
-
-    Returns:
-        The password string.  # pragma: allowlist secret
-
-    Raises:
-        DelineaError: If no password field is found.  # pragma: allowlist secret
-    """
-    items: List[Dict[str, Any]] = detail.get("items") or []
-    password = _item_val(items, "password")  # pragma: allowlist secret
-
-    if not password:  # pragma: allowlist secret
-        raise DelineaError("No password field found in secret")  # pragma: allowlist secret
-
-    return password  # pragma: allowlist secret
-
-
-# ---------------------------------------------------------------------------
-# Matching helpers
-# ---------------------------------------------------------------------------
-
-
-def _item_val(items: List[Dict[str, Any]], *slugs: str) -> str:
-    """Return the itemValue for the first item whose slug matches any of slugs.
-
-    The slug comparison is case-insensitive, but the returned value preserves
-    its original casing so passwords are not corrupted by lower-casing.
-
-    Args:
-        items: Secret item list from the Delinea detail response.
-        *slugs: One or more slug strings to match against.
-
-    Returns:
-        Matching itemValue string, or empty string when no slug matches.
-    """
+def _item_val(items: list[dict[str, Any]], *slugs: str) -> str:
     wanted = {s.lower() for s in slugs}
     for item in items:
         if str(item.get("slug", "")).strip().lower() in wanted:
@@ -406,41 +146,80 @@ def _item_val(items: List[Dict[str, Any]], *slugs: str) -> str:
     return ""
 
 
-def _matches_by_name(name: str, machine_filter: str, desired_name: str) -> bool:
-    """Return True when a secret name in 'fqdn\\account' format matches both filters.
-
-    Args:
-        name:         Secret name from the Delinea search result.
-        machine_filter:  Lowercased FQDN to match.
-        desired_name: Lowercased account name to match.
-
-    Returns:
-        True when both the FQDN and account portions match.
-    """
+def _matches_by_name(name: str, machine: str, account: str) -> bool:
     if "\\" not in name:
         return False
     fqdn, acct = name.split("\\", 1)
-    return fqdn.strip().lower() == machine_filter and acct.strip().lower() == desired_name
+    return fqdn.strip().lower() == machine and acct.strip().lower() == account
 
 
-def _matches_by_items(
-    items: List[Dict[str, Any]],
-    machine_filter: str,
-    desired_name: str,
-) -> bool:
-    """Return True when item slugs satisfy both the machine and account/name filters.
+def _matches_by_items(items: list[dict[str, Any]], machine: str, account: str) -> bool:
+    m = _item_val(items, "machine", "host", "hostname", "fqdn", "server").lower()
+    a = _item_val(items, "username", "user", "account", "login").lower()
+    return m == machine and a == account
 
-    Args:
-        items:         Secret item list from the Delinea detail response.
-        machine_filter:   Lowercased FQDN to match.
-        desired_name:  Lowercased account name to match.
 
-    Returns:
-        True when machine and account slugs match both filters.
-    """
-    machine_val = _item_val(items, "machine", "host", "hostname", "fqdn", "server").lower()
-    account_val = _item_val(items, "username", "user", "account", "login").lower()
-    return machine_val == machine_filter and account_val == desired_name
+# ---------------------------------------------------------------------------
+# Delinea API
+# ---------------------------------------------------------------------------
+
+
+def _acquire_token(base_url: str, username: str, password: str) -> str:
+    try:
+        resp = requests.post(
+            f"{base_url}/oauth2/token",
+            data={"grant_type": "password", "username": username, "password": password},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except HTTPError as ex:
+        raise DelineaError(f"Authentication failed (HTTP {ex.response.status_code})") from ex
+    except RequestException as ex:
+        raise DelineaError(f"Authentication request failed: {ex}") from ex
+
+    token: str | None = resp.json().get("access_token")
+    if not token:
+        raise DelineaError("No access_token in authentication response")
+    return token
+
+
+def _search_secrets(base_url: str, auth: dict[str, str], seed: str) -> list[dict[str, Any]]:
+    try:
+        resp = requests.get(
+            f"{base_url}/api/v1/secrets",
+            params={"filter.includeRestricted": "true", "filter.searchtext": seed},
+            headers=auth,
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except HTTPError as ex:
+        raise DelineaError(f"Secret search failed (HTTP {ex.response.status_code})") from ex
+    except RequestException as ex:
+        raise DelineaError(f"Secret search request failed: {ex}") from ex
+
+    return resp.json().get("records") or []
+
+
+def _fetch_detail(base_url: str, auth: dict[str, str], secret_id: int) -> dict[str, Any]:
+    try:
+        resp = requests.get(f"{base_url}/api/v1/secrets/{secret_id}", headers=auth, timeout=30)
+        resp.raise_for_status()
+    except HTTPError as ex:
+        # Do NOT include response body — may contain sensitive data
+        raise DelineaError(f"Failed to fetch secret {secret_id} (HTTP {ex.response.status_code})") from ex
+    except RequestException as ex:
+        raise DelineaError(f"Failed to fetch secret {secret_id}: {ex}") from ex
+
+    return resp.json()
+
+
+def _extract_password(detail: dict[str, Any]) -> str:
+    items: list[dict[str, Any]] = detail.get("items") or []
+    pw = _item_val(items, "password")
+    if not pw:
+        raise DelineaError("No password field found in secret")
+    return pw
 
 
 # ---------------------------------------------------------------------------
@@ -448,29 +227,9 @@ def _matches_by_items(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_by_exact_name(
-    records: List[Dict[str, Any]],
-    search_text: str,
-) -> Optional[str]:
-    """Return the secret ID when a record name exactly matches search_text.
-
-    This is the fast path — no extra API calls are required.
-
-    Args:
-        records:     List of secret record dicts from the Delinea search API.
-        search_text: The exact name to match against (case-insensitive).
-
-    Returns:
-        Sanitized numeric ID string, or None if no exact match exists.
-
-    Raises:
-        ValueError: If the matched record's ID fails sanitization.
-    """
+def _resolve_by_exact_name(records: list[dict[str, Any]], search_text: str) -> str | None:
     needle = search_text.lower()
-    match = next(
-        (r for r in records if str(r.get("name", "")).strip().lower() == needle),
-        None,
-    )
+    match = next((r for r in records if str(r.get("name", "")).strip().lower() == needle), None)
     if match and match.get("id"):
         return _sanitize_secret_id(str(match["id"]))
     return None
@@ -478,331 +237,171 @@ def _resolve_by_exact_name(
 
 def _resolve_by_machine(
     base_url: str,
-    auth: Dict[str, str],
-    records: List[Dict[str, Any]],
+    auth: dict[str, str],
+    records: list[dict[str, Any]],
     machine_filter: str,
     secret_name_filter: str,
     account_filter: str,
 ) -> str:
-    """Filter records by machine FQDN and account/name, fetching full details when needed.
-
-    Attempts the fast path (name in 'fqdn\\account' format) first for each record,
-    then falls back to inspecting item slugs via the detail endpoint.
-
-    Args:
-        base_url:           Base URL of the Delinea Secret Server instance.
-        auth:               Authorization header dict containing the bearer token.
-        records:            List of secret record dicts from the Delinea search API.
-        machine_filter:     Lowercased machine FQDN to match against.
-        secret_name_filter: Lowercased secret name filter (preferred over account_filter).
-        account_filter:     Lowercased account name filter (fallback when name filter absent).
-
-    Returns:
-        Sanitized numeric secret ID string.
-
-    Raises:
-        ConfigurationError: If neither secret_name_filter nor account_filter is set.
-        DelineaError:       If no match is found or the match is ambiguous.
-        ValueError:         If the matched ID fails sanitization.
-    """
     if not secret_name_filter and not account_filter:
-        raise ConfigurationError(
-            "DELINEA_CREDS_MACHINE requires DELINEA_CREDS_NAME or DELINEA_ACCOUNT"
-        )
+        raise ConfigurationError("DELINEA_CREDS_MACHINE requires DELINEA_CREDS_NAME or DELINEA_ACCOUNT")
 
-    desired_name = secret_name_filter or account_filter
-    matches: List[Dict[str, Any]] = []
+    desired = secret_name_filter or account_filter
+    matches: list[dict[str, Any]] = []
 
     for rec in records:
         name = str(rec.get("name") or "").strip()
 
-        # Fast path: name already encodes machine and account as 'fqdn\account'.
-        if _matches_by_name(name, machine_filter, desired_name):
+        if _matches_by_name(name, machine_filter, desired):
             matches.append(rec)
             if len(matches) > 1:
-                raise DelineaError(
-                    "Ambiguous match — %d records found; set DELINEA_CREDS_ID explicitly"
-                    % len(matches)
-                )
+                raise DelineaError("Ambiguous match — multiple records found; set DELINEA_CREDS_ID explicitly")
             continue
 
-        # Slow path: inspect item slugs from the full secret detail.
-        sid: Optional[int] = rec.get("id")
+        sid: int | None = rec.get("id")
         if not sid:
             continue
 
         try:
             detail = _fetch_detail(base_url, auth, sid)
         except DelineaError as ex:
-            log.warning("[WARN] Skipping secret — could not fetch details: %s", ex)
+            log.warning("[WARN] Skipping secret %s — could not fetch details: %s", sid, ex)
             continue
 
-        items: List[Dict[str, Any]] = detail.get("items") or []
-        if _matches_by_items(items, machine_filter, desired_name):
+        if _matches_by_items(detail.get("items") or [], machine_filter, desired):
             matches.append(rec)
             if len(matches) > 1:
-                raise DelineaError(
-                    "Ambiguous match — %d records found; set DELINEA_CREDS_ID explicitly"
-                    % len(matches)
-                )
+                raise DelineaError("Ambiguous match — multiple records found; set DELINEA_CREDS_ID explicitly")
 
     if not matches:
-        raise DelineaError(
-            "No matching records found — verify DELINEA_CREDS_MACHINE and filter values"
-        )
+        raise DelineaError("No matching secret found — verify DELINEA_CREDS_MACHINE and filter values")
 
     return _sanitize_secret_id(str(matches[0]["id"]))
 
 
 # ---------------------------------------------------------------------------
-# Single-VM orchestration (legacy)
+# Single-VM mode (legacy)
 # ---------------------------------------------------------------------------
 
 
-def resolve(cfg: Config) -> str:
-    """Resolve and return the sanitized Delinea secret ID for the given config.
-
-    Tries resolution strategies in order, returning as soon as one succeeds.
-
-    Args:
-        cfg: Fully validated configuration built from environment variables.
-
-    Returns:
-        Sanitized numeric secret ID string.
-
-    Raises:
-        DelineaError:       On API or resolution failures.
-        ConfigurationError: On invalid input combinations detected at resolution time.
-        ValueError:         If the resolved ID fails sanitization.
-    """
-    token = _acquire_token(cfg.base_url, cfg.username, cfg.password)  # pragma: allowlist secret
-    auth: Dict[str, str] = {"Authorization": "Bearer %s" % token}
+def _resolve_single_vm(cfg: Config) -> str:
+    token = _acquire_token(cfg.base_url, cfg.username, cfg.password)
+    auth = {"Authorization": f"Bearer {token}"}
 
     seed = cfg.machine_filter or cfg.search_text
     records = _search_secrets(cfg.base_url, auth, seed)
 
     if not records:
-        raise DelineaError('No records returned for search term "%s"' % seed)
+        raise DelineaError(f'No records returned for search term "{seed}"')
 
     if cfg.search_text:
-        delinea_id = _resolve_by_exact_name(records, cfg.search_text)
-        if delinea_id:
-            log.info("[INFO] Resolved DELINEA_CREDS_ID via exact name match")
-            return delinea_id
+        secret_id = _resolve_by_exact_name(records, cfg.search_text)
+        if secret_id:
+            log.info("[INFO] Resolved via exact name match")
+            return secret_id
 
     if cfg.machine_filter:
-        delinea_id = _resolve_by_machine(
-            cfg.base_url,
-            auth,
-            records,
-            cfg.machine_filter,
-            cfg.secret_name_filter,
-            cfg.account_filter,
+        secret_id = _resolve_by_machine(
+            cfg.base_url, auth, records,
+            cfg.machine_filter, cfg.secret_name_filter, cfg.account_filter,
         )
-        log.info("[INFO] Resolved DELINEA_CREDS_ID via machine filter")
-        return delinea_id
+        log.info("[INFO] Resolved via machine filter")
+        return secret_id
 
-    raise DelineaError(
-        "No exact name match found and DELINEA_CREDS_MACHINE is not set"
-    )
+    raise DelineaError("No exact name match found and DELINEA_CREDS_MACHINE is not set")
 
 
 # ---------------------------------------------------------------------------
-# Multi-VM orchestration
+# Multi-VM mode
 # ---------------------------------------------------------------------------
 
 
-def _load_manifest(manifest_name: str) -> Dict[str, Any]:
-    """Load and parse the manifest YAML file.
-
-    Args:
-        manifest_name: Directory name under ansible/vars/ (e.g., 'domain_join_test')
-
-    Returns:
-        Parsed manifest dict.
-
-    Raises:
-        ConfigurationError: If the manifest cannot be loaded.
-    """
-    manifest_path = Path("ansible/vars") / manifest_name / "manifest.yml"
-
-    if not manifest_path.exists():
-        raise ConfigurationError("Manifest file not found: %s" % manifest_path)
-
+def _load_manifest(manifest_name: str) -> dict[str, Any]:
+    path = Path("ansible/vars") / manifest_name / "manifest.yml"
+    if not path.exists():
+        raise ConfigurationError(f"Manifest not found: {path}")
     try:
-        with open(manifest_path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return yaml.safe_load(fh) or {}
     except Exception as ex:
-        raise ConfigurationError(
-            "Failed to load manifest %s: %s" % (manifest_path, ex)
-        ) from ex
+        raise ConfigurationError(f"Failed to load manifest {path}: {ex}") from ex
 
 
-def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
-    """Resolve passwords for all VMs in the manifest and write to GITHUB_ENV.
-
-    Args:
-        cfg: Configuration with manifest name and Delinea credentials.
-
-    Raises:
-        ConfigurationError: If manifest loading fails or no VMs are present.
-        DelineaError:       If password resolution fails for every VM.
-    """
+def _resolve_multi_vm(cfg: Config) -> None:
     log.info("[INFO] [Multi-VM] Loading manifest: %s", cfg.manifest)
     manifest = _load_manifest(cfg.manifest)
 
-    vms: List[Dict[str, Any]] = manifest.get("vms") or []
+    vms: list[dict[str, Any]] = manifest.get("vms") or []
     if not vms:
-        raise ConfigurationError("No VMs found in manifest: %s" % cfg.manifest)
+        raise ConfigurationError(f"No VMs found in manifest: {cfg.manifest}")
 
-    log.info("[INFO] [Multi-VM] Found %d VM(s) in manifest", len(vms))
+    log.info("[INFO] [Multi-VM] Found %d VM(s)", len(vms))
 
-    token = _acquire_token(cfg.base_url, cfg.username, cfg.password)  # pragma: allowlist secret
-    auth: Dict[str, str] = {"Authorization": "Bearer %s" % token}
-
-    total = len(vms)
-    success_count = 0
+    token = _acquire_token(cfg.base_url, cfg.username, cfg.password)
+    auth = {"Authorization": f"Bearer {token}"}
 
     for idx, vm in enumerate(vms, start=1):
         target_vm_name: str = vm.get("target_vm_name", "")
         vm_hostname: str = vm.get("vm_winrm_connect_hostname", "")
         vm_username: str = vm.get("vm_winrm_username", "")
-        vm_delinea_secret_id: str = str(vm.get("vm_delinea_secret_id", "")).strip()
+        explicit_id: str = str(vm.get("vm_delinea_secret_id", "")).strip()
+        total = len(vms)
 
         if not all([target_vm_name, vm_hostname, vm_username]):
-            log.warning(
-                "[WARN] [VM %d/%d] Skipping — missing required fields"
-                " (target_vm_name, vm_winrm_connect_hostname, vm_winrm_username)",
-                idx,
-                total,
+            # Missing fields = misconfigured manifest → fail immediately
+            raise ConfigurationError(
+                f"[VM {idx}/{total}] Missing required fields "
+                f"(target_vm_name, vm_winrm_connect_hostname, vm_winrm_username)"
             )
-            continue
 
-        log.info(
-            "[INFO] [VM %d/%d] Processing: %s (hostname=%s, username=%s)",
-            idx,
-            total,
-            target_vm_name,
-            vm_hostname,
-            vm_username,
-        )
+        log.info("[INFO] [VM %d/%d] %s (hostname=%s)", idx, total, target_vm_name, vm_hostname)
 
-        try:
-            if vm_delinea_secret_id:
-                delinea_id: Optional[str] = vm_delinea_secret_id
-                log.info(
-                    "[INFO] [VM %d/%d] Using explicit Delinea secret ID from manifest: %s",
-                    idx,
-                    total,
-                    delinea_id,
-                )
-            else:
-                # Build FQDN - only append domain suffix if hostname doesn't already have it
-                if vm_hostname.lower().endswith(cfg.domain_suffix.lower()):
-                    machine_fqdn = vm_hostname.lower()
-                else:
-                    machine_fqdn = (vm_hostname + cfg.domain_suffix).lower()
-                account_name = vm_username.lower()
+        if explicit_id:
+            secret_id = explicit_id
+            log.info("[INFO] [VM %d/%d] Using explicit secret ID from manifest", idx, total)
+        else:
+            suffix = cfg.domain_suffix
+            fqdn = vm_hostname.lower() if vm_hostname.lower().endswith(suffix.lower()) else (vm_hostname + suffix).lower()
+            account = vm_username.lower()
+            log.info("[INFO] [VM %d/%d] Searching Delinea: %s\\%s", idx, total, fqdn, account)
 
-                log.info(
-                    "[INFO] [VM %d/%d] Searching Delinea: %s\\%s",
-                    idx,
-                    total,
-                    machine_fqdn,
-                    account_name,
-                )
+            records = _search_secrets(cfg.base_url, auth, fqdn)
+            if not records:
+                raise DelineaError(f"[VM {idx}/{total}] No records returned for: {fqdn}")
 
-                records = _search_secrets(cfg.base_url, auth, machine_fqdn)
+            # Strategy 1: name pattern "fqdn\account"
+            secret_id = ""
+            pattern = f"{fqdn}\\{account}"
+            for rec in records:
+                if str(rec.get("name") or "").strip().lower() == pattern:
+                    secret_id = str(rec.get("id", "")).strip()
+                    log.info("[INFO] [VM %d/%d] Matched by name (ID=%s)", idx, total, secret_id)
+                    break
 
-                if not records:
-                    raise DelineaError("No records returned for machine: %s" % machine_fqdn)
-
-                # Strategy 1: match by name pattern "FQDN\Account".
-                delinea_id = None
-                search_pattern = "%s\\%s" % (machine_fqdn, account_name)
-
+            # Strategy 2: item slugs
+            if not secret_id:
                 for rec in records:
-                    rec_name = str(rec.get("name") or "").strip().lower()
-                    if rec_name == search_pattern:
-                        delinea_id = str(rec.get("id", "")).strip()
-                        log.info(
-                            "[INFO] [VM %d/%d] Matched by name: %s (ID=%s)",
-                            idx,
-                            total,
-                            rec_name,
-                            delinea_id,
-                        )
+                    rec_id: int | None = rec.get("id")
+                    if not rec_id:
+                        continue
+                    detail = _fetch_detail(cfg.base_url, auth, rec_id)
+                    if _matches_by_items(detail.get("items") or [], fqdn, account):
+                        secret_id = str(rec_id).strip()
+                        log.info("[INFO] [VM %d/%d] Matched by items (ID=%s)", idx, total, secret_id)
                         break
 
-                # Strategy 2: match by item slugs (machine + username fields).
-                if not delinea_id:
-                    for rec in records:
-                        rec_id = rec.get("id")
-                        if not rec_id:
-                            continue
-                        try:
-                            detail = _fetch_detail(cfg.base_url, auth, rec_id)
-                            items: List[Dict[str, Any]] = detail.get("items") or []
-                            if _matches_by_items(items, machine_fqdn, account_name):
-                                delinea_id = str(rec_id).strip()
-                                log.info(
-                                    "[INFO] [VM %d/%d] Matched by items: ID=%s",
-                                    idx,
-                                    total,
-                                    delinea_id,
-                                )
-                                break
-                        except DelineaError as ex:
-                            log.warning(
-                                "[WARN] [VM %d/%d] Failed to fetch details for ID=%s: %s",
-                                idx,
-                                total,
-                                rec_id,
-                                ex,
-                            )
-                            continue
+            if not secret_id:
+                raise DelineaError(f"[VM {idx}/{total}] No matching secret for {fqdn}\\{account}")
 
-                if not delinea_id:
-                    raise DelineaError(
-                        "No matching secret found for %s\\%s" % (machine_fqdn, account_name)
-                    )
+        detail = _fetch_detail(cfg.base_url, auth, int(secret_id))
+        password = _extract_password(detail)  # never logged
 
-            # Fetch full details to extract the password.
-            detail = _fetch_detail(cfg.base_url, auth, int(delinea_id))
-            password = _extract_password(detail)  # pragma: allowlist secret
-
-            env_var_name = "winrm_value_%s" % target_vm_name.lower()
-            _write_github_env(cfg.github_env, env_var_name, password)  # pragma: allowlist secret
-
-            log.info(
-                "[INFO] [VM %d/%d] Password resolved and written to env var: %s",  # pragma: allowlist secret
-                idx,
-                total,
-                env_var_name,
-            )
-            success_count += 1
-
-        except (DelineaError, ConfigurationError) as ex:
-            log.error(
-                "[ERROR] [VM %d/%d] Failed to resolve password for %s (VM: %s): %s",  # pragma: allowlist secret
-                idx,
-                total,
-                vm_hostname,
-                target_vm_name,
-                ex,
-            )
-            continue
-
-    if success_count == 0:
-        raise DelineaError("Failed to resolve passwords for all VMs in manifest")  # pragma: allowlist secret
-
-    log.info(
-        "[INFO] [Multi-VM] Successfully resolved %d/%d VM password(s)",  # pragma: allowlist secret
-        success_count,
-        total,
-    )
+        env_var = f"winrm_value_{target_vm_name.lower()}"
+        _write_github_env(cfg.github_env, env_var, password)
+        log.info("[INFO] [VM %d/%d] Password written to env var: %s", idx, total, env_var)
 
     _write_github_env(cfg.github_env, "DELINEA_FETCH_SUCCESS", "true")
+    log.info("[INFO] [Multi-VM] All %d VM(s) resolved successfully", len(vms))
 
 
 # ---------------------------------------------------------------------------
@@ -811,21 +410,14 @@ def _resolve_multi_vm(cfg: Config) -> None:  # pragma: allowlist secret
 
 
 def main() -> None:
-    """Entry point: resolve Delinea secrets and export them to GITHUB_ENV."""
     try:
         cfg = Config.from_env()
-
         if cfg.multi_vm_mode:
-            if yaml is None:
-                raise ConfigurationError(
-                    "PyYAML is required for multi-VM mode. Install: pip install PyYAML"
-                )
             _resolve_multi_vm(cfg)
         else:
-            delinea_id = resolve(cfg)
-            _write_github_env(cfg.github_env, "DELINEA_CREDS_ID", delinea_id)
-            log.info("[INFO] [Single-VM] DELINEA_CREDS_ID resolved and written to GITHUB_ENV")
-
+            secret_id = _resolve_single_vm(cfg)
+            _write_github_env(cfg.github_env, "DELINEA_CREDS_ID", secret_id)
+            log.info("[INFO] [Single-VM] DELINEA_CREDS_ID written to GITHUB_ENV")
     except ConfigurationError as ex:
         log.error("[ERROR] Configuration error: %s", ex)
         sys.exit(1)
