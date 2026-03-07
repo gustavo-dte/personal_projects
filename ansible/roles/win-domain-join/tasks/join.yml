@@ -4,182 +4,128 @@
 # Per-VM domain join orchestrator — all operations via WinRM.
 #
 # Steps:
-#   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
-#                                WinRM credential test + VM state probe (SE-Admin)
-#   Step 2 — Domain join       : WinRM .\SE-Admin + SE-Admin password
-#                                Add-Computer with cpoe-automation domain creds
-#                                -> az vm restart -> wait_for WinRM
-#   Step 3 — Verify            : WinRM .\SE-Admin + SE-Admin password
-#                                confirms PartOfDomain=true
+#   1. prepare_vm_state  — enable WinRM, test credentials, read VM state
+#   2. Domain join       — Add-Computer via WinRM (cpoe-automation + DOMAIN_ADMIN_PASSWORD)
+#                          -> az vm restart -> wait WinRM
+#   3. Verify            — WinRM confirms PartOfDomain=true
 #
-# Credential flow (Delinea fetched ONCE at pipeline start, reused throughout):
-#   WinRM transport : .\SE-Admin + resolved_se_admin_password (Delinea)
-#   Domain join op  : cpoe-automation (DOMAIN_ADMIN_PASSWORD GitHub Secret)
+# Required vars (set by main.yaml loop):
+#   target_vm_name, target_vm_host, se_admin_username, se_admin_password
+#   domain_name, domain_admin_username, domain_admin_value, domain_ou_path
+#   azure_resource_group, azure_vm_name, azure_subscription_id
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # Step 1: Enable WinRM, test credentials, read VM state
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
-- name: "Step 1 - Enable WinRM + test credentials + read VM state"
+- name: "Step 1 - Enable WinRM + read VM state"
   ansible.builtin.include_tasks: prepare_vm_state.yaml
 
-- name: "Step 1 - Compute workflow conditions"
+- name: "Compute join conditions"
   ansible.builtin.set_fact:
     _needs_join: >-
       {{ (force_rejoin | default(false) | bool)
          or not (current_domain_status.part_of_domain | default(false) | bool)
          or (current_domain_status.domain | default('')) != domain_name }}
 
-- name: "Step 1 - Display workflow plan"
+- name: "Skip domain join (already in target domain)"
   ansible.builtin.debug:
-    msg: |
-      +=============================================================+
-      |  DOMAIN JOIN PLAN FOR: {{ target_vm_name }}
-      +=============================================================+
-      |  Connect IP       : {{ target_vm_host }}
-      |  OS hostname now  : {{ current_hostname_info.old_name | default('unknown') }}
-      |  Domain now       : {{ current_domain_status.domain | default('WORKGROUP') }}
-      |  Part of domain   : {{ current_domain_status.part_of_domain | default(false) }}
-      +-------------------------------------------------------------+
-      |  Target hostname  : {{ target_vm_name }}
-      |  Target domain    : {{ domain_name }}
-      |  Force rejoin     : {{ force_rejoin | default(false) }}
-      +-------------------------------------------------------------+
-      |  Step 2 join      : {{ _needs_join | bool }}
-      {% if dry_run | default(false) | bool %}
-      |  *** DRY RUN - no changes will be made ***
-      {% endif %}
-      +=============================================================+
-
-- name: "Step 1 - Skip (nothing to do)"
-  ansible.builtin.debug:
-    msg: "VM '{{ target_vm_name }}' is already in domain '{{ domain_name }}'. Nothing to do."
+    msg: "{{ target_vm_name }} is already in domain '{{ domain_name }}'. Nothing to do."
   when:
     - not (dry_run | default(false) | bool)
     - not (_needs_join | bool)
 
-# ==============================================================================
-# Step 2: Domain join via WinRM as .\SE-Admin + SE-Admin password
-# Add-Computer uses cpoe-automation + DOMAIN_ADMIN_PASSWORD for the AD operation.
-# Reboot via az vm restart, then wait for WinRM.
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# Step 2: Domain join
+# ------------------------------------------------------------------------------
 
 - name: "Step 2 - Domain join block"
   when:
     - not (dry_run | default(false) | bool)
     - _needs_join | bool
   block:
-    - name: "[CREDENTIALS] Step 2 - Domain join"
-      ansible.builtin.debug:
-        msg: |
-          +-------------------------------------------------------------+
-          |  STEP 2 - DOMAIN JOIN
-          |   WinRM user    : .\{{ hostvars['localhost']['resolved_se_admin_username'] }}
-          |   WinRM pass src: Delinea SE-Admin password (single fetch, reused)
-          |   WinRM pass len: {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
-          |   Connect IP    : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
-          |   Join creds    : {{ domain_admin_username }}
-          |   Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
-          |   Target domain : {{ domain_name }}
-          |   Target OU     : {{ domain_ou_path | default('(default)') }}
-          +-------------------------------------------------------------+
-
-    - name: "Step 2 - Join domain via WinRM (.\\{{ hostvars['localhost']['resolved_se_admin_username'] }})"
+    - name: "Step 2 - Join domain via WinRM (.\\{{ resolved_se_admin_username }})"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Domain, PartOfDomain
         if ($cs.PartOfDomain -and ($cs.Domain -ieq $env:DOMAIN_NAME)) {
-          Write-Output ("ALREADY_JOINED:" + $env:DOMAIN_NAME)
+          Write-Output "ALREADY_JOINED:$env:DOMAIN_NAME"
           exit 0
         }
         try {
           $secPass    = ConvertTo-SecureString $env:DOMAIN_PASS -AsPlainText -Force
           $domainCred = New-Object System.Management.Automation.PSCredential(
                           $env:DOMAIN_USER, $secPass)
-          $joinParams = @{
+          $params = @{
             DomainName  = $env:DOMAIN_NAME
             Credential  = $domainCred
             Force       = $true
             ErrorAction = 'Stop'
           }
-          if ($env:OU_PATH -and $env:OU_PATH.Length -gt 0) {
-            $joinParams['OUPath'] = $env:OU_PATH
-          }
-          Add-Computer @joinParams
-          Write-Output ("JOIN_OK:" + $env:DOMAIN_NAME)
+          if ($env:OU_PATH) { $params['OUPath'] = $env:OU_PATH }
+          Add-Computer @params
+          Write-Output "JOIN_OK:$env:DOMAIN_NAME"
         }
         catch {
-          Write-Output ("JOIN_FAILED:" + $_.Exception.Message)
+          Write-Output "JOIN_FAILED:$($_.Exception.Message)"
           exit 1
         }
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: ntlm
+        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_winrm_read_timeout: 70
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+        ansible_user: ".\\{{ resolved_se_admin_username }}"
+        ansible_password: "{{ resolved_se_admin_password }}"
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
         DOMAIN_USER: "{{ domain_admin_username }}"
         DOMAIN_PASS: "{{ domain_admin_value }}"
         OU_PATH: "{{ domain_ou_path | default('') }}"
-      register: winrm_join_result
-      failed_when: false
-      # no_log: true
+      register: _join_result
+      no_log: true
 
-    - name: "Step 2 - Debug join result"
-      ansible.builtin.debug:
-        msg: |
-          Domain join result for {{ target_vm_name }}:
-            output : {{ winrm_join_result.stdout | default('(empty)') | trim }}
-            stderr : {{ winrm_join_result.stderr | default('') | trim }}
-
-    - name: "Step 2 - Fail if domain join failed"
+    - name: "Fail if domain join failed"
       ansible.builtin.fail:
-        msg: |
+        msg: >-
           Domain join failed for {{ target_vm_name }}.
-          Output : {{ winrm_join_result.stdout | default('') | trim }}
-          stderr : {{ winrm_join_result.stderr | default('') | truncate(300) }}
-          ---
-          Check: DC connectivity, OU path, cpoe-automation credentials (DOMAIN_ADMIN_PASSWORD).
+          Check DC connectivity, OU path, and domain admin credentials (DOMAIN_ADMIN_PASSWORD).
       when: >-
-        (winrm_join_result.rc | default(0) | int != 0)
-        or ('JOIN_FAILED:' in (winrm_join_result.stdout | default('')))
+        (_join_result.rc | default(0) | int != 0)
+        or ('JOIN_FAILED:' in (_join_result.stdout | default('')))
 
-    - name: "Step 2 - Reboot VM via az vm restart after domain join"
+    - name: "Step 2 - Reboot after domain join"
       ansible.builtin.shell: >-
         az vm restart
         --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}"
         --name "{{ azure_vm_name | default(target_vm_name) }}"
         --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
       delegate_to: localhost
-      register: az_join_reboot
-      failed_when: az_join_reboot.rc | default(0) | int != 0
+      register: _az_join_reboot
+      failed_when: _az_join_reboot.rc | default(0) | int != 0
 
-    - name: "Step 2 - Wait for WinRM to come back after domain join reboot"
+    - name: "Step 2 - Wait for WinRM after domain join reboot"
       ansible.builtin.wait_for:
         host: "{{ target_vm_host }}"
         port: "{{ winrm_port | default(5985) }}"
         delay: 30
         timeout: 900
         state: started
-      when: az_join_reboot.rc | default(0) | int == 0
+      when: _az_join_reboot.rc | default(0) | int == 0
 
-# ==============================================================================
-# Step 3: Verify domain membership via WinRM as .\Administrator + SE-Admin password
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# Step 3: Verify domain membership
+# ------------------------------------------------------------------------------
 
 - name: "Step 3 - Verify domain membership"
   when:
     - not (dry_run | default(false) | bool)
     - _needs_join | bool
   block:
-    - name: "Step 3 - Read domain status via WinRM (.\\{{ hostvars['localhost']['resolved_se_admin_username'] }})"
+    - name: "Step 3 - Read domain status via WinRM"
       ansible.windows.win_shell: |
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
                 -Property Name, Domain, PartOfDomain
@@ -187,62 +133,31 @@
           try   { [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().Name }
           catch { $cs.Domain }
         } else { 'WORKGROUP' }
-        Write-Output ("hostname=" + $cs.Name + ";domain=" + $domain + ";joined=" + $cs.PartOfDomain)
+        Write-Output "hostname=$($cs.Name);domain=$domain;joined=$($cs.PartOfDomain)"
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: ntlm
+        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_winrm_read_timeout: 70
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-      register: winrm_verify_result
+        ansible_user: ".\\{{ resolved_se_admin_username }}"
+        ansible_password: "{{ resolved_se_admin_password }}"
+      register: _verify_result
       retries: 3
       delay: 20
-      until: winrm_verify_result is succeeded
-      failed_when: false
-      # no_log: true
+      until: _verify_result is succeeded
+      no_log: true
 
-    - name: "Step 3 - Display final VM state"
-      ansible.builtin.debug:
-        msg: |
-          +=============================================================+
-          |  FINAL STATE: {{ target_vm_name }}
-          +=============================================================+
-          |  {{ winrm_verify_result.stdout | default('(no output)') | trim }}
-          +=============================================================+
-
-    - name: "Step 3 - Fail if VM not in target domain"
+    - name: "Fail if VM not in target domain after join"
       ansible.builtin.fail:
-        msg: |
-          VM {{ target_vm_name }} is NOT in domain '{{ domain_name }}' after join + reboot.
-          WinRM verify output: {{ winrm_verify_result.stdout | default('') | trim }}
-          Check DC connectivity, OU path, and domain admin credentials.
+        msg: >-
+          {{ target_vm_name }} is not in domain '{{ domain_name }}' after join + reboot.
+          Verify output: {{ _verify_result.stdout | default('') | trim }}
       when:
-        - winrm_verify_result is defined
-        - winrm_verify_result is succeeded
+        - _verify_result is defined
+        - _verify_result is succeeded
         - >-
-            ('joined=True' not in (winrm_verify_result.stdout | default('')))
-            or (domain_name | lower not in (winrm_verify_result.stdout | default('') | lower))
-
-# ==============================================================================
-# Dry-run preview
-# ==============================================================================
-
-- name: "[DRY RUN] Preview for {{ item.name }}"
-  ansible.builtin.debug:
-    msg: |
-      [DRY RUN] Would execute for {{ item.name }}:
-        Step 1: probe WinRM port; if closed -> az vm extension set (async)
-                WinRM test as {{ _domain_netbios | default('DOMAIN') }}\{{ hostvars['localhost']['resolved_se_admin_username'] | default('SE-Admin') }}
-      {% if _needs_join | bool %}
-        Step 2: WinRM Add-Computer as .\Administrator
-                join creds: {{ domain_admin_username | default('cpoe-automation') }}
-                -> az vm restart -> wait WinRM
-        Step 3: WinRM verify PartOfDomain as .\Administrator
-      {% endif %}
-      No changes were made.
-  when: dry_run | default(false) | bool
+          ('joined=True' not in (_verify_result.stdout | default('')))
+          or (domain_name | lower not in (_verify_result.stdout | default('') | lower))

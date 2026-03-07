@@ -1,7 +1,14 @@
 ---
-# Main entry point for win-domain-join role
-# Joins Windows servers to Active Directory domain with idempotent operations
-# When disjoin_only is true: disjoins VMs from domain (move to WORKGROUP) using manifest targets.
+# main.yaml — entry point for win-domain-join role
+#
+# Modes (controlled by extra vars):
+#   disjoin_only=true          Disjoin VMs from domain, no rename
+#   disjoin_and_rename=true    Disjoin + rename to target_vm_name
+#   (default)                  Full pipeline: disjoin + rename + domain join
+
+# ------------------------------------------------------------------------------
+# Load manifest
+# ------------------------------------------------------------------------------
 
 - name: Load manifest
   ansible.builtin.include_role:
@@ -10,9 +17,16 @@
   vars:
     manifest: "{{ manifest }}"
 
-- name: Prepare VM connectivity (IP and SE-Admin credentials)
+# ------------------------------------------------------------------------------
+# Resolve VM IPs and SE-Admin credentials
+# ------------------------------------------------------------------------------
+
+- name: Prepare VM connectivity and credentials
+  when:
+    - (manifest_data.vms | default([])) | length > 0
+    - not (dry_run | default(false)) | bool
   block:
-    - name: Build VM IP mapping from direct IP
+    - name: Build VM IP map from manifest static IPs
       ansible.builtin.set_fact:
         vm_ip_map: "{{ vm_ip_map | default({}) | combine({item.name: item.vm_ip}) }}"
       loop: "{{ manifest_data.vms }}"
@@ -22,9 +36,8 @@
         - item.vm_ip is defined
         - item.vm_ip | length > 0
 
-    - name: Get VM private IP from Azure CLI (az vm show --show-details, falls back to NIC list)
+    - name: Get VM private IP from Azure CLI
       ansible.builtin.shell: |
-        # Primary: az vm show --show-details (works even when az vm nic list returns empty)
         IP=$(az vm show \
           --resource-group "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}" \
           --name "{{ item.target_vm_name }}" \
@@ -37,7 +50,6 @@
           exit 0
         fi
 
-        # Fallback: NIC list -> NIC show
         NIC_ID=$(az vm nic list \
           --resource-group "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}" \
           --vm-name "{{ item.target_vm_name }}" \
@@ -54,7 +66,7 @@
           --subscription "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}" \
           --query "ipConfigurations[0].privateIPAddress" -o tsv 2>/dev/null
       delegate_to: localhost
-      register: vm_private_ip_result
+      register: _vm_ip_results
       changed_when: false
       failed_when: false
       loop: "{{ manifest_data.vms }}"
@@ -68,53 +80,36 @@
     - name: Build VM IP map from Azure CLI results
       ansible.builtin.set_fact:
         vm_ip_map: "{{ vm_ip_map | default({}) | combine({item.item.name: item.stdout | trim}) }}"
-      loop: "{{ vm_private_ip_result.results | default([]) }}"
+      loop: "{{ _vm_ip_results.results | default([]) }}"
       loop_control:
         label: "{{ item.item.name | default('unknown') }}"
       when:
         - not (item.skipped | default(false) | bool)
-        - item.stdout is defined
-        - item.stdout | trim | length > 0
+        - item.stdout | default('') | trim | length > 0
 
-    - name: Debug IP resolution results
-      ansible.builtin.debug:
-        msg: |
-          VM: {{ item.item.name }} ({{ item.item.target_vm_name }})
-          IP resolved: {{ item.stdout | default('') | trim | length > 0 }}
-          IP value: {{ item.stdout | default('(empty)') | trim }}
-      loop: "{{ vm_private_ip_result.results | default([]) }}"
-      loop_control:
-        label: "{{ item.item.name | default('unknown') }}"
-      when:
-        - not (item.skipped | default(false) | bool)
-
-    - name: Fail if private IP could not be resolved for any VM
+    - name: Fail if private IP could not be resolved
       ansible.builtin.fail:
-        msg: |
-          Could not resolve private IP for VM '{{ item.item.name }}'
-          (Azure resource: '{{ item.item.target_vm_name }}',
-           RG: '{{ item.item.vm_resource_group | default(manifest_data.target_resource_group) }}',
-           Sub: '{{ item.item.vm_subscription_id | default(manifest_data.target_subscription_id) }}').
-          Both az vm show --show-details and az vm nic list returned empty.
-          Verify:
-            - target_vm_name matches the Azure resource name exactly
-            - The managed identity has Reader or VM Contributor on this VM
-            - The VM exists in the expected resource group and subscription
-      loop: "{{ vm_private_ip_result.results | default([]) }}"
+        msg: >-
+          Could not resolve private IP for '{{ item.item.name }}'
+          (Azure: {{ item.item.target_vm_name }},
+           RG: {{ item.item.vm_resource_group | default(manifest_data.target_resource_group) }},
+           Sub: {{ item.item.vm_subscription_id | default(manifest_data.target_subscription_id) }}).
+          Verify target_vm_name, managed identity permissions, RG and subscription.
+      loop: "{{ _vm_ip_results.results | default([]) }}"
       loop_control:
         label: "{{ item.item.name | default('unknown') }}"
       when:
         - not (item.skipped | default(false) | bool)
         - item.stdout is not defined or item.stdout | trim | length == 0
 
-    - name: Build per-VM SE-Admin password mapping
+    - name: Build per-VM SE-Admin password map
       ansible.builtin.set_fact:
         vm_se_admin_passwords: >-
           {{
             vm_se_admin_passwords | default({}) | combine({
               item.name: (
-                lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') if
-                (lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') | string | length > 0)
+                lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='')
+                if lookup('env', 'winrm_value_' + (item.target_vm_name | default(item.name) | lower), default='') | length > 0
                 else (item.vm_se_admin_password | default(''))
               )
             })
@@ -124,195 +119,128 @@
         label: "{{ item.name }}"
       no_log: true
 
-    - name: Debug per-VM SE-Admin password lookup (shows if env vars were found)  # pragma: allowlist secret
-      ansible.builtin.debug:
-        msg: |
-          VM: {{ item.name }}
-          Target name: {{ item.target_vm_name | default(item.name) }}
-          Env var name: winrm_value_{{ item.target_vm_name | default(item.name) | lower }}
-          Password found: {{ 'YES' if (vm_se_admin_passwords[item.name] | default('') | length > 0) else 'NO' }}
-          Password length: {{ vm_se_admin_passwords[item.name] | default('') | string | length }}
+    - name: Fail if SE-Admin password missing for any VM
+      ansible.builtin.fail:
+        msg: >-
+          SE-Admin password missing for VM '{{ item.name }}'.
+          Expected env var: winrm_value_{{ item.target_vm_name | default(item.name) | lower }}
+          Ensure resolve_delinea_secret_id.py ran successfully before this job.
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"
+      when: vm_se_admin_passwords[item.name] | default('') | length == 0
 
-    - name: Build per-VM SE-Admin username mapping
+    - name: Build per-VM SE-Admin username map
       ansible.builtin.set_fact:
-        vm_se_admin_usernames: "{{ vm_se_admin_usernames | default({}) | combine({item.name: item.vm_se_admin_username | default('')}) }}"
+        vm_se_admin_usernames: >-
+          {{ vm_se_admin_usernames | default({}) | combine({item.name: item.vm_se_admin_username | default('')}) }}
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"
 
-    - name: Debug - Show the vm_se_admin_passwords dictionary populated from env vars
-      ansible.builtin.debug:
-        msg: "Populated vm_se_admin_passwords - checking {{ item.name }} has password..."
-      loop: "{{ manifest_data.vms }}"
-      loop_control:
-        label: "{{ item.name }} => password length={{ (vm_se_admin_passwords[item.name] | default('') | string | length) }}"
-  when:
-    - (manifest_data.vms | default([])) | length > 0
-    - not (dry_run | default(false)) | bool
+# ------------------------------------------------------------------------------
+# Disjoin-only path
+# ------------------------------------------------------------------------------
 
-- name: Disjoin-only path (targets from manifest)
+- name: Disjoin-only path
+  when: disjoin_only | default(false) | bool
   block:
-    - name: Set username separator
-      ansible.builtin.set_fact:
-        username_separator: "\\"  # Backslash separator for Windows domain\username format
-
     - name: Assert manifest has VMs for disjoin
       ansible.builtin.assert:
         that:
           - (manifest_data.vms | default([])) | length > 0
-        fail_msg: "Disjoin requires manifest with at least one VM in vms. Pass manifest=... (e.g. test_vm_migration)."
+        fail_msg: "disjoin_only requires at least one VM in manifest vms[]."
 
-    - name: Disjoin each Windows server from domain
+    - name: Disjoin each VM from domain
       ansible.builtin.include_tasks: disjoin_rename.yml
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"
       vars:
-        target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
-        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
-        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
-        skip_rename:          true
+        target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host: "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        se_admin_username: "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
+        se_admin_password: "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        skip_rename: true
         azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
-        azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
+        azure_vm_name: "{{ item.target_vm_name | default(item.name) }}"
         azure_subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
-      register: disjoin_results
 
-    - name: Display disjoin summary
-      ansible.builtin.debug:
-        msg: |
-          Disjoin results:
-          {% for result in disjoin_results.results %}
-          - {{ result.item.name }}: {{ 'SUCCESS' if result is succeeded else 'FAILED' }}
-          {% endfor %}
-      when: disjoin_results is defined
+# ------------------------------------------------------------------------------
+# Disjoin-and-rename path
+# ------------------------------------------------------------------------------
 
-    - name: Fail if any disjoin failed
-      ansible.builtin.fail:
-        msg: "One or more VMs failed to disjoin from the domain. Check the task output above."
-      when:
-        - disjoin_results is defined
-        - disjoin_results.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
-  when: disjoin_only | default(false) | bool
-
-- name: Disjoin and rename path (disjoin → reboot → rename → reboot; no domain rejoin)
+- name: Disjoin-and-rename path
+  when: (disjoin_and_rename | default(false) | bool) or (force_rejoin | default(false) | bool)
   block:
-    - name: Set username separator
-      ansible.builtin.set_fact:
-        username_separator: "\\"  # Backslash separator for Windows domain\username format
-
     - name: Assert manifest has VMs for disjoin-and-rename
       ansible.builtin.assert:
         that:
           - (manifest_data.vms | default([])) | length > 0
-        fail_msg: "disjoin_and_rename requires manifest with at least one VM in vms."
+        fail_msg: "disjoin_and_rename requires at least one VM in manifest vms[]."
 
-    - name: Set domain admin username for disjoin fallback (if available)
+    - name: Set domain admin username (for optional AD object removal)
       ansible.builtin.set_fact:
-        domain_admin_username: "{{ (manifest_data.domainNameSetup.domain_admin_username | default('') | trim) }}"
+        domain_admin_username: "{{ manifest_data.domainNameSetup.domain_admin_username | default('') | trim }}"
       when:
         - manifest_data.domainNameSetup is defined
         - manifest_data.domainNameSetup.domain_admin_username is defined
 
-    - name: Disjoin then rename each Windows server
+    - name: Disjoin then rename each VM
       ansible.builtin.include_tasks: disjoin_rename.yml
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"
       vars:
-        target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
-        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
-        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
-        skip_rename:          false
+        target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host: "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        se_admin_username: "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
+        se_admin_password: "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        skip_rename: false
         azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
-        azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
+        azure_vm_name: "{{ item.target_vm_name | default(item.name) }}"
         azure_subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
-      register: disjoin_and_rename_results
 
-    - name: Display disjoin-and-rename summary
-      ansible.builtin.debug:
-        msg: |
-          Disjoin-and-rename results:
-          {% for result in disjoin_and_rename_results.results %}
-          - {{ result.item.name }} -> {{ result.item.target_vm_name | default(result.item.name) }}: {{ 'SUCCESS' if result is succeeded else 'FAILED' }}
-          {% endfor %}
-      when: disjoin_and_rename_results is defined
-
-    - name: Fail if any disjoin-and-rename failed
-      ansible.builtin.fail:
-        msg: "One or more VMs failed during disjoin-and-rename. Check the task output above."
-      when:
-        - disjoin_and_rename_results is defined
-        - disjoin_and_rename_results.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
-  when: (disjoin_and_rename | default(false) | bool) or (force_rejoin | default(false) | bool)
+# ------------------------------------------------------------------------------
+# Domain join path
+# ------------------------------------------------------------------------------
 
 - name: Domain join path
+  when: not (disjoin_only | default(false)) | bool
   block:
-    - name: Assert required variables
+    - name: Assert domain join variables are present
       ansible.builtin.assert:
         that:
           - (manifest_data.domainNameSetup | default({})) | length > 0
           - (manifest_data.domainNameSetup.domain | default('')) | length > 0
           - (manifest_data.domainNameSetup.domain_admin_username | default('')) | length > 0
           - (domain_admin_value | default('')) | length > 0
-        fail_msg: "Required domain join variables missing. Need: domainNameSetup.domain, domainNameSetup.domain_admin_username (in manifest), and domain_admin_value (passed via playbook/GitHub Secrets)"
+        fail_msg: >-
+          Missing domain join config.
+          Required: domainNameSetup.domain, domainNameSetup.domain_admin_username (manifest),
+          and domain_admin_value (GitHub Secret).
 
     - name: Set domain configuration facts
       ansible.builtin.set_fact:
         domain_name: "{{ manifest_data.domainNameSetup.domain }}"
-        domain_admin_username: "{{ (manifest_data.domainNameSetup.domain_admin_username | default('') | trim) }}"
+        domain_admin_username: "{{ manifest_data.domainNameSetup.domain_admin_username | default('') | trim }}"
         domain_admin_value: "{{ domain_admin_value }}"
-        # Prefer domain_ou_path from extra vars (e.g. DOMAIN_OU_PATH secret); fall back to manifest
-        domain_ou_path: "{{ domain_ou_path | default(manifest_data.domainNameSetup.domain_ou_path) | default('') }}"
+        domain_ou_path: "{{ domain_ou_path | default(manifest_data.domainNameSetup.domain_ou_path | default('')) }}"
         dry_run: "{{ dry_run | default(false) }}"
-        restart_on_success: "{{ restart_on_success | default(true) }}"
-        wait_for_reboot: "{{ wait_for_reboot | default(true) }}"
-        safe_mode_password: "{{ safe_mode_password | default('') }}"
         force_rejoin: "{{ force_rejoin | default(false) }}"
-        username_separator: "\\"  # Backslash separator for Windows domain\username format
       no_log: true
 
-    - name: Debug effective domain admin username (non-sensitive)
-      ansible.builtin.debug:
-        msg: "Using domain_admin_username='{{ domain_admin_username }}' (length={{ domain_admin_username | length }})"
-      no_log: false
-
-
-
-    - name: Join each Windows server to domain
+    - name: Join each VM to domain
       ansible.builtin.include_tasks: join.yml
       loop: "{{ manifest_data.vms }}"
       loop_control:
         label: "{{ item.name }}"
       vars:
-        target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
-        target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
-        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
-        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
+        target_vm_host: "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
+        se_admin_username: "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
+        se_admin_password: "{{ vm_se_admin_passwords[item.name] | default('') }}"
         azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
-        azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
+        azure_vm_name: "{{ item.target_vm_name | default(item.name) }}"
         azure_subscription_id: "{{ item.vm_subscription_id | default(manifest_data.target_subscription_id) }}"
-        skip_rename:          "{{ not (force_rejoin | default(false) | bool) }}"
-      ignore_errors: true
-      register: domain_join_results
-
-    - name: Display domain join summary
-      ansible.builtin.debug:
-        msg: |
-          Domain join results summary:
-          {% for result in domain_join_results.results %}
-          - {{ result.item.name }}: {{ 'SUCCESS' if result is succeeded else 'FAILED' }}
-          {% endfor %}
-      when: domain_join_results is defined
-
-    - name: Fail if any domain join failed
-      ansible.builtin.fail:
-        msg: "One or more VMs failed to join the domain. Check the task output above for details."
-      when:
-        - domain_join_results is defined
-        - domain_join_results.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
-  when: not (disjoin_only | default(false)) | bool
+        skip_rename: "{{ not (force_rejoin | default(false) | bool) }}"
