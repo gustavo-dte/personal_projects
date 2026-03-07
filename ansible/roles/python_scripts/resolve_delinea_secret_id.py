@@ -118,10 +118,20 @@ class Config:
 # ---------------------------------------------------------------------------
 
 
-def _write_github_env(github_env: str | None, key: str, value: str) -> None:
+def _mask_value(value: str) -> None:
+    """Instruct the GitHub Actions runner to mask a value in all future log output."""
+    # ::add-mask:: is a GitHub Actions workflow command. Writing it to stdout
+    # causes the runner to redact the value wherever it appears in logs.
+    # https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#masking-a-value-in-a-log
+    print(f"::add-mask::{value}", flush=True)
+
+
+def _write_github_env(github_env: str | None, key: str, value: str, sensitive: bool = False) -> None:
     if not github_env:
         log.warning("[WARN] GITHUB_ENV not set — skipping export of %s", key)
         return
+    if sensitive:
+        _mask_value(value)
     with open(github_env, "a", encoding="utf-8") as fh:
         fh.write(f"{key}={value}\n")
 
@@ -375,7 +385,7 @@ def _resolve_multi_vm(cfg: Config) -> None:
             for rec in records:
                 if str(rec.get("name") or "").strip().lower() == pattern:
                     secret_id = str(rec.get("id", "")).strip()
-                    log.info("[INFO] [VM %d/%d] Matched by name (ID=%s)", idx, total, secret_id)
+                    log.info("[INFO] [VM %d/%d] Matched by name", idx, total)
                     break
 
             # Strategy 2: item slugs
@@ -387,7 +397,7 @@ def _resolve_multi_vm(cfg: Config) -> None:
                     detail = _fetch_detail(cfg.base_url, auth, rec_id)
                     if _matches_by_items(detail.get("items") or [], fqdn, account):
                         secret_id = str(rec_id).strip()
-                        log.info("[INFO] [VM %d/%d] Matched by items (ID=%s)", idx, total, secret_id)
+                        log.info("[INFO] [VM %d/%d] Matched by items", idx, total)
                         break
 
             if not secret_id:
@@ -397,7 +407,7 @@ def _resolve_multi_vm(cfg: Config) -> None:
         password = _extract_password(detail)  # never logged
 
         env_var = f"winrm_value_{target_vm_name.lower()}"
-        _write_github_env(cfg.github_env, env_var, password)
+        _write_github_env(cfg.github_env, env_var, password, sensitive=True)
         log.info("[INFO] [VM %d/%d] Password written to env var: %s", idx, total, env_var)
 
     _write_github_env(cfg.github_env, "DELINEA_FETCH_SUCCESS", "true")
