@@ -22,15 +22,8 @@
 
 - name: "Step 1 - Enable WinRM + test credentials + read VM state"
   ansible.builtin.include_tasks: prepare_vm_state.yaml
-  vars:
-    # Explicitly pass variables from parent scope for proper scoping
-    se_admin_username: "{{ se_admin_username }}"
-    se_admin_password: "{{ se_admin_password }}"
-    target_vm_name: "{{ target_vm_name }}"
-    target_vm_host: "{{ target_vm_host }}"
-    azure_resource_group: "{{ azure_resource_group }}"
-    azure_vm_name: "{{ azure_vm_name }}"
-    azure_subscription_id: "{{ azure_subscription_id }}"
+  # All required vars (target_vm_name, se_admin_username, resolved_se_admin_username, etc.)
+  # are passed directly from the main.yaml loop vars block - no re-passing needed here.
 
 - name: "Step 1 - Compute workflow conditions"
   ansible.builtin.set_fact:
