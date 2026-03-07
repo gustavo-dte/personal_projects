@@ -33,8 +33,6 @@
     resolved_se_admin_username: "{{ se_admin_username if (se_admin_username is defined and se_admin_username | string | length > 0) else 'SE-Admin' }}"
     resolved_se_admin_password: "{{ se_admin_password if (se_admin_password is defined and se_admin_password | string | length > 0) else '' }}"
     _domain_netbios: "{{ (manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper) if manifest_data.domainNameSetup.domain is defined else 'DTENET' }}"
-  delegate_to: localhost
-  delegate_facts: true
   no_log: false  # Temporarily disable for debugging - username is not sensitive
 
 - name: "Credentials - Fail if SE-Admin password missing for {{ target_vm_name }}"
@@ -115,8 +113,6 @@
       old_name: "{{ item.name }}"
     actual_vm_hostname: "{{ item.name }}"
     _winrm_already_open: false
-  delegate_to: localhost
-  delegate_facts: true
   when: (dry_run | default(false) | bool) or (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
@@ -140,8 +136,6 @@
 - name: "Step 1 - Set WinRM port status fact"
   ansible.builtin.set_fact:
     _winrm_already_open: "{{ winrm_port_probe is succeeded }}"
-  delegate_to: localhost
-  delegate_facts: true
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -290,8 +284,6 @@
 - name: "Step 2 - Parse VM state JSON from WinRM probe"
   ansible.builtin.set_fact:
     _preflight_data: "{{ winrm_probe_result.stdout | trim | from_json }}"
-  delegate_to: localhost
-  delegate_facts: true
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -308,8 +300,6 @@
       domain: "{{ _preflight_data.domain }}"
       part_of_domain: "{{ _preflight_data.part_of_domain }}"
       workgroup_name: "{{ _preflight_data.workgroup_name | default('WORKGROUP') }}"
-  delegate_to: localhost
-  delegate_facts: true
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
