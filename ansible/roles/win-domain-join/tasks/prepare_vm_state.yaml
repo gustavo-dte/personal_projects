@@ -27,13 +27,14 @@
 # ------------------------------------------------------------------------------
 # Credential resolution
 # ------------------------------------------------------------------------------
+# Note: resolved_se_admin_username and resolved_se_admin_password are already
+# resolved at role level (main.yaml) and passed through join.yml.
+# We just set helper facts here.
 
-- name: "Credentials - Resolve SE-Admin for {{ target_vm_name }}"
+- name: "Credentials - Set helper facts for {{ target_vm_name }}"
   ansible.builtin.set_fact:
-    resolved_se_admin_username: "{{ se_admin_username if (se_admin_username is defined and se_admin_username | string | length > 0) else 'SE-Admin' }}"
-    resolved_se_admin_password: "{{ se_admin_password if (se_admin_password is defined and se_admin_password | string | length > 0) else '' }}"
     _domain_netbios: "{{ (manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper) if manifest_data.domainNameSetup.domain is defined else 'DTENET' }}"
-  no_log: false  # Temporarily disable for debugging - username is not sensitive
+  no_log: false
 
 - name: "Credentials - Fail if SE-Admin password missing for {{ target_vm_name }}"
   ansible.builtin.assert:
