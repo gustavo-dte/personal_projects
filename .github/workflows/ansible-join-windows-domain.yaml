@@ -1,29 +1,19 @@
-name: Ansible-Join-Windows-Domain
-
-# This workflow joins Windows servers to an Active Directory domain using Azure Run Command.
-# Steps:
-#   1. Login to Azure using target_subscription_id from the manifest
-#   2. Resolve the SE-Admin password from Delinea using target_vm_name
-#   3. Disjoin VM from domain using Azure Run Command with SE-Admin credentials
-#   4. Rename hostname using Azure Run Command as SYSTEM
-#   5. Join VM to domain using Azure Run Command with cpoe-automation credentials from DOMAIN_ADMIN_PASSWORD secret
-#
-# Note: All operations use Azure Run Command API exclusively.
+name: Ansible - Join Windows Domain
 
 on:
   workflow_dispatch:
     inputs:
       manifest:
-        description: "Manifest name (directory in ansible/vars/)"
+        description: "Manifest name (directory under ansible/vars/)"
         required: true
         type: string
       dry_run:
-        description: "Dry run - no changes will be made"
+        description: "Dry run — no changes will be made"
         required: false
         type: boolean
         default: true
       force_rejoin:
-        description: "Disjoin then rejoin cycle (recommended for migrated VMs with stale trust, DESTRUCTIVE)"
+        description: "Disjoin then rejoin (DESTRUCTIVE — use for stale domain trust)"
         required: false
         type: boolean
         default: false
@@ -47,54 +37,29 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
-      AZURE_CLOUD_API_PROFILE: latest
-      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
+      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
       DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
-      DELINEA_ACCOUNT: ${{ vars.DELINEA_ACCOUNT != '' && vars.DELINEA_ACCOUNT || 'SE-Admin' }}
+      DELINEA_ACCOUNT: SE-Admin
 
     steps:
-      # ------------------------------------------------------------------
-      # Dependencies
-      # ------------------------------------------------------------------
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python dependencies (includes Azure CLI and SDK)
-        run: |
-          echo "=== Installing Python dependencies from requirements.txt ==="
-          pip install -r requirements.txt
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
         shell: bash
 
-      - name: Install Ansible collections from requirements.yml
-        run: |
-          echo "=== Installing Ansible collections (pinned versions) ==="
-          ansible-galaxy collection install -r ansible/requirements.yml
+      - name: Install Ansible collections
+        run: ansible-galaxy collection install -r ansible/requirements.yml
         shell: bash
-
-      - name: Install Delinea Platform Secret Server Ansible Collection
-        run: ansible-galaxy collection install delinea.platform_secretserver
-        shell: bash
-
-      - name: Verify Delinea lookup plugin is installed
-        run: ansible-doc -t lookup -l | grep tss
-        shell: bash
-
-      # ------------------------------------------------------------------
-      # Validate manifest
-      # ------------------------------------------------------------------
 
       - name: Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      # ------------------------------------------------------------------
-      # Azure login
-      # ------------------------------------------------------------------
-
-      - name: Azure Login with user-assigned managed identity
+      - name: Azure login
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
@@ -104,54 +69,22 @@ jobs:
           allow-no-subscriptions: true
           enable-AzPSSession: true
 
-      # ------------------------------------------------------------------
-      # Resolve Delinea passwords for all VMs in manifest
-      # ------------------------------------------------------------------
-
-      - name: Resolve Delinea secret IDs and fetch WinRM passwords
-        id: delinea_fetch
+      - name: Resolve Delinea SE-Admin passwords
         shell: bash
-        run: |
-          MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+
+      - name: Build Ansible extra vars
+        shell: bash
+        run: python3 ansible/roles/python_scripts/build_extra_vars.py
         env:
-          DELINEA_ACCOUNT: SE-Admin
+          MANIFEST_INPUT: ${{ inputs.manifest }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          FORCE_REJOIN_INPUT: ${{ inputs.force_rejoin }}
+          DOMAIN_ADMIN_VALUE_INPUT: ${{ secrets.DOMAIN_ADMIN_PASSWORD }}
+          DOMAIN_OU_PATH_INPUT: ${{ secrets.DOMAIN_OU_PATH }}
 
-      # ------------------------------------------------------------------
-      # Display configuration
-      # ------------------------------------------------------------------
-
-      - name: Display configuration
-        run: |
-          echo "[OK] Configuration validated!"
-          echo "Using manifest: ${{ inputs.manifest }}"
-          echo "[CONFIG] Dry run mode: ${{ inputs.dry_run }}"
-          echo "[RETRY] Force rejoin: ${{ inputs.force_rejoin }}"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "Running in DRY RUN mode - no actual changes will be made"
-          else
-            echo "[RUN] Joining Windows servers to domain..."
-          fi
+      - name: Run Ansible playbook
         shell: bash
-
-      # ------------------------------------------------------------------
-      # Build ansible_extra_vars.json via Python script
-      # ------------------------------------------------------------------
-
-      - name: Prepare extra vars file to maintain variable types (secrets injected)
-        run: |
-          export MANIFEST_INPUT="${{ inputs.manifest }}"
-          export DRY_RUN_INPUT="${{ inputs.dry_run }}"
-          export FORCE_REJOIN_INPUT="${{ inputs.force_rejoin }}"
-          export DOMAIN_ADMIN_VALUE_INPUT="${{ secrets.DOMAIN_ADMIN_PASSWORD }}"
-          export DOMAIN_OU_PATH_INPUT="${{ secrets.DOMAIN_OU_PATH }}"
-          python3 ansible/roles/python_scripts/build_extra_vars.py
-        shell: bash
-
-      # ------------------------------------------------------------------
-      # Run playbook
-      # ------------------------------------------------------------------
-
-      - name: Run playbook - join Windows servers to domain
         run: |
           mkdir -p ansible/logs
           ansible-playbook ansible/playbooks/join-windows-domain.yaml \
@@ -159,13 +92,8 @@ jobs:
           rc=${PIPESTATUS[0]}
           rm -f ansible_extra_vars.json
           exit $rc
-        shell: bash
 
-      # ------------------------------------------------------------------
-      # Upload logs
-      # ------------------------------------------------------------------
-
-      - name: Upload Logs
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:

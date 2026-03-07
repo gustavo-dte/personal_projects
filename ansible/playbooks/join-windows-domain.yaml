@@ -1,11 +1,7 @@
+---
 - name: Join Windows servers to domain
   hosts: localhost
   connection: local
-  gather_facts: no
+  gather_facts: false
   roles:
-    - role: common
     - role: win-domain-join
-      vars:
-        # Use role-scoped aliases to avoid self-referential templating.
-        role_winrm_username: "{{ winrm_username | default('SE-Admin') }}"
-        role_winrm_password: "{{ winrm_password | default('') }}"
