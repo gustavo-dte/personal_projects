@@ -256,8 +256,8 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+    ansible_user: ".\\{{ resolved_se_admin_username }}"
+    ansible_password: "{{ resolved_se_admin_password }}"
   register: winrm_probe_result
   retries: 3
   delay: 15
@@ -272,7 +272,7 @@
   ansible.builtin.fail:
     msg: |
       WinRM credential test FAILED for {{ target_vm_name }} ({{ target_vm_host }}).
-      User    : .\{{ hostvars['localhost']['resolved_se_admin_username'] }}
+      User    : .\{{ resolved_se_admin_username }}
       Port    : {{ winrm_port | default(5985) }}
       Error   : {{ winrm_probe_result.msg | default(winrm_probe_result.stderr | default('unknown error')) }}
       ---
@@ -320,7 +320,7 @@
     msg: |
       +-------------------------------------------------------------+
       |  WinRM CREDENTIAL TEST : PASSED
-      |  VM STATE (.\{{ hostvars['localhost']['resolved_se_admin_username'] }})
+      |  VM STATE (.\{{ resolved_se_admin_username }})
       |   Azure resource : {{ target_vm_name }}
       |   OS hostname    : {{ actual_vm_hostname | default('unknown') }}
       |   Domain         : {{ current_domain_status.domain | default('unknown') }}

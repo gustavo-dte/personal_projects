@@ -86,9 +86,9 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
-          |   WinRM user    : .\{{ hostvars['localhost']['resolved_se_admin_username'] }}
+          |   WinRM user    : .\{{ resolved_se_admin_username }}
           |   WinRM pass src: Delinea SE-Admin password (single fetch, reused)
-          |   WinRM pass len: {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
+          |   WinRM pass len: {{ resolved_se_admin_password | string | length }} chars
           |   Connect IP    : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
           |   Join creds    : {{ domain_admin_username }}
           |   Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
@@ -96,7 +96,7 @@
           |   Target OU     : {{ domain_ou_path | default('(default)') }}
           +-------------------------------------------------------------+
 
-    - name: "Step 2 - Join domain via WinRM (.\\{{ hostvars['localhost']['resolved_se_admin_username'] }})"
+    - name: "Step 2 - Join domain via WinRM (.\\{{ resolved_se_admin_username }})"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Domain, PartOfDomain
@@ -133,8 +133,8 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+        ansible_user: ".\\{{ resolved_se_admin_username }}"
+        ansible_password: "{{ resolved_se_admin_password }}"
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
         DOMAIN_USER: "{{ domain_admin_username }}"
@@ -191,7 +191,7 @@
     - not (dry_run | default(false) | bool)
     - _needs_join | bool
   block:
-    - name: "Step 3 - Read domain status via WinRM (.\\{{ hostvars['localhost']['resolved_se_admin_username'] }})"
+    - name: "Step 3 - Read domain status via WinRM (.\\{{ resolved_se_admin_username }})"
       ansible.windows.win_shell: |
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
                 -Property Name, Domain, PartOfDomain
@@ -209,8 +209,8 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_winrm_read_timeout: 70
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+        ansible_user: ".\\{{ resolved_se_admin_username }}"
+        ansible_password: "{{ resolved_se_admin_password }}"
       register: winrm_verify_result
       retries: 3
       delay: 20
@@ -249,7 +249,7 @@
     msg: |
       [DRY RUN] Would execute for {{ item.name }}:
         Step 1: probe WinRM port; if closed -> az vm extension set (async)
-                WinRM test as {{ _domain_netbios | default('DOMAIN') }}\{{ hostvars['localhost']['resolved_se_admin_username'] | default('SE-Admin') }}
+                WinRM test as {{ _domain_netbios | default('DOMAIN') }}\{{ resolved_se_admin_username | default('SE-Admin') }}
       {% if _needs_join | bool %}
         Step 2: WinRM Add-Computer as .\Administrator
                 join creds: {{ domain_admin_username | default('cpoe-automation') }}
