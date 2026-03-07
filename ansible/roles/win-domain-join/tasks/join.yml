@@ -39,6 +39,8 @@
       {{ (force_rejoin | default(false) | bool)
          or not (current_domain_status.part_of_domain | default(false) | bool)
          or (current_domain_status.domain | default('')) != domain_name }}
+  delegate_to: localhost
+  delegate_facts: true
 
 - name: "Step 1 - Display workflow plan"
   ansible.builtin.debug:

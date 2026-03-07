@@ -263,6 +263,8 @@
       domain: 'WORKGROUP'
       part_of_domain: false
       workgroup_name: 'WORKGROUP'
+  delegate_to: localhost
+  delegate_facts: true
   when:
     - not (dry_run | default(false) | bool)
     - disjoin_result is defined
