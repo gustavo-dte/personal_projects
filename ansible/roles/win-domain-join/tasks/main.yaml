@@ -173,8 +173,10 @@
       vars:
         target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
-        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
-        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        # Pre-resolve credentials at role level (before include) for proper scoping with delegation
+        _temp_se_admin_password: "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        resolved_se_admin_username: "{{ (item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin'))) if (_temp_se_admin_password | length > 0) else 'SE-Admin' }}"
+        resolved_se_admin_password: "{{ _temp_se_admin_password if (_temp_se_admin_password | length > 0) else '' }}"
         skip_rename:          true
         azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
         azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
@@ -225,8 +227,10 @@
       vars:
         target_vm_name:       "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host:       "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
-        se_admin_username:    "{{ item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin')) }}"
-        se_admin_password:    "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        # Pre-resolve credentials at role level (before include) for proper scoping with delegation
+        _temp_se_admin_password: "{{ vm_se_admin_passwords[item.name] | default('') }}"
+        resolved_se_admin_username: "{{ (item.vm_winrm_username | default(item.vm_se_admin_username | default('SE-Admin'))) if (_temp_se_admin_password | length > 0) else 'SE-Admin' }}"
+        resolved_se_admin_password: "{{ _temp_se_admin_password if (_temp_se_admin_password | length > 0) else '' }}"
         skip_rename:          false
         azure_resource_group: "{{ item.vm_resource_group | default(manifest_data.target_resource_group) }}"
         azure_vm_name:        "{{ item.target_vm_name | default(item.name) }}"
