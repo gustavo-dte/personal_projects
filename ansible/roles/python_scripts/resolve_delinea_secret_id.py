@@ -67,8 +67,11 @@ from requests.exceptions import HTTPError, RequestException
 
 try:
     import yaml
-except ImportError:
-    yaml = None  # type: ignore[assignment]
+except ImportError as e:
+    raise ImportError(
+        "PyYAML is required but not installed. "
+        "Install it with: pip install PyYAML"
+    ) from e
 
 # ---------------------------------------------------------------------------
 # Logging
