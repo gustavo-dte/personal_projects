@@ -110,8 +110,8 @@
       part_of_domain: false
       workgroup_name: 'WORKGROUP'
     current_hostname_info:
-      old_name: "{{ item.name }}"
-    actual_vm_hostname: "{{ item.name }}"
+      old_name: "{{ target_vm_name }}"
+    actual_vm_hostname: "{{ target_vm_name }}"
     _winrm_already_open: false
   when: (dry_run | default(false) | bool) or (skip_hostname_setup | default(false) | bool)
 
