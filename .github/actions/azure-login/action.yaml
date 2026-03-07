@@ -1,0 +1,57 @@
+name: Azure Login
+description: "Composite action for Azure login with OIDC or managed identity"
+
+inputs:
+  tenant-id:
+    description: "Azure tenant ID"
+    required: true
+  subscription-id:
+    description: "Azure subscription ID"
+    required: false
+    default: ""
+  client-id:
+    description: "Managed identity client ID"
+    required: true
+  enable-az-ps-session:
+    description: "Enable Azure PowerShell session (for Windows runners)"
+    required: false
+    default: "false"
+  auth-type:
+    description: "Authentication type (IDENTITY for managed identity on self-hosted runners)"
+    required: false
+    default: ""
+  install-az-datamigration:
+    description: "Install Az.DataMigration PowerShell module (Windows only)"
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Azure Login (OIDC)
+      if: inputs.auth-type == ''
+      uses: azure/login@v2
+      with:
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+        client-id: ${{ inputs.client-id }}
+        allow-no-subscriptions: true
+        enable-AzPSSession: ${{ inputs.enable-az-ps-session }}
+
+    - name: Azure Login (Managed Identity)
+      if: inputs.auth-type != ''
+      uses: azure/login@v2
+      with:
+        auth-type: ${{ inputs.auth-type }}
+        tenant-id: ${{ inputs.tenant-id }}
+        client-id: ${{ inputs.client-id }}
+        allow-no-subscriptions: true
+        enable-AzPSSession: ${{ inputs.enable-az-ps-session }}
+
+    - name: Install Az.DataMigration module
+      if: inputs.install-az-datamigration == 'true'
+      shell: pwsh
+      run: |
+        Set-PSRepository PSGallery -InstallationPolicy Trusted
+        Install-Module Az.Accounts -Scope CurrentUser -Force
+        Install-Module Az.DataMigration -Scope CurrentUser -Force

@@ -4,8 +4,6 @@
 # Per-VM orchestrator: disjoin from domain + rename — all via WinRM.
 #
 # Steps:
-#   Step 0 - Password Sync     : az vm user update to sync VM password with Delinea
-#                                (fixes password rotation issues)
 #   Step 1 - prepare_vm_state  : probe WinRM port; if closed -> az vm extension set
 #                                WinRM credential test + VM state probe (SE-Admin)
 #   Step 2 - Disjoin           : microsoft.ad.membership module via WinRM (.\ SE-Admin)
@@ -14,7 +12,6 @@
 #                                Rename-Computer -> az vm restart -> wait_for WinRM -> verify
 #
 # Credential flow (Delinea fetched ONCE at pipeline start, reused throughout):
-#   Step 0  : Sync VM password with Delinea (az vm user update)
 #   Disjoin : .\SE-Admin (WinRM) + domain admin (optional, for AD object removal)
 #   Rename  : .\SE-Admin  + resolved_se_admin_password
 #
@@ -29,53 +26,6 @@
 #   azure_vm_name              Azure resource name
 #   azure_subscription_id      Azure subscription ID
 
-# ==============================================================================
-# Step 0: Sync VM password to match Delinea (fixes password rotation issues)
-# ==============================================================================
-
-- name: "Step 0 - Sync VM local admin password to match Delinea"
-  ansible.builtin.shell: |
-    az vm user update \
-      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
-      --name "{{ azure_vm_name | default(target_vm_name) }}" \
-      --username "{{ se_admin_username }}" \
-      --password "{{ se_admin_password }}" \
-      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}"
-  delegate_to: localhost
-  register: password_sync_result
-  failed_when: password_sync_result.rc != 0
-  no_log: false
-  when:
-    - not (dry_run | default(false) | bool)
-    - sync_vm_password | default(true) | bool
-
-- name: "Step 0 - Display password sync status"
-  ansible.builtin.debug:
-    msg: |
-      +=============================================================+
-      |  PASSWORD SYNC: {{ 'SKIPPED' if (password_sync_result is skipped) else 'COMPLETED' }}
-      +=============================================================+
-      {% if not (password_sync_result is skipped) %}
-      |  VM               : {{ target_vm_name }}
-      |  User             : {{ se_admin_username }}
-      |  Status           : VM password synced to match Delinea
-      |  Purpose          : Prevent 'credentials rejected' errors
-      |                     after Delinea password rotation
-      +=============================================================+
-      {% else %}
-      |  Reason           : sync_vm_password={{ sync_vm_password | default(true) }}
-      |  Note             : If WinRM fails due to credential rejection,
-      |                     run with -e "sync_vm_password=true"
-      +=============================================================+
-      {% endif %}
-
-- name: "Step 0 - Wait for password propagation"
-  ansible.builtin.pause:
-    seconds: 10
-  when:
-    - not (dry_run | default(false) | bool)
-    - password_sync_result is defined
-    - not (password_sync_result.skipped | default(false) | bool)
 
 # ==============================================================================
 # Step 1: Enable WinRM, test WinRM credentials, read VM state

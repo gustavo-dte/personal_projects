@@ -1,8 +1,7 @@
 name: Ansible-Replication-To-SQLDB
 
 # This workflow starts a migration replication using an Azure Database Migration Service
-# It uses the Azure DMS project to perform the replication
-# TODO: to be tested later, will go through testing against actual VMs
+# Uses Linux runner for Ansible (UTF-8 native) and Windows runner for DMS (Windows-only)
 
 on:
   workflow_dispatch:
@@ -26,55 +25,380 @@ permissions:
   contents: read
 
 jobs:
-  start-replication-to-SQLMI:
+  # Job 1: Run on Linux to gather secrets and prepare DMS parameters
+  prepare-dms-config:
     environment: dev
+    permissions:
+      id-token: write
+      contents: read
     runs-on:
       - self-hosted
       - linux
+      - x64
+      - centralus
       - non-prod
       - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    outputs:
+      source_sql_server_name: ${{ steps.get-secrets.outputs.source_sql_server_name }}
+      source_database_name: ${{ steps.get-secrets.outputs.source_database_name }}
+      target_sql_server_name: ${{ steps.get-secrets.outputs.target_sql_server_name }}
+      target_database_name: ${{ steps.get-secrets.outputs.target_database_name }}
+      target_sql_db_instance_name: ${{ steps.get-secrets.outputs.target_sql_db_instance_name }}
+      resource_group_name: ${{ steps.get-secrets.outputs.resource_group_name }}
+      dms_subscription_id: ${{ steps.get-secrets.outputs.dms_subscription_id }}
+      dms_service_name: ${{ steps.get-secrets.outputs.dms_service_name }}
+      target_sql_resource_group: ${{ steps.get-secrets.outputs.target_sql_resource_group }}
+      key_vault_uri: ${{ steps.get-secrets.outputs.key_vault_uri }}
+      src_userid_hex: ${{ steps.get-secrets.outputs.src_userid_hex }}
+      src_pswd_hex: ${{ steps.get-secrets.outputs.src_pswd_hex }}
+      tgt_userid_hex: ${{ steps.get-secrets.outputs.tgt_userid_hex }}
+      tgt_pswd_hex: ${{ steps.get-secrets.outputs.tgt_pswd_hex }}
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: ✅ Validate manifest
+      - name: Validate manifest
         uses: ./.github/actions/validate-manifest
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: 🔐 Azure Login with user-assigned managed identity
-        uses: azure/login@v2
+      - name: Azure Login
+        uses: ./.github/actions/azure-login
         with:
-          auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          client-id: ${{ secrets.VM_MIGRATE_MI_CLIENT_ID }}
-          allow-no-subscriptions: true
-          enable-AzPSSession: true
+          subscription-id: ${{ secrets.AZURE_CORPAPPS_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.CLIENT_ID_VM_MIGRATE_DEV_CU_MI }}
+          auth-type: IDENTITY
 
-      - name: 📊 Display configuration
+      - name: Display configuration
         run: |
-          echo "✅ Configuration validated!"
-          echo "📄 Using manifest: ${{ inputs.manifest }}"
-          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "🧪 Running in DRY RUN mode - no actual changes will be made"
-          else
-            echo "🚀 Starting sql replication..."
+          echo "Configuration validated!"
+          echo "Using manifest: ${{ inputs.manifest }}"
+          echo "Dry run mode: ${{ inputs.dry_run }}"
+        shell: bash
+
+      - name: Set up Python
+        run: |
+          sudo yum install -y python3 python3-pip
+          python3 --version
+          pip3 --version
+        shell: bash
+
+      - name: Install Ansible and Azure collection
+        run: |
+          # Clear cached azure packages to avoid version conflicts
+          pip3 uninstall -y azure-cli azure-core azure-mgmt-core azure-mgmt-keyvault || true
+          pip3 cache purge || true
+          # Clear stale MSAL cache to avoid NormalizedResponse error
+          rm -rf ~/.azure/msal_http_cache.bin ~/.azure/msal_token_cache.* || true
+          # Install ansible and azcollection first (pinned versions)
+          pip3 install ansible==8.7.0
+          ansible-galaxy collection install azure.azcollection:==2.3.0
+          pip3 install -r ~/.ansible/collections/ansible_collections/azure/azcollection/requirements.txt || true
+          # Install azure-cli LAST so it overwrites any conflicting SDK versions (pinned version)
+          pip3 install --force-reinstall azure-cli==2.67.0
+          pip3 install oauthlib==3.2.2 requests-oauthlib==1.3.1
+          az version
+        shell: bash
+
+      - name: Get secrets from Key Vault and manifest
+        id: get-secrets
+        run: |
+          set -euo pipefail
+
+          # Load manifest
+          MANIFEST_FILE="ansible/vars/${{ inputs.manifest }}/manifest.yml"
+
+          # Extract DMS config from manifest
+          KEY_VAULT_URI=$(grep 'key_vault_uri:' "$MANIFEST_FILE" | awk '{print $2}' | tr -d '"')
+          SOURCE_DB=$(grep 'source_database_name:' "$MANIFEST_FILE" | awk '{print $2}' | tr -d '"')
+          TARGET_SERVER=$(grep 'target_sql_server_name:' "$MANIFEST_FILE" | awk '{print $2}' | tr -d '"')
+          TARGET_DB=$(grep 'target_database_name:' "$MANIFEST_FILE" | awk '{print $2}' | tr -d '"')
+          TARGET_INSTANCE=$(grep 'target_sql_db_instance_name:' "$MANIFEST_FILE" | awk '{print $2}' | tr -d '"')
+          RESOURCE_GROUP=$(grep 'resource_group_name:' "$MANIFEST_FILE" | head -1 | awk '{print $2}' | tr -d '"')
+          SUBSCRIPTION_ID=$(grep 'dms_subscription_id:' "$MANIFEST_FILE" | head -1 | awk '{print $2}' | tr -d '"' || true)
+          if [ -z "$SUBSCRIPTION_ID" ]; then
+            SUBSCRIPTION_ID=$(grep 'target_subscription_id:' "$MANIFEST_FILE" | head -1 | awk '{print $2}' | tr -d '"' || true)
+          fi
+          if [ -z "$SUBSCRIPTION_ID" ]; then
+            SUBSCRIPTION_ID="${{ secrets.AZURE_CORPAPPS_SUBSCRIPTION_ID }}"
+          fi
+          DMS_SERVICE_NAME=$(grep 'dms_service_name:' "$MANIFEST_FILE" | head -1 | awk '{print $2}' | tr -d '"')
+          TARGET_SQL_RES_GRP=$(grep 'target_sql_resource_group:' "$MANIFEST_FILE" | head -1 | awk '{print $2}' | tr -d '"')
+
+          if [ -z "$KEY_VAULT_URI" ]; then
+            echo "ERROR: key_vault_uri is missing in manifest $MANIFEST_FILE"
+            exit 1
+          fi
+          if [ -z "$SUBSCRIPTION_ID" ]; then
+            echo "ERROR: Could not resolve subscription ID from dms_subscription_id, target_subscription_id, or AZURE_CORPAPPS_SUBSCRIPTION_ID"
+            exit 1
           fi
 
-      - name: 🧱 Prepare extra vars file to maintain variable types
-        run: |
-          cat > ansible_extra_vars.json <<'JSON'
-          {
-            "manifest": "${{ inputs.manifest }}",
-            "dry_run": ${{ inputs.dry_run }}
-          }
-          JSON
+          # Validate/resolve target SQL resource group
+          if [ -n "$TARGET_SQL_RES_GRP" ]; then
+            if ! az group show --name "$TARGET_SQL_RES_GRP" --subscription "$SUBSCRIPTION_ID" >/dev/null 2>&1; then
+              echo "WARNING: target_sql_resource_group '$TARGET_SQL_RES_GRP' not found in subscription '$SUBSCRIPTION_ID'. Attempting auto-discovery from SQL server name '$TARGET_INSTANCE'."
+              DISCOVERED_TARGET_SQL_RES_GRP=$(az sql server list --subscription "$SUBSCRIPTION_ID" --query "[?name=='$TARGET_INSTANCE'].resourceGroup | [0]" -o tsv || true)
+              if [ -n "$DISCOVERED_TARGET_SQL_RES_GRP" ]; then
+                TARGET_SQL_RES_GRP="$DISCOVERED_TARGET_SQL_RES_GRP"
+                echo "Resolved target SQL resource group to: $TARGET_SQL_RES_GRP"
+              else
+                echo "ERROR: Could not find target SQL resource group '$TARGET_SQL_RES_GRP' and auto-discovery failed for SQL server '$TARGET_INSTANCE'."
+                exit 1
+              fi
+            fi
+          else
+            DISCOVERED_TARGET_SQL_RES_GRP=$(az sql server list --subscription "$SUBSCRIPTION_ID" --query "[?name=='$TARGET_INSTANCE'].resourceGroup | [0]" -o tsv || true)
+            if [ -n "$DISCOVERED_TARGET_SQL_RES_GRP" ]; then
+              TARGET_SQL_RES_GRP="$DISCOVERED_TARGET_SQL_RES_GRP"
+              echo "Auto-discovered target SQL resource group: $TARGET_SQL_RES_GRP"
+            else
+              echo "ERROR: target_sql_resource_group is missing and auto-discovery failed for SQL server '$TARGET_INSTANCE'."
+              exit 1
+            fi
+          fi
 
-      - name: 🎬 Run playbook - start sqldb replication
+          # Get secrets from Key Vault
+          VAULT_NAME="$(echo $KEY_VAULT_URI | sed 's|https://||;s|.vault.azure.net/||')"
+          SOURCE_SERVER=$(az keyvault secret show --vault-name "$VAULT_NAME" --name sourcesqlservername --query value -o tsv)
+          SRC_USERID=$(az keyvault secret show --vault-name "$VAULT_NAME" --name sqlsrcuserid --query value -o tsv)
+          SRC_PSWD=$(az keyvault secret show --vault-name "$VAULT_NAME" --name sqlsrcpswd --query value -o tsv)
+          TGT_USERID=$(az keyvault secret show --vault-name "$VAULT_NAME" --name sqltargetuserid --query value -o tsv)
+          TGT_PSWD=$(az keyvault secret show --vault-name "$VAULT_NAME" --name sqltargetpswd --query value -o tsv)
+
+          if [ -z "$SRC_USERID" ] || [ -z "$SRC_PSWD" ] || [ -z "$TGT_USERID" ] || [ -z "$TGT_PSWD" ]; then
+            echo "ERROR: One or more required SQL secrets are empty or missing in Key Vault '$VAULT_NAME'"
+            exit 1
+          fi
+
+          echo "::add-mask::$SRC_USERID"
+          echo "::add-mask::$SRC_PSWD"
+          echo "::add-mask::$TGT_USERID"
+          echo "::add-mask::$TGT_PSWD"
+
+          SRC_USERID_HEX=$(printf '%s' "$SRC_USERID" | od -An -tx1 | tr -d ' \n')
+          SRC_PSWD_HEX=$(printf '%s' "$SRC_PSWD" | od -An -tx1 | tr -d ' \n')
+          TGT_USERID_HEX=$(printf '%s' "$TGT_USERID" | od -An -tx1 | tr -d ' \n')
+          TGT_PSWD_HEX=$(printf '%s' "$TGT_PSWD" | od -An -tx1 | tr -d ' \n')
+
+          # Set outputs (non-sensitive)
+          echo "source_sql_server_name=$SOURCE_SERVER" >> $GITHUB_OUTPUT
+          echo "source_database_name=$SOURCE_DB" >> $GITHUB_OUTPUT
+          echo "target_sql_server_name=$TARGET_SERVER" >> $GITHUB_OUTPUT
+          echo "target_database_name=$TARGET_DB" >> $GITHUB_OUTPUT
+          echo "target_sql_db_instance_name=$TARGET_INSTANCE" >> $GITHUB_OUTPUT
+          echo "resource_group_name=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
+          echo "dms_subscription_id=$SUBSCRIPTION_ID" >> $GITHUB_OUTPUT
+          echo "dms_service_name=$DMS_SERVICE_NAME" >> $GITHUB_OUTPUT
+          echo "target_sql_resource_group=$TARGET_SQL_RES_GRP" >> $GITHUB_OUTPUT
+          echo "key_vault_uri=$KEY_VAULT_URI" >> $GITHUB_OUTPUT
+          echo "src_userid_hex=$SRC_USERID_HEX" >> $GITHUB_OUTPUT
+          echo "src_pswd_hex=$SRC_PSWD_HEX" >> $GITHUB_OUTPUT
+          echo "tgt_userid_hex=$TGT_USERID_HEX" >> $GITHUB_OUTPUT
+          echo "tgt_pswd_hex=$TGT_PSWD_HEX" >> $GITHUB_OUTPUT
+
+          echo "Target SQL Res Grp: " $TARGET_SQL_RES_GRP
+          echo "DMS Service Name: " $DMS_SERVICE_NAME
+        shell: bash
+
+  # Job 2: Run on Windows to execute DMS Schema migration (Windows-only commands)
+  run-dms-schema-migration:
+    needs: prepare-dms-config
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: windows-latest
+    env:
+      SuppressAzurePowerShellBreakingChangeWarnings: "true"
+      AZ_SKIP_VERSION_CHECK: "true"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: ./.github/actions/azure-login
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_CORPAPPS_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.CLIENT_ID_VM_MIGRATE_DEV_CU_MI }}
+          auth-type: SERVICE_PRINCIPAL
+          enable-az-ps-session: "true"
+          install-az-datamigration: ${{ inputs.dry_run == false && 'true' || 'false' }}
+
+      - name: Install .NET 6.0 Runtime
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Run DMS Schema Migration
+        if: ${{ inputs.dry_run == false }}
         run: |
-          ansible-playbook ansible/playbooks/using-dms-replicate-sql-to-sqldb.yml \
-            -e @ansible_extra_vars.json
+          $ErrorActionPreference = 'Stop'
+
+          function Convert-HexToString {
+            param([string]$Hex)
+            if ([string]::IsNullOrWhiteSpace($Hex)) { return "" }
+            $bytes = New-Object byte[] ($Hex.Length / 2)
+            for ($i = 0; $i -lt $Hex.Length; $i += 2) {
+              $bytes[$i / 2] = [Convert]::ToByte($Hex.Substring($i, 2), 16)
+            }
+            return [Text.Encoding]::UTF8.GetString($bytes)
+          }
+
+          # Read secrets from upstream self-hosted job outputs
+          $SrcUserId = Convert-HexToString "${{ needs.prepare-dms-config.outputs.src_userid_hex }}"
+          $SrcPswd = Convert-HexToString "${{ needs.prepare-dms-config.outputs.src_pswd_hex }}"
+          $TgtUserId = Convert-HexToString "${{ needs.prepare-dms-config.outputs.tgt_userid_hex }}"
+          $TgtPswd = Convert-HexToString "${{ needs.prepare-dms-config.outputs.tgt_pswd_hex }}"
+
+          if ([string]::IsNullOrWhiteSpace($TgtUserId)) {
+            throw "Target SQL user id is empty or missing from upstream workflow outputs."
+          }
+
+          # Get config from previous job outputs
+          $SourceServer = "${{ needs.prepare-dms-config.outputs.source_sql_server_name }}"
+          $SourceDb = "${{ needs.prepare-dms-config.outputs.source_database_name }}"
+          $TargetServer = "${{ needs.prepare-dms-config.outputs.target_sql_server_name }}"
+          $TargetDb = "${{ needs.prepare-dms-config.outputs.target_database_name }}"
+
+          # Build connection strings
+          $SrcConnStr = "Server=$SourceServer;Initial Catalog=$SourceDb;User ID=$SrcUserId;Password=$SrcPswd;Encrypt=True;TrustServerCertificate=True"
+          $TgtConnStr = "Server=$TargetServer;Initial Catalog=$TargetDb;User ID=$TgtUserId;Password=$TgtPswd;Encrypt=True;TrustServerCertificate=False"
+
+          Write-Host "Starting DMS Schema Migration..."
+          Write-Host "Source: $SourceServer / $SourceDb"
+          Write-Host "Target: $TargetServer / $TargetDb"
+
+          # Run schema migration
+          New-AzDataMigrationSqlServerSchema -Action "MigrateSchema" -SourceConnectionString $SrcConnStr -TargetConnectionString $TgtConnStr -Verbose
+
+          Write-Host "Schema migration completed!"
+        shell: pwsh
+
+  # Job 3: Run on Windows to execute DMS Data Migration (Windows-only commands)
+  run-dms-data-migration:
+    needs: [prepare-dms-config, run-dms-schema-migration]
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: windows-latest
+    env:
+      SuppressAzurePowerShellBreakingChangeWarnings: "true"
+      AZ_SKIP_VERSION_CHECK: "true"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: ./.github/actions/azure-login
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_CORPAPPS_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.CLIENT_ID_VM_MIGRATE_DEV_CU_MI }}
+          auth-type: SERVICE_PRINCIPAL
+          enable-az-ps-session: "true"
+          install-az-datamigration: ${{ inputs.dry_run == false && 'true' || 'false' }}
+
+      - name: Install .NET 6.0 Runtime
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Run DMS Data Migration
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Convert-HexToString {
+            param([string]$Hex)
+            if ([string]::IsNullOrWhiteSpace($Hex)) { return "" }
+            $bytes = New-Object byte[] ($Hex.Length / 2)
+            for ($i = 0; $i -lt $Hex.Length; $i += 2) {
+              $bytes[$i / 2] = [Convert]::ToByte($Hex.Substring($i, 2), 16)
+            }
+            return [Text.Encoding]::UTF8.GetString($bytes)
+          }
+
+          # Read secrets from upstream self-hosted job outputs
+          $SrcUserId = Convert-HexToString "${{ needs.prepare-dms-config.outputs.src_userid_hex }}"
+          $SrcPswd = Convert-HexToString "${{ needs.prepare-dms-config.outputs.src_pswd_hex }}"
+          $SrcSecurePswd = $SrcPswd | ConvertTo-SecureString -AsPlainText -Force
+          $TgtUserId = Convert-HexToString "${{ needs.prepare-dms-config.outputs.tgt_userid_hex }}"
+          $TgtPswd = Convert-HexToString "${{ needs.prepare-dms-config.outputs.tgt_pswd_hex }}"
+          $TgtSecurePswd = $TgtPswd | ConvertTo-SecureString -AsPlainText -Force
+          $SubscriptionId = "${{ needs.prepare-dms-config.outputs.dms_subscription_id }}"
+          if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
+            $SubscriptionId = "${{ secrets.AZURE_CORPAPPS_SUBSCRIPTION_ID }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($TgtUserId)) {
+            throw "Target SQL user id is empty or missing from upstream workflow outputs."
+          }
+          if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
+            throw "Subscription ID is empty. Ensure Azure login succeeded and either manifest dms_subscription_id/target_subscription_id or AZURE_CORPAPPS_SUBSCRIPTION_ID is configured."
+          }
+
+          # Get config from previous job outputs
+          $SourceServer = "${{ needs.prepare-dms-config.outputs.source_sql_server_name }}"
+          $SourceDb = "${{ needs.prepare-dms-config.outputs.source_database_name }}"
+          $TargetServer = "${{ needs.prepare-dms-config.outputs.target_sql_server_name }}"
+          $TargetDb = "${{ needs.prepare-dms-config.outputs.target_database_name }}"
+          $ResourceGroup = "${{ needs.prepare-dms-config.outputs.resource_group_name }}"
+          $DmsServiceName = "${{ needs.prepare-dms-config.outputs.dms_service_name }}"
+          $TargetSqlResGrp = "${{ needs.prepare-dms-config.outputs.target_sql_resource_group }}"
+          $ResolvedTargetSqlResGrp = $TargetSqlResGrp
+          $TargetServerName = ($TargetServer -split '\.')[0]
+
+          # Switch to the DMS subscription before any resource lookups
+          Write-Host "Setting Azure context to subscription: $SubscriptionId"
+          Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
+
+          if (-not (Get-AzResourceGroup -Name $ResolvedTargetSqlResGrp -ErrorAction SilentlyContinue)) {
+            Write-Host "Warning: Target SQL resource group '$ResolvedTargetSqlResGrp' not found in subscription '$SubscriptionId'. Attempting SQL server RG discovery."
+            $DiscoveredRg = (Get-AzSqlServer -ServerName $TargetServerName -ErrorAction SilentlyContinue).ResourceGroupName
+            if (-not [string]::IsNullOrWhiteSpace($DiscoveredRg)) {
+              $ResolvedTargetSqlResGrp = $DiscoveredRg
+              Write-Host "Resolved target SQL resource group to: $ResolvedTargetSqlResGrp"
+            }
+            else {
+              throw "Could not resolve resource group for target SQL server '$TargetServerName' in subscription '$SubscriptionId'. Update target_sql_resource_group in manifest."
+            }
+          }
+
+          # Build connection strings
+          $SrcConnStr = "Server=$SourceServer;Initial Catalog=$SourceDb;User ID=$SrcUserId;Password=$SrcPswd;Encrypt=True;TrustServerCertificate=True"
+          $TgtConnStr = "Server=$TargetServer;Initial Catalog=$TargetDb;User ID=$TgtUserId;Password=$TgtPswd;Encrypt=True;TrustServerCertificate=False"
+
+          Write-Host "Starting DMS Data Migration..."
+          Write-Host "Source: $SourceServer / $SourceDb"
+          Write-Host "Target: $TargetServer / $TargetDb"
+          Write-Host "Target SQL Res Grp: $ResolvedTargetSqlResGrp"
+          Write-Host "Target Server Name (short): $TargetServerName"
+          Write-Host "Subscription ID: $SubscriptionId"
+          Write-Host "TargetSQLResGrp: $ResolvedTargetSqlResGrp"
+          Write-Host "SqlDbInstanceName: $TargetServerName"
+          Write-Host "Target Server: $TargetServer"
+          Write-Host "TargetDBName: $TargetDb"
+          Write-Host "Source ServerName: $SourceServer"
+          Write-Host "Target UserID: $TgtUserId"
+
+          # Run Data migration
+          New-AzDataMigrationToSqlDb -ResourceGroupName $ResolvedTargetSqlResGrp -SqlDbInstanceName $TargetServerName -TargetDbName $TargetDb -MigrationService "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.DataMigration/SqlMigrationServices/$DmsServiceName" -SourceSqlConnectionDataSource $SourceServer -SourceDatabaseName $SourceDb -SourceSqlConnectionUserName $SrcUserId -SourceSqlConnectionPassword $SrcSecurePswd -SourceSqlConnectionAuthentication "SqlAuthentication" -TargetSqlConnectionDataSource $TargetServer -TargetSqlConnectionUserName $TgtUserId -TargetSqlConnectionPassword $TgtSecurePswd -TargetSqlConnectionAuthentication "SqlAuthentication" -Scope "/subscriptions/$SubscriptionId/resourceGroups/$ResolvedTargetSqlResGrp/providers/Microsoft.Sql/servers/$TargetServerName"
+          Write-Host "Data migration completed!"
+        shell: pwsh
+
+      - name: Dry run - display config
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          Write-Host "DRY RUN - Would migrate schema from:"
+          Write-Host "  Source: ${{ needs.prepare-dms-config.outputs.source_sql_server_name }} / ${{ needs.prepare-dms-config.outputs.source_database_name }}"
+          Write-Host "  Target: ${{ needs.prepare-dms-config.outputs.target_sql_server_name }} / ${{ needs.prepare-dms-config.outputs.target_database_name }}"
+        shell: pwsh

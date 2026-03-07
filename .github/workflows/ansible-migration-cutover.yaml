@@ -96,8 +96,7 @@ jobs:
           python3 -c "import sys; print('Python executable:', sys.executable); print('Python path:', sys.path)"
           echo ""
           echo "=== Installing Python dependencies from requirements.txt ==="
-          # Install to system Python (not --user) to ensure Ansible modules can access them
-          sudo python3 -m pip install -r requirements.txt
+          pip install -r requirements.txt
           echo ""
           echo "=== Verifying installation location ==="
           python3 -c "import sys, site; print('Site packages:', site.getsitepackages())"
@@ -236,8 +235,6 @@ jobs:
 
       - name: Run migration cutover with automatic skip logic
         id: cutover
-        env:
-          ANSIBLE_PYTHON_INTERPRETER: /bin/python3
         run: |
           echo "Starting intelligent migration cutover..."
           echo "The playbook will automatically:"

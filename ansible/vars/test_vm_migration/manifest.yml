@@ -44,6 +44,20 @@ backup_vault_resource_group_name: rg-cu-CorpApps-MigrationTest-Dev
 backup_vault_name: backup-vault-cu-dev-migration-test
 backup_vault_policy_name: daily-migration-test-vm-backup-policy
 
+dms_replication:
+  resource_group_name: "rg-cu-CorpApps-MigrationTest-Dev"
+  location: "centralus" # Choose an appropriate Azure location
+  dms_service_name: "dms-svc-1-cu-sql-dev"
+  #source_sql_server_name: "dca-dev1890\DVSQL01,43624"
+  source_database_name: "BOS_Dev"
+  target_sql_server_name: "dte-sql-cu-dev-bos-27.database.windows.net" # FQDN of Azure SQL Server
+  target_sql_db_instance_name: "dte-sql-cu-dev-bos-27" # Azure SQL Server instance name (without .database.windows.net)
+  target_database_name: "dte-sdb-cu-dev-bos-27" # The input parameter variable destination
+  key_vault_name: "kv-vmw-mig-cu-dev"
+  key_vault_uri: "https://kv-vmw-mig-cu-dev.vault.azure.net/"
+  dms_subscription_id: "6796a2fb-2928-4ec6-96da-962d3b0001b7"
+  target_sql_resource_group: "rg-cu-vmware-BosDB-Dev"
+
 # Dynatrace configuration for Azure VM monitoring
 # Role reads these values from manifest_data.dynatrace
 dynatrace:

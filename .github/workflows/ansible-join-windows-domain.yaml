@@ -23,10 +23,10 @@ on:
         type: boolean
         default: true
       force_rejoin:
-        description: "Disjoin then rejoin cycle (recommended for migrated VMs with stale trust)"
+        description: "Disjoin then rejoin cycle (recommended for migrated VMs with stale trust, DESTRUCTIVE)"
         required: false
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}
@@ -51,7 +51,7 @@ jobs:
       DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
       DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
-      DELINEA_SECRET_ACCOUNT: ${{ vars.DELINEA_SECRET_ACCOUNT != '' && vars.DELINEA_SECRET_ACCOUNT || 'SE-Admin' }}
+      DELINEA_ACCOUNT: ${{ vars.DELINEA_ACCOUNT != '' && vars.DELINEA_ACCOUNT || 'SE-Admin' }}
 
     steps:
       # ------------------------------------------------------------------
@@ -69,8 +69,8 @@ jobs:
 
       - name: Install Ansible collections from requirements.yml
         run: |
-          echo "=== Installing/Upgrading Ansible collections ==="
-          ansible-galaxy collection install -r ansible/requirements.yml --upgrade
+          echo "=== Installing Ansible collections (pinned versions) ==="
+          ansible-galaxy collection install -r ansible/requirements.yml
         shell: bash
 
       - name: Install Delinea Platform Secret Server Ansible Collection
@@ -114,7 +114,7 @@ jobs:
         run: |
           MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
         env:
-          DELINEA_SECRET_ACCOUNT: SE-Admin
+          DELINEA_ACCOUNT: SE-Admin
 
       # ------------------------------------------------------------------
       # Display configuration
@@ -134,20 +134,18 @@ jobs:
         shell: bash
 
       # ------------------------------------------------------------------
-      # Build ansible_extra_vars.json inline (Adeola's approach)
+      # Build ansible_extra_vars.json via Python script
       # ------------------------------------------------------------------
 
       - name: Prepare extra vars file to maintain variable types (secrets injected)
         run: |
-          set -euo pipefail
           export MANIFEST_INPUT="${{ inputs.manifest }}"
           export DRY_RUN_INPUT="${{ inputs.dry_run }}"
           export FORCE_REJOIN_INPUT="${{ inputs.force_rejoin }}"
           export DOMAIN_ADMIN_VALUE_INPUT="${{ secrets.DOMAIN_ADMIN_PASSWORD }}"
           export DOMAIN_OU_PATH_INPUT="${{ secrets.DOMAIN_OU_PATH }}"
-          python3 -c "import json, os, pathlib; to_bool=lambda v: str(v).strip().lower() in ('true','1','yes'); extra_vars={ 'manifest': os.environ['MANIFEST_INPUT'], 'dry_run': to_bool(os.environ['DRY_RUN_INPUT']), 'force_rejoin': to_bool(os.environ['FORCE_REJOIN_INPUT']), 'domain_admin_value': os.environ['DOMAIN_ADMIN_VALUE_INPUT'], 'domain_ou_path': os.environ['DOMAIN_OU_PATH_INPUT'] }; pathlib.Path('ansible_extra_vars.json').write_text(json.dumps(extra_vars), encoding='utf-8')"
-          chmod 600 ansible_extra_vars.json
-          python3 -m json.tool ansible_extra_vars.json > /dev/null && echo "[OK] JSON is valid" || (echo "[FAIL] JSON validation failed" && exit 1)
+          python3 ansible/roles/python_scripts/build_extra_vars.py
+        shell: bash
 
       # ------------------------------------------------------------------
       # Run playbook

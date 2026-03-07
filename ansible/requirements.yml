@@ -1,9 +1,13 @@
 ---
 # Install Azure collection for Ansible
+# Version pinning prevents breaking changes when running --upgrade
+# Update versions only after testing in dev/test environments
 collections:
   - name: azure.azcollection
-    # Use latest version to ensure API compatibility
+    version: ">=1.14.0,<2.0.0"
   - name: microsoft.ad
+    version: ">=1.3.0,<2.0.0"
     # Domain join modules migrated from ansible.windows to microsoft.ad
   - name: ansible.windows
+    version: ">=1.14.0,<2.0.0"
     # Keep for win_reboot and other Windows modules (not domain-related)
