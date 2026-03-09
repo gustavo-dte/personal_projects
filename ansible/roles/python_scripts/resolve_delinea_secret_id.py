@@ -118,22 +118,30 @@ class Config:
 # ---------------------------------------------------------------------------
 
 
-def _mask_value(value: str) -> None:
-    """Instruct the GitHub Actions runner to mask a value in all future log output."""
-    # ::add-mask:: is a GitHub Actions workflow command. Writing it to stdout
-    # causes the runner to redact the value wherever it appears in logs.
-    # https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#masking-a-value-in-a-log
-    print(f"::add-mask::{value}", flush=True)
-
-
-def _write_github_env(github_env: str | None, key: str, value: str, sensitive: bool = False) -> None:
+def _write_github_env(github_env: str | None, key: str, value: str) -> None:
+    """Append key=value to the GitHub Actions environment file."""
     if not github_env:
         log.warning("[WARN] GITHUB_ENV not set — skipping export of %s", key)
         return
-    if sensitive:
-        _mask_value(value)
     with open(github_env, "a", encoding="utf-8") as fh:
         fh.write(f"{key}={value}\n")
+
+
+def _register_mask(github_env: str | None, key: str) -> None:
+    """Record an env var name that the workflow step must mask after this script exits.
+
+    The Python process never emits the sensitive value to any output stream.
+    Instead, the workflow step reads GITHUB_MASKS and issues ::add-mask:: commands
+    itself, after sourcing GITHUB_ENV, so the runner redacts the value from all
+    subsequent log output.
+
+    Format: one env var name per line, written to the path in GITHUB_MASKS.
+    """
+    masks_file = os.getenv("GITHUB_MASKS", "")
+    if not masks_file:
+        return
+    with open(masks_file, "a", encoding="utf-8") as fh:
+        fh.write(f"{key}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +283,7 @@ def _resolve_by_machine(
         try:
             detail = _fetch_detail(base_url, auth, sid)
         except DelineaError as ex:
-            log.warning("[WARN] Skipping secret %s — could not fetch details: %s", sid, ex)
+            log.warning("[WARN] Skipping a secret — could not fetch details: %s", ex)
             continue
 
         if _matches_by_items(detail.get("items") or [], machine_filter, desired):
@@ -407,7 +415,8 @@ def _resolve_multi_vm(cfg: Config) -> None:
         password = _extract_password(detail)  # never logged
 
         env_var = f"winrm_value_{target_vm_name.lower()}"
-        _write_github_env(cfg.github_env, env_var, password, sensitive=True)
+        _write_github_env(cfg.github_env, env_var, password)
+        _register_mask(cfg.github_env, env_var)
         log.info("[INFO] [VM %d/%d] Password written to env var: %s", idx, total, env_var)
 
     _write_github_env(cfg.github_env, "DELINEA_FETCH_SUCCESS", "true")

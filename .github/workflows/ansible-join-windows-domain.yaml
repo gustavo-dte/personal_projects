@@ -71,7 +71,31 @@ jobs:
 
       - name: Resolve Delinea SE-Admin passwords
         shell: bash
-        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+        run: |
+          # GITHUB_MASKS is a temp file the Python script writes env var names into.
+          # The next step reads it and emits ::add-mask:: so the runner redacts those
+          # values from all subsequent log output. The Python script itself never
+          # prints sensitive values, which keeps CodeQL's taint analysis clean.
+          MASKS_FILE="$(mktemp)"
+          echo "GITHUB_MASKS=${MASKS_FILE}" >> "$GITHUB_ENV"
+          MANIFEST="${{ inputs.manifest }}" GITHUB_MASKS="${MASKS_FILE}" \
+            python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+
+      - name: Mask resolved passwords in runner logs
+        shell: bash
+        run: |
+          if [ -z "${GITHUB_MASKS:-}" ] || [ ! -f "$GITHUB_MASKS" ]; then
+            exit 0
+          fi
+          # Source GITHUB_ENV so resolved env vars are available in this shell,
+          # then emit ::add-mask:: for each var name recorded by the Python script.
+          while IFS= read -r var_name; do
+            [ -z "$var_name" ] && continue
+            # Read the value from the env file written by the previous step.
+            value=$(grep -m1 "^${var_name}=" "$GITHUB_ENV" | cut -d= -f2- || true)
+            [ -n "$value" ] && echo "::add-mask::${value}"
+          done < "$GITHUB_MASKS"
+          rm -f "$GITHUB_MASKS"
 
       - name: Build Ansible extra vars
         shell: bash
