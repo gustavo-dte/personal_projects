@@ -62,13 +62,26 @@
 
 - name: Verify Azure resource group exists
   block:
-    - name: Check if target resource group exists (using Azure CLI)
+    - name: Check if target resource group exists — with subscription
       ansible.builtin.command:
-        cmd: az group show --name "{{ target_resource_group }}" --subscription "{{ target_subscription_id | default(omit) }}" --output json
+        cmd: az group show --name "{{ target_resource_group }}" --subscription "{{ target_subscription_id }}" --output json
       register: resource_group_info_raw
       changed_when: false
-      when: not (dry_run | default(false))
       no_log: true
+      when:
+        - not (dry_run | default(false))
+        - target_subscription_id is defined
+        - target_subscription_id | length > 0
+
+    - name: Check if target resource group exists — without subscription
+      ansible.builtin.command:
+        cmd: az group show --name "{{ target_resource_group }}" --output json
+      register: resource_group_info_raw
+      changed_when: false
+      no_log: true
+      when:
+        - not (dry_run | default(false))
+        - target_subscription_id is not defined or target_subscription_id | length == 0
 
     - name: Parse resource group info
       ansible.builtin.set_fact:
@@ -106,13 +119,28 @@
 
 - name: Verify Azure Migrate project resource group exists (optional)
   block:
-    - name: Check if Azure Migrate project resource group exists (using Azure CLI)
+    - name: Check if Azure Migrate project resource group exists — with subscription
       ansible.builtin.command:
-        cmd: az group show --name "{{ azure_migrate_project_resource_group }}" --subscription "{{ azure_migrate_subscription_id | default(omit) }}" --output json
+        cmd: az group show --name "{{ azure_migrate_project_resource_group }}" --subscription "{{ azure_migrate_subscription_id }}" --output json
       register: migrate_rg_info_raw
       changed_when: false
-      when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
       no_log: true
+      when:
+        - not (dry_run | default(false))
+        - (azure_migrate_project_resource_group | default('')) | length > 0
+        - azure_migrate_subscription_id is defined
+        - azure_migrate_subscription_id | length > 0
+
+    - name: Check if Azure Migrate project resource group exists — without subscription
+      ansible.builtin.command:
+        cmd: az group show --name "{{ azure_migrate_project_resource_group }}" --output json
+      register: migrate_rg_info_raw
+      changed_when: false
+      no_log: true
+      when:
+        - not (dry_run | default(false))
+        - (azure_migrate_project_resource_group | default('')) | length > 0
+        - azure_migrate_subscription_id is not defined or azure_migrate_subscription_id | length == 0
 
     - name: Parse Azure Migrate project resource group info
       ansible.builtin.set_fact:

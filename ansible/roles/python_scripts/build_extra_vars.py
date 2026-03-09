@@ -65,8 +65,11 @@ def _build() -> dict[str, Any]:
 
 def _write(data: dict[str, Any]) -> None:
     path = Path(OUTPUT_FILE)
-    path.write_text(json.dumps(data), encoding="utf-8")
-    path.chmod(0o600)
+    # os.open() sets 0o600 atomically at creation — avoids the race between
+    # write_text() and a subsequent chmod() where the file briefly has default perms.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(data))
     log.info("[OK] %s written (mode 0600)", OUTPUT_FILE)
 
 
