@@ -83,6 +83,16 @@
         - not (dry_run | default(false))
         - target_subscription_id is not defined or target_subscription_id | length == 0
 
+    - name: Fail if resource group az cli returned empty output
+      ansible.builtin.fail:
+        msg: >-
+          Resource group not found or inaccessible: '{{ target_resource_group }}'.
+          Azure CLI returned no output — the resource group may not exist in subscription '{{ target_subscription_id | default("(default)") }}'.
+      when:
+        - not (dry_run | default(false))
+        - resource_group_info_raw is defined
+        - resource_group_info_raw.stdout is not defined or resource_group_info_raw.stdout | length == 0
+
     - name: Parse resource group info
       ansible.builtin.set_fact:
         resource_group_info:
@@ -105,13 +115,17 @@
     - name: Display resource group verification success
       ansible.builtin.debug:
         msg: "✓ Resource group verified: {{ resource_group_info.resourcegroups[0].name }}"
-      when: resource_group_info.resourcegroups | length > 0
+      when:
+        - resource_group_info is defined
+        - resource_group_info.resourcegroups | length > 0
 
     - name: Fail if resource group not found
       ansible.builtin.fail:
         msg: >-
           Resource group not found: {{ target_resource_group }}
-      when: resource_group_info.resourcegroups | length == 0
+      when:
+        - resource_group_info is defined
+        - resource_group_info.resourcegroups | length == 0
 
   rescue:
     - name: Handle resource group verification failure
