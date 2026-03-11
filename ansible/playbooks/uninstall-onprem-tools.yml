@@ -4,8 +4,19 @@
   hosts: localhost
   connection: local
   gather_facts: no
+
   vars:
+    ss_url_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_BASE_URL', default='') }}"
+    ss_username_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_USERNAME', default='') }}"
+    ss_password: "{{ lookup('ansible.builtin.env', 'DELINEA_PASSWORD', default='') }}"
+    ss_secret_id_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_ID', default='') }}"
+    ss_secret_path_raw: "{{ lookup('ansible.builtin.env', 'DELINEA_SECRET_PATH', default='') }}"
+    ss_url: "{{ (ss_url_raw | trim) if (ss_url_raw | trim | length > 0) else 'https://dte.secretservercloud.com' }}"
+    ss_username: "{{ (ss_username_raw | trim) if (ss_username_raw | trim | length > 0) else 'SVC_VM_Migration' }}"
+    ss_secret_id: "{{ ss_secret_id_raw | replace('\\n', '') | replace('\\r', '') | trim }}"
+    ss_secret_path: "{{ (ss_secret_path_raw | trim) if (ss_secret_path_raw | trim | length > 0) else 'SE-Admin' }}"
     manifest: "{{ manifest }}"
+
   tasks:
     - name: Load manifest via common role
       ansible.builtin.include_role:
@@ -14,19 +25,14 @@
       vars:
         manifest: "{{ manifest }}"
 
+    - name: Debug Delinea lookup config
+      ansible.builtin.debug:
+        msg: "Using Delinea Secret Server plugin with Secret ID: {{ ss_secret_id }}"
+      no_log: false
+
     - name: Display loaded VMs from manifest
       ansible.builtin.debug:
         msg: "VMs to process: {{ manifest_data.vms | map(attribute='name') | list }}"
-
-- name: Uninstall onprem tools via Azure RunCommand (no direct VM connection needed)
-  hosts: localhost
-  connection: local
-  gather_facts: no
-  tasks:
-    - name: Load manifest
-      ansible.builtin.include_vars:
-        file: "../vars/{{ manifest }}/manifest.yml"
-        name: manifest_data
 
     - name: Execute uninstall on each VM via Azure RunCommand
       ansible.builtin.include_role:

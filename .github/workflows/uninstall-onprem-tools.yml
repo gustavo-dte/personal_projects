@@ -31,51 +31,203 @@ jobs:
       - self-hosted
       - linux
       - non-prod
+      - vm-migrate
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
+      DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
+      DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
+      DELINEA_ACCOUNT: ${{ vars.DELINEA_ACCOUNT != '' && vars.DELINEA_ACCOUNT || 'SE-Admin' }}
 
-      - name: 🔐 Azure Login with user-assigned managed identity
+    steps:
+      # ------------------------------------------------------------------
+      # Dependencies
+      # ------------------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Display current commit SHA
+        run: |
+          echo "Running workflow on commit: $(git rev-parse HEAD)"
+          echo "Branch: $(git branch --show-current)"
+          echo "Last commit message: $(git log -1 --pretty=%B)"
+        shell: bash
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+        shell: bash
+
+      - name: Install Ansible collections from requirements.yml
+        run: |
+          echo "=== Installing/Upgrading Ansible collections ==="
+          ansible-galaxy collection install -r ansible/requirements.yml --upgrade
+          echo ""
+          echo "=== Installed Azure collection version ==="
+          ansible-galaxy collection list | grep azure.azcollection || echo "Azure collection not found"
+        shell: bash
+
+      - name: Install Delinea Platform Secret Server Ansible Collection
+        run: ansible-galaxy collection install delinea.platform_secretserver
+        shell: bash
+
+      - name: Verify Delinea lookup plugin is installed
+        run: ansible-doc -t lookup -l | grep tss
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Validate manifest
+      # ------------------------------------------------------------------
+
+      - name: Validate manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest: ${{ inputs.manifest }}
+
+      # ------------------------------------------------------------------
+      # Read target_subscription_id from manifest
+      # ------------------------------------------------------------------
+
+      - name: Read target subscription ID from manifest
+        id: read_subscription
+        run: |
+          SUB_ID=$(MANIFEST="${{ inputs.manifest }}" MANIFEST_KEY="target_subscription_id" \
+            python3 ansible/roles/python_scripts/read_manifest_value.py)
+          echo "subscription_id=${SUB_ID}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] Target subscription: ${SUB_ID}"
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Upgrade Azure CLI before authentication (no auth required)
+      # ------------------------------------------------------------------
+
+      - name: Upgrade Azure CLI to latest version (pre-login)
+        shell: bash
+        run: |
+          echo "=== Current Azure CLI Version ==="
+          az version --output yaml 2>/dev/null | grep azure-cli || echo "Azure CLI may not be properly installed"
+          echo ""
+          echo "=== Upgrading Azure CLI to pinned version (>=2.60.0) ==="
+          pip install --upgrade "azure-cli>=2.60.0"
+          echo ""
+          echo "=== Updated Azure CLI Version ==="
+          az version --output yaml | grep azure-cli
+
+      # ------------------------------------------------------------------
+      # Azure login using the subscription from the manifest
+      # ------------------------------------------------------------------
+
+      - name: Azure login with user-assigned managed identity
+        if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.CLIENT_ID_VM_MIGRATE_DEV_CU_MI }}
-          allow-no-subscriptions: true
-          enable-AzPSSession: false
+          subscription-id: ${{ steps.read_subscription.outputs.subscription_id }}
+          allow-no-subscriptions: false
+          enable-AzPSSession: true
 
-      - name: Set Azure subscription context
+      - name: Verify Azure CLI authentication
+        if: ${{ !inputs.dry_run }}
         run: |
-          # Load manifest to get subscription ID
-          SUBSCRIPTION_ID=$(grep 'target_subscription_id' ansible/vars/${{ inputs.manifest }}/manifest.yml | awk '{print $2}')
-          echo "Setting subscription to: $SUBSCRIPTION_ID"
-          az account set --subscription "$SUBSCRIPTION_ID"
+          echo "=== Current Authentication ==="
+          az account show --output table
           echo ""
-          echo "Current subscription:"
-          az account show
-
-      - name: Check Azure authentication and subscription
-        run: |
-          echo "Current Azure subscription context:"
-          az account show
-          echo ""
-          echo "Checking resource group: rg-cu-CorpApps-MigrationTest-Dev"
-          az group show --name "rg-cu-CorpApps-MigrationTest-Dev" --subscription $(az account show --query id -o tsv) 2>&1 || echo "Resource group not found in current subscription"
-
-      - name: �📊 Display workflow configuration
-        run: |
-          echo "✅ Workflow configuration:"
-          echo "📄 Using manifest: ${{ inputs.manifest }}"
-          echo "🔧 Dry run mode: ${{ inputs.dry_run }}"
-          echo "🗂️  Output directory: ansible/output"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "🧪 Running in DRY RUN mode - Azure lookups will be skipped"
+          echo "=== Subscription Context ==="
+          CURRENT_SUB=$(az account show --query id -o tsv)
+          EXPECTED_SUB="${{ steps.read_subscription.outputs.subscription_id }}"
+          echo "Current subscription:  ${CURRENT_SUB}"
+          echo "Expected subscription: ${EXPECTED_SUB}"
+          if [ "${CURRENT_SUB}" != "${EXPECTED_SUB}" ]; then
+            echo "[ERROR] Subscription mismatch!"
+            exit 1
           fi
+          echo "[OK] Subscription context is correct"
+          echo ""
+          echo "=== Verifying compute API ==="
+          az provider show \
+            --namespace Microsoft.Compute \
+            --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" \
+            -o tsv || echo "[WARN] Unable to verify compute API"
+        shell: bash
 
-      - name: 🧱 Prepare extra vars file to maintain variable types
+      # ------------------------------------------------------------------
+      # Ensure Azure NSG has WinRM rule allowing GitHub runner IP
+      # ------------------------------------------------------------------
+
+      - name: Ensure Azure NSG allows WinRM from GitHub runner
+        if: ${{ !inputs.dry_run }}
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/ensure_nsg_winrm_rule.py
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Open RDP and WinRM on the VM Windows Firewall via Azure Run Command
+      # ------------------------------------------------------------------
+
+      - name: Verify script version
+        run: |
+          echo "=== Script Version Check ==="
+          head -n 6 ansible/roles/python_scripts/configure_winrm_firewall.py \
+            | grep -i version || echo "[WARN] Version line not found"
+          echo "Script checksum: $(sha256sum ansible/roles/python_scripts/configure_winrm_firewall.py | awk '{print $1}')"
+        shell: bash
+
+      - name: Configure VM Windows Firewall (RDP 3389 and WinRM 5985)
+        if: ${{ !inputs.dry_run }}
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/configure_winrm_firewall.py
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Extract VM hostname for Delinea lookup
+      # Uses target_vm_name from manifest as the Delinea machine filter
+      # ------------------------------------------------------------------
+
+      - name: Extract VM hostname for Delinea lookup
+        run: |
+          MANIFEST_FILE="ansible/vars/${{ inputs.manifest }}/manifest.yml" \
+            python3 ansible/roles/python_scripts/extract_vm_hostname.py
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Resolve SE-Admin password from Delinea using target_vm_name
+      # Writes per-VM env vars: winrm_value_<target_vm_name_lowercase>
+      # ------------------------------------------------------------------
+
+      - name: Resolve SE-Admin WinRM password from Delinea
+        id: delinea_fetch
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Display configuration
+      # ------------------------------------------------------------------
+
+      - name: Display configuration
+        run: |
+          echo "[INFO] Manifest:      ${{ inputs.manifest }}"
+          echo "[INFO] Dry run:       ${{ inputs.dry_run }}"
+          echo "[INFO] Force rejoin:  ${{ inputs.force_rejoin }}"
+          echo "[INFO] Subscription:  ${{ steps.read_subscription.outputs.subscription_id }}"
+          echo "[INFO] Domain admin:  cpoe-automation (from DOMAIN_ADMIN_PASSWORD secret)"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "[INFO] Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "[INFO] Running LIVE - changes will be applied to the VM"
+          fi
+        shell: bash
+
+      # ------------------------------------------------------------------
+      # Build ansible_extra_vars.json
+      # Disjoin step: uses SE-Admin + Delinea password (winrm_password injected by resolve step)
+      # Join step:    uses cpoe-automation + DOMAIN_ADMIN_PASSWORD secret
+      # ------------------------------------------------------------------
+
+      - name: Prepare extra vars file
         run: |
           cat > ansible_extra_vars.json <<'JSON'
           {
@@ -83,6 +235,7 @@ jobs:
             "dry_run": ${{ inputs.dry_run }}
           }
           JSON
+          cat ansible_extra_vars.json
 
       - name: Run playbook - uninstall onprem tools
         run: |

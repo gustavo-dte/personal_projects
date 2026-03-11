@@ -2,7 +2,7 @@
 # Tasks for executing uninstall via Azure RunCommand API
 # This is the core replacement for direct WinRM execution
 # File: ansible/roles/onprem-tools-uninstallation/tasks/uninstall_via_azure_runcommand.yml
-# Optimized the GitHub Actions workflow for uninstalling onprem tools to reduce execution time
+# Uses az CLI instead of azure.azcollection to avoid Python dependency issues
 
 - name: Display VM and uninstall details
   ansible.builtin.debug:
@@ -13,20 +13,30 @@
       Tools to uninstall: {{ uninstall_list | join(', ') }}
       Dry Run: {{ dry_run | default(false) }}
 
-- name: Query VM information via Azure API
-  azure.azcollection.azure_rm_virtualmachine_info:
-    resource_group: "{{ azure_resource_group }}"
-    name: "{{ vm_name }}"
+- name: Query VM information via Azure CLI
+  ansible.builtin.command:
+    cmd: >
+      az vm show
+      --resource-group "{{ azure_resource_group }}"
+      --name "{{ vm_name }}"
+      --subscription "{{ azure_subscription_id }}"
+      --query "name"
+      -o tsv
   register: vm_query_result
   failed_when: false
+  changed_when: false
+
+- name: Debug VM query result
+  ansible.builtin.debug:
+    msg: "VM query result: rc={{ vm_query_result.rc }}, stdout={{ vm_query_result.stdout | trim }}"
 
 - name: Set VM found fact
   ansible.builtin.set_fact:
-    _vm_found: "{{ vm_query_result.get('vms') | default([]) | length > 0 }}"
+    _vm_found: "{{ vm_query_result.rc == 0 and vm_query_result.stdout | trim | length > 0 }}"
 
 - name: Display VM query result
   ansible.builtin.debug:
-    msg: "VM {{ vm_name }}: {{ 'found' if _vm_found else 'NOT FOUND' }}"
+    msg: "VM {{ vm_name }}: {{ azure_resource_group }} : {{ azure_subscription_id }} : {{ 'found' if _vm_found else 'NOT FOUND' }}"
 
 - name: Fail if VM not found (hardening; set fail_if_vm_not_found to false to skip)
   ansible.builtin.fail:
@@ -46,8 +56,8 @@
     dest: /tmp/uninstall_tools_{{ vm_name }}.ps1
     mode: '0644'
   when:
-    - not dry_run | default(false)
-    - _vm_found
+    - not (dry_run | default(false))
+    - _vm_found | default(false)
 
 - name: Execute tool detection and uninstall via Azure RunCommand using the script file
   ansible.builtin.command:
@@ -62,16 +72,16 @@
   register: run_command_result
   failed_when: false
   when:
-    - not dry_run | default(false)
-    - _vm_found
+    - not (dry_run | default(false))
+    - _vm_found | default(false)
 
 - name: Remove temp script file
   ansible.builtin.file:
     path: /tmp/uninstall_tools_{{ vm_name }}.ps1
     state: absent
   when:
-    - not dry_run | default(false)
-    - _vm_found
+    - not (dry_run | default(false))
+    - _vm_found | default(false)
 
 - name: Display Azure RunCommand output
   ansible.builtin.debug:
@@ -87,81 +97,58 @@
     - not dry_run | default(false)
     - run_command_result.rc is defined and run_command_result.rc != 0
 
-- name: Extract JSON output
+- name: Extract tool status from PowerShell output
   ansible.builtin.set_fact:
-    _json_output: "{{ _raw_output[_raw_output.find('['):] if '[' in _raw_output else '[]' }}"
+    _output_text: "{{ run_command_result.stdout | default('') }}"
   when:
     - not dry_run | default(false)
-    - _raw_output is defined
+    - run_command_result.stdout is defined
 
-- name: Set uninstall summary
+- name: Parse tool status - VMware Tools
   ansible.builtin.set_fact:
-    uninstall_summary: "{{ _json_output if _json_output is sequence else (_json_output | from_json) }}"
+    _vmware_status: "{{ _output_text.split('VMware Tools : ')[1].split('\n')[0] if 'VMware Tools : ' in _output_text else 'UNKNOWN' }}"
   when:
     - not dry_run | default(false)
-    - _json_output is defined
-    - _json_output != '[]'
+    - _output_text | length > 0
 
-- name: Print uninstall summary for VM
+- name: Parse tool status - Puppet Agent
+  ansible.builtin.set_fact:
+    _puppet_status: "{{ _output_text.split('Puppet Agent : ')[1].split('\n')[0] if 'Puppet Agent : ' in _output_text else 'UNKNOWN' }}"
+  when:
+    - not dry_run | default(false)
+    - _output_text | length > 0
+
+- name: Parse tool status - EMC PowerPath
+  ansible.builtin.set_fact:
+    _emc_status: "{{ _output_text.split('EMC PowerPath : ')[1].split('\n')[0] if 'EMC PowerPath : ' in _output_text else 'UNKNOWN' }}"
+  when:
+    - not dry_run | default(false)
+    - _output_text | length > 0
+
+- name: Parse tool status - HP Insight Management Agent
+  ansible.builtin.set_fact:
+    _hp_status: "{{ _output_text.split('HP Insight Management Agent : ')[1].split('\n')[0] if 'HP Insight Management Agent : ' in _output_text else 'UNKNOWN' }}"
+  when:
+    - not dry_run | default(false)
+    - _output_text | length > 0
+
+- name: Parse tool status - EMC Avamar
+  ansible.builtin.set_fact:
+    _avamar_status: "{{ _output_text.split('EMC Avamar for Windows : ')[1].split('\n')[0] if 'EMC Avamar for Windows : ' in _output_text else 'UNKNOWN' }}"
+  when:
+    - not dry_run | default(false)
+    - _output_text | length > 0
+
+- name: Display uninstall summary
   ansible.builtin.debug:
     msg: |
       ===== Uninstall Summary for {{ vm_name }} =====
-      {% if uninstall_summary is defined and uninstall_summary | length > 0 %}
-      {% for item in uninstall_summary %}
-      {{ item.Name }} → {{ item.Result }}
-      {% if item.Result.startswith('Failed:') %}
-        Error: {{ item.Result | regex_replace('^Failed: ', '') }}
-      {% endif %}
-      {% endfor %}
-      {% else %}
-      No results available
-      {% endif %}
+      Puppet Agent → {{ _puppet_status | default('UNKNOWN') }}
+      VMware Tools → {{ _vmware_status | default('UNKNOWN') }}
+      EMC PowerPath → {{ _emc_status | default('UNKNOWN') }}
+      HP Insight → {{ _hp_status | default('UNKNOWN') }}
+      EMC Avamar → {{ _avamar_status | default('UNKNOWN') }}
   when: not dry_run | default(false)
-
-- name: Check if any tools were found and uninstalled this run
-  ansible.builtin.set_fact:
-    tools_uninstalled_this_run: "{{ uninstall_summary | selectattr('Found', 'equalto', true) | selectattr('Result', 'equalto', 'Removed') | list }}"
-    tools_found_any: "{{ uninstall_summary | selectattr('Found', 'equalto', true) | list | length > 0 }}"
-    all_already_uninstalled: "{{ uninstall_summary | length > 0 and (uninstall_summary | selectattr('Result', 'equalto', 'NotFound') | list | length == uninstall_summary | length) }}"
-  when:
-    - not dry_run | default(false)
-    - uninstall_summary is defined
-
-# Idempotency: when run a second time, all tools show NotFound — make this explicit
-- name: Idempotency – all requested tools already uninstalled or not present
-  ansible.builtin.debug:
-    msg: "All requested tools are already uninstalled or not present on {{ vm_name }}. No action taken. (Run is idempotent.)"
-  when:
-    - not dry_run | default(false)
-    - all_already_uninstalled | default(false)
-
-- name: Output per-tool status when all were already uninstalled
-  ansible.builtin.debug:
-    msg: "  {{ tool_result.Name }} → {{ tool_result.Result }}"
-  loop: "{{ uninstall_summary | default([]) }}"
-  loop_control:
-    loop_var: tool_result
-  when:
-    - not dry_run | default(false)
-    - all_already_uninstalled | default(false)
-
-- name: Output git actions messages for tools uninstalled this run
-  ansible.builtin.debug:
-    msg: "Uninstalled {{ tool_result.Name }}"
-  loop: "{{ tools_uninstalled_this_run | default([]) }}"
-  loop_control:
-    loop_var: tool_result
-  when:
-    - not dry_run | default(false)
-    - (tools_uninstalled_this_run | default([]) | length > 0) | bool
-
-- name: Output when no tools were present (first run) or no tools uninstalled this run
-  ansible.builtin.debug:
-    msg: "No tools from the list were installed on {{ vm_name }} (or were already uninstalled)."
-  when:
-    - not dry_run | default(false)
-    - uninstall_summary is defined
-    - not (tools_uninstalled_this_run | default([]) | length > 0)
 
 - name: Summary for dry-run execution
   ansible.builtin.debug:
