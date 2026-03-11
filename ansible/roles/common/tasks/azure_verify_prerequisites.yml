@@ -89,7 +89,10 @@
           resourcegroups:
             - name: "{{ (resource_group_info_raw.stdout | from_json).name }}"
               location: "{{ (resource_group_info_raw.stdout | from_json).location }}"
-      when: not (dry_run | default(false))
+      when:
+        - not (dry_run | default(false))
+        - resource_group_info_raw.stdout is defined
+        - resource_group_info_raw.stdout | length > 0
 
     - name: Mock resource group verification for dry run
       ansible.builtin.set_fact:
@@ -148,7 +151,11 @@
           resourcegroups:
             - name: "{{ (migrate_rg_info_raw.stdout | from_json).name }}"
               location: "{{ (migrate_rg_info_raw.stdout | from_json).location }}"
-      when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
+      when:
+        - not (dry_run | default(false))
+        - (azure_migrate_project_resource_group | default('')) | length > 0
+        - migrate_rg_info_raw.stdout is defined
+        - migrate_rg_info_raw.stdout | length > 0
 
     - name: Mock Azure Migrate project RG verification for dry run
       ansible.builtin.set_fact:
