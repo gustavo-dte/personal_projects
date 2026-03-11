@@ -67,7 +67,6 @@
         cmd: az group show --name "{{ target_resource_group }}" --subscription "{{ target_subscription_id }}" --output json
       register: resource_group_info_raw
       changed_when: false
-      failed_when: false
       no_log: true
       when:
         - not (dry_run | default(false))
@@ -79,22 +78,10 @@
         cmd: az group show --name "{{ target_resource_group }}" --output json
       register: resource_group_info_raw
       changed_when: false
-      failed_when: false
       no_log: true
       when:
         - not (dry_run | default(false))
         - target_subscription_id is not defined or target_subscription_id | length == 0
-
-    - name: Fail if resource group az cli returned empty output
-      ansible.builtin.fail:
-        msg: >-
-          Resource group not found or inaccessible: '{{ target_resource_group }}'.
-          Azure CLI exited with code {{ resource_group_info_raw.rc | default('unknown') }} — the resource group may not exist in subscription '{{ target_subscription_id | default("(default)") }}'.
-          stderr: {{ resource_group_info_raw.stderr | default('') }}
-      when:
-        - not (dry_run | default(false))
-        - resource_group_info_raw is defined
-        - (resource_group_info_raw.rc | default(1)) != 0 or resource_group_info_raw.stdout | default('') | length == 0
 
     - name: Parse resource group info
       ansible.builtin.set_fact:
@@ -102,10 +89,7 @@
           resourcegroups:
             - name: "{{ (resource_group_info_raw.stdout | from_json).name }}"
               location: "{{ (resource_group_info_raw.stdout | from_json).location }}"
-      when:
-        - not (dry_run | default(false))
-        - resource_group_info_raw.stdout is defined
-        - resource_group_info_raw.stdout | length > 0
+      when: not (dry_run | default(false))
 
     - name: Mock resource group verification for dry run
       ansible.builtin.set_fact:
@@ -118,17 +102,13 @@
     - name: Display resource group verification success
       ansible.builtin.debug:
         msg: "✓ Resource group verified: {{ resource_group_info.resourcegroups[0].name }}"
-      when:
-        - resource_group_info is defined
-        - resource_group_info.resourcegroups | length > 0
+      when: resource_group_info.resourcegroups | length > 0
 
     - name: Fail if resource group not found
       ansible.builtin.fail:
         msg: >-
           Resource group not found: {{ target_resource_group }}
-      when:
-        - resource_group_info is defined
-        - resource_group_info.resourcegroups | length == 0
+      when: resource_group_info.resourcegroups | length == 0
 
   rescue:
     - name: Handle resource group verification failure
@@ -168,11 +148,7 @@
           resourcegroups:
             - name: "{{ (migrate_rg_info_raw.stdout | from_json).name }}"
               location: "{{ (migrate_rg_info_raw.stdout | from_json).location }}"
-      when:
-        - not (dry_run | default(false))
-        - (azure_migrate_project_resource_group | default('')) | length > 0
-        - migrate_rg_info_raw.stdout is defined
-        - migrate_rg_info_raw.stdout | length > 0
+      when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
 
     - name: Mock Azure Migrate project RG verification for dry run
       ansible.builtin.set_fact:
