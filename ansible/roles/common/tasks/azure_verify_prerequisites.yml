@@ -67,6 +67,7 @@
         cmd: az group show --name "{{ target_resource_group }}" --subscription "{{ target_subscription_id }}" --output json
       register: resource_group_info_raw
       changed_when: false
+      failed_when: false
       no_log: true
       when:
         - not (dry_run | default(false))
@@ -78,6 +79,7 @@
         cmd: az group show --name "{{ target_resource_group }}" --output json
       register: resource_group_info_raw
       changed_when: false
+      failed_when: false
       no_log: true
       when:
         - not (dry_run | default(false))
@@ -87,11 +89,12 @@
       ansible.builtin.fail:
         msg: >-
           Resource group not found or inaccessible: '{{ target_resource_group }}'.
-          Azure CLI returned no output — the resource group may not exist in subscription '{{ target_subscription_id | default("(default)") }}'.
+          Azure CLI exited with code {{ resource_group_info_raw.rc | default('unknown') }} — the resource group may not exist in subscription '{{ target_subscription_id | default("(default)") }}'.
+          stderr: {{ resource_group_info_raw.stderr | default('') }}
       when:
         - not (dry_run | default(false))
         - resource_group_info_raw is defined
-        - resource_group_info_raw.stdout is not defined or resource_group_info_raw.stdout | length == 0
+        - (resource_group_info_raw.rc | default(1)) != 0 or resource_group_info_raw.stdout | default('') | length == 0
 
     - name: Parse resource group info
       ansible.builtin.set_fact:
