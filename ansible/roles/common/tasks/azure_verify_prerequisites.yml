@@ -62,35 +62,21 @@
 
 - name: Verify Azure resource group exists
   block:
-    - name: Check if target resource group exists — with subscription
+    - name: Check if target resource group exists
       ansible.builtin.command:
         cmd: az group show --name "{{ target_resource_group }}" --subscription "{{ target_subscription_id }}" --output json
       register: resource_group_info_raw
       changed_when: false
       failed_when: false
       no_log: true
-      when:
-        - not (dry_run | default(false))
-        - target_subscription_id is defined
-        - target_subscription_id | length > 0
-
-    - name: Check if target resource group exists — without subscription
-      ansible.builtin.command:
-        cmd: az group show --name "{{ target_resource_group }}" --output json
-      register: resource_group_info_raw
-      changed_when: false
-      failed_when: false
-      no_log: true
-      when:
-        - not (dry_run | default(false))
-        - target_subscription_id is not defined or target_subscription_id | length == 0
+      when: not (dry_run | default(false))
 
     - name: Fail if resource group az cli returned no output
       ansible.builtin.fail:
         msg: >-
           Resource group not found or inaccessible: '{{ target_resource_group }}'.
           Azure CLI exited with code {{ resource_group_info_raw.rc | default('unknown') }} —
-          the resource group may not exist in subscription '{{ target_subscription_id | default("(default)") }}'.
+          the resource group may not exist in subscription '{{ target_subscription_id }}'.
           stderr: {{ resource_group_info_raw.stderr | default('') }}
       when:
         - not (dry_run | default(false))
@@ -105,7 +91,6 @@
               location: "{{ (resource_group_info_raw.stdout | from_json).location }}"
       when:
         - not (dry_run | default(false))
-        - resource_group_info_raw.stdout is defined
         - (resource_group_info_raw.stdout | default('')) | length > 0
 
     - name: Mock resource group verification for dry run
@@ -140,7 +125,7 @@
 
 - name: Verify Azure Migrate project resource group exists (optional)
   block:
-    - name: Check if Azure Migrate project resource group exists — with subscription
+    - name: Check if Azure Migrate project resource group exists
       ansible.builtin.command:
         cmd: az group show --name "{{ azure_migrate_project_resource_group }}" --subscription "{{ azure_migrate_subscription_id }}" --output json
       register: migrate_rg_info_raw
@@ -150,27 +135,13 @@
       when:
         - not (dry_run | default(false))
         - (azure_migrate_project_resource_group | default('')) | length > 0
-        - azure_migrate_subscription_id is defined
-        - azure_migrate_subscription_id | length > 0
-
-    - name: Check if Azure Migrate project resource group exists — without subscription
-      ansible.builtin.command:
-        cmd: az group show --name "{{ azure_migrate_project_resource_group }}" --output json
-      register: migrate_rg_info_raw
-      changed_when: false
-      failed_when: false
-      no_log: true
-      when:
-        - not (dry_run | default(false))
-        - (azure_migrate_project_resource_group | default('')) | length > 0
-        - azure_migrate_subscription_id is not defined or azure_migrate_subscription_id | length == 0
 
     - name: Fail if Azure Migrate project resource group az cli returned no output
       ansible.builtin.fail:
         msg: >-
           Azure Migrate project resource group not found or inaccessible: '{{ azure_migrate_project_resource_group }}'.
           Azure CLI exited with code {{ migrate_rg_info_raw.rc | default('unknown') }} —
-          the resource group may not exist in subscription '{{ azure_migrate_subscription_id | default("(default)") }}'.
+          the resource group may not exist in subscription '{{ azure_migrate_subscription_id }}'.
           stderr: {{ migrate_rg_info_raw.stderr | default('') }}
       when:
         - not (dry_run | default(false))
@@ -187,7 +158,6 @@
       when:
         - not (dry_run | default(false))
         - (azure_migrate_project_resource_group | default('')) | length > 0
-        - migrate_rg_info_raw.stdout is defined
         - (migrate_rg_info_raw.stdout | default('')) | length > 0
 
     - name: Mock Azure Migrate project RG verification for dry run
