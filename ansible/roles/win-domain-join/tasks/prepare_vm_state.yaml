@@ -235,8 +235,8 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: ".\\{{ resolved_se_admin_username }}"
-    ansible_password: "{{ resolved_se_admin_password }}"
+    ansible_user: ".\\{{ resolved_se_admin_username | default(se_admin_username | default('SE-Admin')) }}"
+    ansible_password: "{{ resolved_se_admin_password | default(se_admin_password | default('')) }}"
   register: _vm_state_result
   retries: 3
   delay: 15
