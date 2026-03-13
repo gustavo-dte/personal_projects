@@ -147,7 +147,43 @@
     - not (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
-# Step 1.5: Sync local SE-Admin password via az vm user update (rotation protection)
+# Step 1.5: Pre-flight WinRM probe (existing password — before any sync)
+# If this succeeds, skip az vm user update entirely to avoid overwriting a
+# working password with a potentially wrong Delinea value.
+# ------------------------------------------------------------------------------
+
+- name: "Pre-flight WinRM probe (existing password, before sync)"
+  ansible.windows.win_shell: echo ok
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 30
+    ansible_user: ".\\{{ resolved_se_admin_username | default(se_admin_username | default('SE-Admin')) }}"
+    ansible_password: "{{ resolved_se_admin_password | default(se_admin_password | default('')) }}"
+  register: _winrm_preflight_probe
+  failed_when: false
+  ignore_unreachable: true
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+
+- name: "Set pre-flight auth success fact"
+  ansible.builtin.set_fact:
+    _preflight_auth_ok: >-
+      {{ (_winrm_preflight_probe.rc | default(1) | int == 0)
+         and not (_winrm_preflight_probe.unreachable | default(true) | bool) }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+
+# ------------------------------------------------------------------------------
+# Step 1.6: Sync local SE-Admin password via az vm user update (rotation protection)
+# Only runs if pre-flight probe failed — avoids overwriting a working password.
 # ------------------------------------------------------------------------------
 
 - name: "Sync local SE-Admin password via az vm user update"
@@ -166,43 +202,44 @@
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
+    - not (_preflight_auth_ok | default(false) | bool)
 
 - name: "Wait for VMAccess extension to apply password sync"
   ansible.builtin.pause:
-    seconds: 30
+    seconds: 120
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
+    - not (_preflight_auth_ok | default(false) | bool)
     - _az_user_update is defined
     - not (_az_user_update.skipped | default(false) | bool)
 
 # ------------------------------------------------------------------------------
 # Step 2: WinRM authentication probe
-# VM may be domain-joined (use DOMAIN\se-admin) or in WORKGROUP (use .\se-admin).
 # Probe domain NTLM first; fall back to local NTLM.
 # ------------------------------------------------------------------------------
 
-- name: "WinRM probe — domain NTLM ({{ _domain_netbios }}\\{{ resolved_se_admin_username }})"
-  ansible.windows.win_shell: echo ok
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 30
-    ansible_user: "{{ _domain_netbios }}\\{{ resolved_se_admin_username }}"
-    ansible_password: "{{ resolved_se_admin_password }}"
-  register: _winrm_domain_probe
-  failed_when: false
-  ignore_unreachable: true
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
+# - name: "WinRM probe — domain NTLM ({{ _domain_netbios }}\\{{ resolved_se_admin_username }})"
+#   ansible.windows.win_shell: echo ok
+#   delegate_to: "{{ target_vm_host }}"
+#   vars:
+#     ansible_connection: winrm
+#     ansible_winrm_transport: ntlm
+#     ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+#     ansible_winrm_scheme: http
+#     ansible_winrm_server_cert_validation: ignore
+#     ansible_winrm_connection_timeout: 30
+#     ansible_user: "{{ _domain_netbios }}\\{{ resolved_se_admin_username }}"
+#     ansible_password: "{{ resolved_se_admin_password }}"
+#   register: _winrm_domain_probe
+#   failed_when: false
+#   ignore_unreachable: true
+#   no_log: true
+#   when:
+#     - not (dry_run | default(false) | bool)
+#     - not (skip_hostname_setup | default(false) | bool)
 
-- name: "WinRM probe — local NTLM (.\\{{ resolved_se_admin_username }}) (domain probe failed)"
+- name: "WinRM probe — local NTLM (.\\{{ resolved_se_admin_username | default('se-admin') }})"
   ansible.windows.win_shell: echo ok
   delegate_to: "{{ target_vm_host }}"
   vars:
@@ -211,18 +248,21 @@
     ansible_winrm_port: "{{ winrm_port | default(5985) }}"
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 30
-    ansible_user: ".\\{{ resolved_se_admin_username }}"
-    ansible_password: "{{ resolved_se_admin_password }}"
+    ansible_winrm_connection_timeout: 60
+    ansible_user: ".\\{{ resolved_se_admin_username | default('se_admin_username') }}"
+    ansible_password: "{{ resolved_se_admin_password | default('se_admin_password') }}"
   register: _winrm_local_probe
+  retries: 3
+  delay: 30
+  until: >-
+    (_winrm_local_probe.rc | default(1) | int == 0)
+    or not (_winrm_local_probe.unreachable | default(false) | bool)
   failed_when: false
   ignore_unreachable: true
-  no_log: true
+  no_log: false
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - _winrm_domain_probe is defined
-    - (_winrm_domain_probe.rc | default(1) | int != 0) or (_winrm_domain_probe.unreachable | default(false) | bool)
 
 - name: "Set effective WinRM user"
   ansible.builtin.set_fact:
@@ -278,7 +318,7 @@
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
-    ansible_user: "{{ _effective_winrm_user | default(_domain_netbios + '\\' + resolved_se_admin_username) }}"
+    ansible_user: ".\\{{ resolved_se_admin_username }}"
     ansible_password: "{{ resolved_se_admin_password }}"
   register: _vm_state_result
   retries: 3

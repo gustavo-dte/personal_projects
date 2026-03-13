@@ -8,7 +8,7 @@ azure_migrate_project_name: azure-migrate-automation
 azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
 azure_migrate_subscription_id: 00d26f19-0dc3-4c90-9c6b-2e9ce8b14f5a
 target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
-target_resource_group: rg-cu-corpapps-Powerbi-dev
+target_resource_group: rg-cu-vmware-PowerBI-Dev
 os_disk_scsi_id: scsi0:0
 
 # Azure Update Manager / Patch scheduling defaults
