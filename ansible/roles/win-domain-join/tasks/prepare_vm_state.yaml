@@ -27,7 +27,7 @@
     resolved_se_admin_username: "{{ se_admin_username }}"
     resolved_se_admin_password: "{{ se_admin_password if (se_admin_password is defined and se_admin_password | string | length > 0) else '' }}"
     _domain_netbios: "{{ (manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper) if manifest_data.domainNameSetup.domain is defined else 'DTENET' }}"
-  no_log: false  # Temporarily disable for debugging - username is not sensitive
+  no_log: true
 
 - name: "Assert SE-Admin credentials are present for {{ target_vm_name }}"
   ansible.builtin.assert:
@@ -56,18 +56,21 @@
       |  Step 2 - WinRM credential test + VM state probe
       |    Method        : WinRM
       |    User len      : {{ resolved_se_admin_username | string | length }} chars
+      |    User          : .\{{ resolved_se_admin_username }}
       |    Password src  : Delinea (single fetch, reused)
       |    Password len  : {{ resolved_se_admin_password | string | length }} chars
       +-------------------------------------------------------------+
       |  Step 3 - Disjoin (if needed)
       |    Method        : WinRM
       |    User len      : {{ resolved_se_admin_username | string | length }} chars
+      |    User          : .\{{ resolved_se_admin_username }} (LOCAL account)
       |    Local cred len: {{ resolved_se_admin_username | string | length }} chars (Delinea password)
       |    Domain unjoin : domain admin (GitHub Secret - to remove from AD)
       +-------------------------------------------------------------+
       |  Step 4 - Rename (if needed)
       |    Method        : WinRM
       |    User len      : {{ resolved_se_admin_username | string | length }} chars
+      |    User          : .\{{ resolved_se_admin_username }}
       |    Password src  : same Delinea password
       +-------------------------------------------------------------+
       |  Step 5 - Domain join
@@ -175,11 +178,70 @@
     - not (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
+# Step 1.5: Sync VM password with Delinea (Password Rotation Fix)
+# If Delinea rotates passwords, the VM still has the old password while we
+# fetch the new one. This step syncs the VM's local account password to match
+# Delinea's current password using Azure CLI (no WinRM required).
+# ------------------------------------------------------------------------------
+
+- name: "Step 1.5 - Sync VM password with Delinea (password rotation fix)"
+  ansible.builtin.shell: |
+    az vm user update \
+      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
+      --name "{{ azure_vm_name | default(target_vm_name) }}" \
+      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+      --username "{{ resolved_se_admin_username }}" \
+      --password "{{ resolved_se_admin_password }}"
+  delegate_to: localhost
+  register: password_sync_result
+  failed_when: password_sync_result.rc != 0
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - not (force_rejoin | default(false) | bool)
+    - (vm_source_name | default('')) == (target_vm_name | default(''))
+    - sync_password | default(true) | bool
+
+- name: "Step 1.5 - Display password sync result"
+  ansible.builtin.debug:
+    msg: |
+      +=============================================================+
+      |  PASSWORD SYNC COMPLETE
+      +=============================================================+
+      |  VM               : {{ target_vm_name }}
+      |  Resource Group   : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
+      |  Username         : {{ resolved_se_admin_username }}
+      |  Source           : Delinea Secret Server
+      |  Status           : ✓ Password synchronized
+      |
+      |  This ensures VM password matches Delinea's current password
+      |  even if rotation occurred between fetch and execution.
+      +=============================================================+
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - sync_password | default(true) | bool
+    - password_sync_result is defined
+    - not (password_sync_result.skipped | default(false) | bool)
+
+- name: "Step 1.5 - Wait for password propagation"
+  ansible.builtin.pause:
+    seconds: 15
+    prompt: "Waiting for password changes to propagate..."
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - sync_password | default(true) | bool
+    - password_sync_result is defined
+    - not (password_sync_result.skipped | default(false) | bool)
+
+# ------------------------------------------------------------------------------
 # Step 2: Test WinRM credentials + read VM state as DOMAIN\SE-Admin
 # Combines credential test and state probe in a single WinRM call.
 # ------------------------------------------------------------------------------
 
-- name: "Read VM state via WinRM ({{ _effective_winrm_user | default('se-admin') }})"
+- name: "Read VM state via WinRM ( {{resolved_se_admin_username }} )"
   ansible.windows.win_shell: |
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
             -Property Name, Domain, PartOfDomain, Workgroup
@@ -257,4 +319,3 @@
     - not (skip_hostname_setup | default(false) | bool)
     - _vm_state_result is defined
     - _vm_state_result is succeeded
-

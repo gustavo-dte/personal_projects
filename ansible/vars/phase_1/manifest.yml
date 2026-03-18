@@ -126,10 +126,10 @@ uninstall_tools_list:
 
 # List of VMs to replicate
 vms:
-  - name: dca-tst1856                        # Current OS hostname (VMware source name) — used for WinRM connection and Delinea secret lookup
+  - name: VMCUWINWEBD13                        # Current OS hostname (VMware source name) — used for WinRM connection and Delinea secret lookup
     target_vm_name: VMCUWINWEBD13             # Azure resource name AND target OS hostname — used for all az vm CLI calls; VM renamed to this after disjoin
     vm_winrm_port: 5985                       # WinRM HTTP port (Windows Firewall configured via Azure Run Command)
-    vm_winrm_username: se-admin               # WinRM username while domain-joined; password fetched from Delinea using vm_winrm_connect_hostname
+    vm_winrm_username: SE-Admin               # WinRM username while domain-joined; password fetched from Delinea using vm_winrm_connect_hostname
     vm_winrm_connect_hostname: dca-tst1856.dtenet.com  # Current FQDN on dtenet.com — used for Delinea secret lookup (SE-Admin\VMCUWINWEBD13.dtenet.com)
     # vm_delinea_secret_id: 3459  # Delinea secret ID to use (bypasses search)
     description: "Server created to test migration pipeline"
