@@ -1,0 +1,23 @@
+{
+  "dca-tst5470": {
+    "maintenance_configuration": "weekly-saturday-midnight",
+    "frequency": "Monthly",
+    "day_of_week": "Wednesday",
+    "week_of_month": "Second",
+    "time_of_day": "09:00",
+    "duration": "04:00",
+    "reboot_setting": "Never",
+    "description": "Dev RightFax  - patched monthly on Wednesday at 09:00, no reboot"
+  },
+  "dca-tst7027": {
+    "maintenance_configuration": "weekly-saturday-midnight",
+    "frequency": "Monthly",
+    "day_of_week": "Wednesday",
+    "week_of_month": "Second",
+    "time_of_day": "09:00",
+    "duration": "04:00",
+    "reboot_setting": "Never",
+    "description": "Dev Power BI - patched monthly on Wednesday at 09:00, no reboot"
+
+  }
+}

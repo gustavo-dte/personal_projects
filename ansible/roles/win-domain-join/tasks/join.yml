@@ -28,6 +28,27 @@
          or not (current_domain_status.part_of_domain | default(false) | bool)
          or (current_domain_status.domain | default('')) != domain_name }}
 
+- name: "Step 1 - Display workflow plan"
+  ansible.builtin.debug:
+    msg: |
+      +=============================================================+
+      |  DOMAIN JOIN PLAN FOR: {{ target_vm_name }}
+      +=============================================================+
+      |  Connect IP       : {{ target_vm_host }}
+      |  OS hostname now  : {{ current_hostname_info.old_name | default('unknown') }}
+      |  Domain now       : {{ current_domain_status.domain | default('WORKGROUP') }}
+      |  Part of domain   : {{ current_domain_status.part_of_domain | default(false) }}
+      +-------------------------------------------------------------+
+      |  Target hostname  : {{ target_vm_name }}
+      |  Target domain    : {{ domain_name }}
+      |  Force rejoin     : {{ force_rejoin | default(false) }}
+      +-------------------------------------------------------------+
+      |  Step 2 join      : {{ _needs_join | bool }}
+      {% if dry_run | default(false) | bool %}
+      |  *** DRY RUN - no changes will be made ***
+      {% endif %}
+      +=============================================================+
+
 - name: "Skip domain join (already in target domain)"
   ansible.builtin.debug:
     msg: "{{ target_vm_name }} is already in domain '{{ domain_name }}'. Nothing to do."
@@ -44,6 +65,21 @@
     - not (dry_run | default(false) | bool)
     - _needs_join | bool
   block:
+    - name: "[CREDENTIALS] Step 2 - Domain join"
+      ansible.builtin.debug:
+        msg: |
+          +-------------------------------------------------------------+
+          |  STEP 2 - DOMAIN JOIN
+          |   WinRM user    : .\{{ hostvars['localhost']['resolved_se_admin_username'] }}
+          |   WinRM pass src: Delinea SE-Admin password (single fetch, reused)
+          |   WinRM pass len: {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
+          |   Connect IP    : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
+          |   Join creds    : {{ domain_admin_username }}
+          |   Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
+          |   Target domain : {{ domain_name }}
+          |   Target OU     : {{ domain_ou_path | default('(default)') }}
+          +-------------------------------------------------------------+
+
     - name: "Step 2 - Join domain via WinRM (.\\{{ resolved_se_admin_username }})"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
@@ -78,8 +114,8 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ resolved_se_admin_username }}"
-        ansible_password: "{{ resolved_se_admin_password }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
         DOMAIN_USER: "{{ domain_admin_username }}"
@@ -142,22 +178,32 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ resolved_se_admin_username }}"
-        ansible_password: "{{ resolved_se_admin_password }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: _verify_result
       retries: 3
       delay: 20
       until: _verify_result is succeeded
       no_log: true
 
-    - name: "Fail if VM not in target domain after join"
+    - name: "Step 3 - Display final VM state"
+      ansible.builtin.debug:
+        msg: |
+          +=============================================================+
+          |  FINAL STATE: {{ target_vm_name }}
+          +=============================================================+
+          |  {{ _verify_result.stdout | default('(no output)') | trim }}
+          +=============================================================+
+
+    - name: "Step 3 - Fail if VM not in target domain"
       ansible.builtin.fail:
-        msg: >-
-          {{ target_vm_name }} is not in domain '{{ domain_name }}' after join + reboot.
-          Verify output: {{ _verify_result.stdout | default('') | trim }}
+        msg: |
+          VM {{ target_vm_name }} is NOT in domain '{{ domain_name }}' after join + reboot.
+          WinRM verify output: {{ _verify_result.stdout | default('') | trim }}
+          Check DC connectivity, OU path, and domain admin credentials.
       when:
         - _verify_result is defined
         - _verify_result is succeeded
         - >-
-          ('joined=True' not in (_verify_result.stdout | default('')))
-          or (domain_name | lower not in (_verify_result.stdout | default('') | lower))
+            ('joined=True' not in (_verify_result.stdout | default('')))
+            or (domain_name | lower not in (_verify_result.stdout | default('') | lower))

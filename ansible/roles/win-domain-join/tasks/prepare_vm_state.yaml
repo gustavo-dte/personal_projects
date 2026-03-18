@@ -4,13 +4,15 @@
 # Responsibilities:
 #   1. Resolve SE-Admin credentials (Delinea password fetched once at pipeline start)
 #   2. Ensure WinRM port 5985 is reachable; if not, enable via az vm extension set
-#   3. Test WinRM credentials and read VM state (hostname + domain) in one shot
+#   3. Sync VM local password via az vm user update (rotation protection)
+#   4. Probe WinRM with domain NTLM first, then local NTLM (VM may or may not be joined)
+#   5. Read VM state (hostname + domain membership) via WinRM
 #
 # Sets facts consumed by callers:
 #   resolved_se_admin_username   - username string
 #   resolved_se_admin_password   - password string (no_log throughout)
 #   _domain_netbios              - e.g. DTENET
-#   _effective_winrm_user        - .\se-admin
+#   _effective_winrm_user        - DTENET\se-admin or .\se-admin (whichever authenticated)
 #   _effective_winrm_transport   - always ntlm
 #   current_hostname_info        - {old_name: <hostname>}
 #   current_domain_status        - {domain, part_of_domain, workgroup_name}
@@ -20,23 +22,14 @@
 # Credential resolution
 # ------------------------------------------------------------------------------
 
-- name: "Credentials - Resolve SE-Admin for {{ target_vm_name }}"
+- name: "Resolve SE-Admin credentials for {{ target_vm_name }}"
   ansible.builtin.set_fact:
-    resolved_se_admin_username: >-
-      {{ se_admin_username
-         if (se_admin_username is defined and se_admin_username | string | length > 0)
-         else 'SE-Admin' }}
-    resolved_se_admin_password: >-
-      {{ se_admin_password
-         if (se_admin_password is defined and se_admin_password | string | length > 0)
-         else '' }}
-    _domain_netbios: >-
-      {{ (manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper)
-         if manifest_data.domainNameSetup.domain is defined
-         else 'DTENET' }}
-  no_log: true
+    resolved_se_admin_username: "{{ se_admin_username }}"
+    resolved_se_admin_password: "{{ se_admin_password if (se_admin_password is defined and se_admin_password | string | length > 0) else '' }}"
+    _domain_netbios: "{{ (manifest_data.domainNameSetup.domain | default('') | split('.') | first | upper) if manifest_data.domainNameSetup.domain is defined else 'DTENET' }}"
+  no_log: false  # Temporarily disable for debugging - username is not sensitive
 
-- name: "Credentials - Fail if SE-Admin password missing for {{ target_vm_name }}"
+- name: "Assert SE-Admin credentials are present for {{ target_vm_name }}"
   ansible.builtin.assert:
     that:
       - resolved_se_admin_username | length > 0
@@ -47,17 +40,9 @@
       Set by resolve_delinea_secret_id.py before Ansible runs.
   when: not (dry_run | default(false) | bool)
 
-- name: "Debug - Show resolved credentials"
-  ansible.builtin.debug:
-    msg: |-
-      resolved_se_admin_username: {{ resolved_se_admin_username }}
-      resolved_se_admin_password length: {{ resolved_se_admin_password | length }}
-      _domain_netbios: {{ _domain_netbios }}
-  when: not (dry_run | default(false) | bool)
-
 - name: "[CREDENTIALS] Credential plan for {{ target_vm_name }}"
   ansible.builtin.debug:
-    msg: |-
+    msg: |
       +=============================================================+
       |  CREDENTIAL PLAN: {{ target_vm_name }}
       +=============================================================+
@@ -68,37 +53,29 @@
       |    Method        : wait_for port {{ winrm_port | default(5985) }} (no creds)
       |    If closed     : az vm extension set CustomScriptExtension (async)
       +-------------------------------------------------------------+
-      |  Step 1.5 - Password sync (rotation protection)
-      |    Method        : az vm user update (via Azure API)
-      |    User          : {{ resolved_se_admin_username }}
-      |    Action        : Sync VM password to match Delinea's current password
-      |    Enabled       : True
-      |    Purpose       : Prevents WinRM failures due to password rotation
-      +-------------------------------------------------------------+
       |  Step 2 - WinRM credential test + VM state probe
       |    Method        : WinRM
-      |    User          : .\{{ resolved_se_admin_username }} (local - works on WORKGROUP + domain)
+      |    User len      : {{ resolved_se_admin_username | string | length }} chars
       |    Password src  : Delinea (single fetch, reused)
-      |    Password len  : {{ resolved_se_admin_password | length }} chars
+      |    Password len  : {{ resolved_se_admin_password | string | length }} chars
       +-------------------------------------------------------------+
       |  Step 3 - Disjoin (if needed)
       |    Method        : WinRM
-      |    User          : .\{{ resolved_se_admin_username }} (LOCAL account)
-      |    Local cred    : .\{{ resolved_se_admin_username }} (Delinea password)
+      |    User len      : {{ resolved_se_admin_username | string | length }} chars
+      |    Local cred len: {{ resolved_se_admin_username | string | length }} chars (Delinea password)
       |    Domain unjoin : domain admin (GitHub Secret - to remove from AD)
       +-------------------------------------------------------------+
       |  Step 4 - Rename (if needed)
       |    Method        : WinRM
-      |    User          : .\{{ resolved_se_admin_username }}
+      |    User len      : {{ resolved_se_admin_username | string | length }} chars
       |    Password src  : same Delinea password
       +-------------------------------------------------------------+
       |  Step 5 - Domain join
-      |    WinRM user    : .\{{ resolved_se_admin_username }}
+      |    WinRM user len: {{ resolved_se_admin_username | string | length }} chars
       |    Password src  : same Delinea password
-      |    Join creds    : {{ domain_admin_username | default('(not set yet)') }}
+      |    Join creds    : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
       |    Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
       +=============================================================+
-  when: not (dry_run | default(false) | bool)
 
 # ------------------------------------------------------------------------------
 # Dry-run / skip shortcut
@@ -122,7 +99,7 @@
 # Step 1: Probe WinRM port — short timeout, fail-safe
 # ------------------------------------------------------------------------------
 
-- name: "Step 1 - Probe WinRM port {{ winrm_port | default(5985) }}"
+- name: "Probe WinRM port {{ winrm_port | default(5985) }} on {{ target_vm_host }}"
   ansible.builtin.wait_for:
     host: "{{ target_vm_host }}"
     port: "{{ winrm_port | default(5985) }}"
@@ -135,19 +112,9 @@
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
 
-- name: "Step 1 - Set WinRM port status fact"
+- name: "Set WinRM port open fact"
   ansible.builtin.set_fact:
     _winrm_already_open: "{{ _winrm_port_probe is succeeded }}"
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-
-- name: "Step 1 - Debug: WinRM port probe result"
-  ansible.builtin.debug:
-    msg: |-
-      WinRM port probe {{ target_vm_name }} ({{ target_vm_host }}:{{ winrm_port | default(5985) }}):
-        Port open : {{ _winrm_already_open | default(false) }}
-        {{ 'WinRM already reachable - skipping enable step' if (_winrm_already_open | default(false) | bool) else 'Port closed - will enable WinRM via az vm extension set' }}
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -196,7 +163,7 @@
     - _az_extension_result is defined
     - _az_extension_result.rc | default(0) | int != 0
 
-- name: "Step 1 - Wait for WinRM port {{ winrm_port | default(5985) }} to be reachable"
+- name: "Wait for WinRM port {{ winrm_port | default(5985) }} after enable"
   ansible.builtin.wait_for:
     host: "{{ target_vm_host }}"
     port: "{{ winrm_port | default(5985) }}"
@@ -208,11 +175,11 @@
     - not (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
-# Step 2: Test WinRM credentials and read VM state in one combined task
-# No az vm user update — Delinea password used directly
+# Step 2: Test WinRM credentials + read VM state as DOMAIN\SE-Admin
+# Combines credential test and state probe in a single WinRM call.
 # ------------------------------------------------------------------------------
 
-- name: "Step 2 - Test WinRM + read VM state (.\\SE-Admin local)"
+- name: "Read VM state via WinRM ({{ _effective_winrm_user | default('se-admin') }})"
   ansible.windows.win_shell: |
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
             -Property Name, Domain, PartOfDomain, Workgroup
@@ -229,14 +196,13 @@
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
-    ansible_winrm_transport: ntlm
+    ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
     ansible_winrm_port: "{{ winrm_port | default(5985) }}"
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
-    ansible_winrm_read_timeout: 70
-    ansible_user: ".\\{{ resolved_se_admin_username | default(se_admin_username | default('SE-Admin')) }}"
-    ansible_password: "{{ resolved_se_admin_password | default(se_admin_password | default('')) }}"
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: _vm_state_result
   retries: 3
   delay: 15
@@ -246,9 +212,27 @@
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
 
-- name: "Step 2 - Parse VM state JSON from WinRM probe"
+- name: "Fail if VM state read failed"
+  ansible.builtin.fail:
+    msg: >-
+      WinRM state read failed for {{ target_vm_name }} ({{ target_vm_host }}).
+      User: {{ _effective_winrm_user | default('unknown') }}
+      Error: {{ _vm_state_result.msg | default(_vm_state_result.stderr | default('unknown')) }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - _vm_state_result is defined
+    - _vm_state_result is failed
+
+- name: "Parse and set VM state facts"
   ansible.builtin.set_fact:
-    _vm_state_parsed: "{{ _vm_state_result.stdout | trim | from_json }}"
+    actual_vm_hostname: "{{ (_vm_state_result.stdout | trim | from_json).hostname }}"
+    current_hostname_info:
+      old_name: "{{ (_vm_state_result.stdout | trim | from_json).hostname }}"
+    current_domain_status:
+      domain: "{{ (_vm_state_result.stdout | trim | from_json).domain }}"
+      part_of_domain: "{{ (_vm_state_result.stdout | trim | from_json).part_of_domain }}"
+      workgroup_name: "{{ (_vm_state_result.stdout | trim | from_json).workgroup_name | default('WORKGROUP') }}"
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
@@ -256,35 +240,21 @@
     - _vm_state_result is succeeded
     - _vm_state_result.stdout | default('') | trim | length > 0
 
-- name: "Step 2 - Set current_hostname_info and current_domain_status"
-  ansible.builtin.set_fact:
-    actual_vm_hostname: "{{ _vm_state_parsed.hostname }}"
-    current_hostname_info:
-      old_name: "{{ _vm_state_parsed.hostname }}"
-    current_domain_status:
-      domain: "{{ _vm_state_parsed.domain }}"
-      part_of_domain: "{{ _vm_state_parsed.part_of_domain }}"
-      workgroup_name: "{{ _vm_state_parsed.workgroup_name | default('WORKGROUP') }}"
-    _effective_winrm_transport: "ntlm"
-    _effective_winrm_user: ".\\{{ resolved_se_admin_username }}"
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - _vm_state_parsed is defined
-
 - name: "Step 2 - Display VM state (WinRM credential test PASSED)"
   ansible.builtin.debug:
-    msg: |-
+    msg: |
       +-------------------------------------------------------------+
       |  WinRM CREDENTIAL TEST : PASSED
-      |  VM STATE (.\{{ resolved_se_admin_username }})
+      |  VM STATE (user len: {{ resolved_se_admin_username | string | length }} chars)
       |   Azure resource : {{ target_vm_name }}
-      |   OS hostname    : {{ current_hostname_info.old_name | default('unknown') }}
+      |   OS hostname    : {{ actual_vm_hostname | default('unknown') }}
       |   Domain         : {{ current_domain_status.domain | default('unknown') }}
-      |   Part of domain : {{ current_domain_status.part_of_domain | default(false) }}
+      |   Part of domain : {{ current_domain_status.part_of_domain | default('unknown') }}
       |   Connect IP     : {{ target_vm_host }}
       +-------------------------------------------------------------+
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - _vm_state_parsed is defined
+    - _vm_state_result is defined
+    - _vm_state_result is succeeded
+

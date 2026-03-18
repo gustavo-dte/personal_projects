@@ -62,14 +62,16 @@
 
 - name: Verify Azure resource group exists
   block:
-    - name: Check if target resource group exists
+    - name: Check if target resource group exists — with subscription
       ansible.builtin.command:
         cmd: az group show --name "{{ target_resource_group }}" --subscription "{{ target_subscription_id }}" --output json
       register: resource_group_info_raw
       changed_when: false
-      failed_when: false
       no_log: true
-      when: not (dry_run | default(false))
+      when:
+        - not (dry_run | default(false))
+        - target_subscription_id is defined
+        - target_subscription_id | length > 0
 
     - name: Fail if resource group az cli returned no output
       ansible.builtin.fail:
@@ -89,9 +91,7 @@
           resourcegroups:
             - name: "{{ (resource_group_info_raw.stdout | from_json).name }}"
               location: "{{ (resource_group_info_raw.stdout | from_json).location }}"
-      when:
-        - not (dry_run | default(false))
-        - (resource_group_info_raw.stdout | default('')) | length > 0
+      when: not (dry_run | default(false))
 
     - name: Mock resource group verification for dry run
       ansible.builtin.set_fact:
@@ -104,17 +104,13 @@
     - name: Display resource group verification success
       ansible.builtin.debug:
         msg: "✓ Resource group verified: {{ resource_group_info.resourcegroups[0].name }}"
-      when:
-        - resource_group_info is defined
-        - resource_group_info.resourcegroups | length > 0
+      when: resource_group_info.resourcegroups | length > 0
 
     - name: Fail if resource group not found
       ansible.builtin.fail:
         msg: >-
           Resource group not found: {{ target_resource_group }}
-      when:
-        - resource_group_info is defined
-        - resource_group_info.resourcegroups | length == 0
+      when: resource_group_info.resourcegroups | length == 0
 
   rescue:
     - name: Handle resource group verification failure
@@ -125,16 +121,17 @@
 
 - name: Verify Azure Migrate project resource group exists (optional)
   block:
-    - name: Check if Azure Migrate project resource group exists
+    - name: Check if Azure Migrate project resource group exists — with subscription
       ansible.builtin.command:
         cmd: az group show --name "{{ azure_migrate_project_resource_group }}" --subscription "{{ azure_migrate_subscription_id }}" --output json
       register: migrate_rg_info_raw
       changed_when: false
-      failed_when: false
       no_log: true
       when:
         - not (dry_run | default(false))
         - (azure_migrate_project_resource_group | default('')) | length > 0
+        - azure_migrate_subscription_id is defined
+        - azure_migrate_subscription_id | length > 0
 
     - name: Fail if Azure Migrate project resource group az cli returned no output
       ansible.builtin.fail:
@@ -155,10 +152,7 @@
           resourcegroups:
             - name: "{{ (migrate_rg_info_raw.stdout | from_json).name }}"
               location: "{{ (migrate_rg_info_raw.stdout | from_json).location }}"
-      when:
-        - not (dry_run | default(false))
-        - (azure_migrate_project_resource_group | default('')) | length > 0
-        - (migrate_rg_info_raw.stdout | default('')) | length > 0
+      when: not (dry_run | default(false)) and (azure_migrate_project_resource_group | default('')) | length > 0
 
     - name: Mock Azure Migrate project RG verification for dry run
       ansible.builtin.set_fact:
