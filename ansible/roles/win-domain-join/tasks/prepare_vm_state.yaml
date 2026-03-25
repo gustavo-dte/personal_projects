@@ -198,10 +198,7 @@
   no_log: true
   when:
     - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - (vm_source_name | default('')) == (target_vm_name | default(''))
-    - sync_password | default(true) | bool
+    - (vm_source_name | default('')) != (target_vm_name | default('')) or (force_rejoin | default(false) | bool)
 
 - name: "Step 1.5 - Display password sync result"
   ansible.builtin.debug:
@@ -220,8 +217,6 @@
       +=============================================================+
   when:
     - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - sync_password | default(true) | bool
     - password_sync_result is defined
     - not (password_sync_result.skipped | default(false) | bool)
 
@@ -231,8 +226,6 @@
     prompt: "Waiting for password changes to propagate..."
   when:
     - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - sync_password | default(true) | bool
     - password_sync_result is defined
     - not (password_sync_result.skipped | default(false) | bool)
 

@@ -149,6 +149,7 @@
       loop_control:
         label: "{{ item.name }}"
       vars:
+        vm_source_name: "{{ item.name }}"
         target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host: "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
         se_admin_username: "{{ item.vm_winrm_username | default(item.vm_se_admin_username) }}"
@@ -184,6 +185,7 @@
       loop_control:
         label: "{{ item.name }}"
       vars:
+        vm_source_name: "{{ item.name }}"
         target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host: "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
         se_admin_username: "{{ item.vm_winrm_username | default(item.vm_se_admin_username) }}"
@@ -228,6 +230,7 @@
       loop_control:
         label: "{{ item.name }}"
       vars:
+        vm_source_name: "{{ item.name }}"
         target_vm_name: "{{ item.target_vm_name | default(item.name) }}"
         target_vm_host: "{{ vm_ip_map[item.name] | default(item.vm_ansible_host | default(item.name)) }}"
         se_admin_username: "{{ item.vm_winrm_username | default(item.vm_se_admin_username) }}"
