@@ -380,6 +380,33 @@
         - not (_az_rename_reboot.skipped | default(false) | bool)
         - _az_rename_reboot.rc | default(0) | int == 0
 
+    - name: "Step 3 - Re-sync VM password after rename reboot"
+      ansible.builtin.shell: |
+        az vm user update \
+          --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
+          --name "{{ azure_vm_name | default(target_vm_name) }}" \
+          --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+          --username "{{ resolved_se_admin_username }}" \
+          --password "{{ resolved_se_admin_password }}"
+      delegate_to: localhost
+      register: _post_rename_password_sync
+      failed_when: _post_rename_password_sync.rc != 0
+      no_log: true
+      when:
+        - not (dry_run | default(false) | bool)
+        - _az_rename_reboot is defined
+        - not (_az_rename_reboot.skipped | default(false) | bool)
+        - _az_rename_reboot.rc | default(0) | int == 0
+
+    - name: "Step 3 - Wait for password propagation after rename"
+      ansible.builtin.pause:
+        seconds: 15
+        prompt: "Waiting for password to propagate after rename reboot..."
+      when:
+        - not (dry_run | default(false) | bool)
+        - _post_rename_password_sync is defined
+        - not (_post_rename_password_sync.skipped | default(false) | bool)
+
     - name: "Step 3 - Verify hostname via WinRM after reboot"
       ansible.windows.win_shell: $env:COMPUTERNAME
       delegate_to: "{{ target_vm_host }}"
