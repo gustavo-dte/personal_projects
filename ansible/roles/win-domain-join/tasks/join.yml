@@ -57,6 +57,46 @@
     - not (_needs_join | bool)
 
 # ------------------------------------------------------------------------------
+# Step 1.5: Verify WinRM connectivity with resolved credentials before join
+# Needed when credential routing synced the Delinea password onto .\Administrator
+# via az vm user update — Azure VM Agent propagation can take >90s after reboot.
+# ------------------------------------------------------------------------------
+
+- name: "Step 1.5 - Verify WinRM connectivity with resolved credentials (pre-join probe)"
+  ansible.windows.win_shell: "echo ok"
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: "{{ hostvars['localhost']['_effective_winrm_transport'] | default('ntlm') }}"
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 30
+    ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+  register: _pre_join_probe
+  retries: 10
+  delay: 30
+  until: _pre_join_probe is succeeded
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - _needs_join | bool
+
+- name: "Step 1.5 - Display pre-join WinRM probe result"
+  ansible.builtin.debug:
+    msg: |
+      +-------------------------------------------------------------+
+      |  PRE-JOIN WinRM PROBE
+      |   VM      : {{ target_vm_name }}
+      |   User    : {{ hostvars['localhost']['_effective_winrm_user'] }}
+      |   Result  : {{ 'OK' if (_pre_join_probe is succeeded) else 'FAILED' }}
+      +-------------------------------------------------------------+
+  when:
+    - not (dry_run | default(false) | bool)
+    - _needs_join | bool
+
+# ------------------------------------------------------------------------------
 # Step 2: Domain join
 # ------------------------------------------------------------------------------
 
@@ -70,7 +110,7 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
-          |   WinRM user    : {{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ hostvars['localhost']['resolved_se_admin_username']) }}
+          |   WinRM user    : {{ hostvars['localhost']['_effective_winrm_user'] }}
           |   WinRM pass src: Delinea SE-Admin password (single fetch, reused)
           |   WinRM pass len: {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
           |   Connect IP    : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
@@ -114,7 +154,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ (hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']))) }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username']}}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
@@ -178,7 +218,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ (hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']))) }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: _verify_result
       retries: 3
