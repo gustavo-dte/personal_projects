@@ -101,24 +101,28 @@
             state: domain
           no_log: true
           register: join_result
+          when:
+            - vm_facts.needs_join | bool
+            - not join_result_fallback.changed | default(false) | bool
 
       rescue:
         - name: Diagnostic - Test WinRM connection on failure
           ansible.windows.win_command: "whoami.exe"
           register: winrm_diag_result
           ignore_errors: true
+          when: vm_facts.needs_join | bool
 
         - name: Display WinRM diagnostic output
           debug:
             var: winrm_diag_result
-          when: winrm_diag_result is defined
+          when:
+            - vm_facts.needs_join | bool
+            - winrm_diag_result is defined
 
         - name: Re-throw original error
           fail:
             msg: "Primary user domain join failed. See diagnostic output above."
-      when:
-        - vm_facts.needs_join | bool
-        - not join_result_fallback.changed | default(false) | bool
+          when: vm_facts.needs_join | bool
 
     # --- Fallback attempt: the other account ---
     - name: "Step 2 - Join domain via WinRM (fallback user)"
