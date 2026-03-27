@@ -3,20 +3,28 @@
 #
 # Per-VM: disjoin from domain + rename hostname — all via WinRM.
 #
-# Credential routing (set by prepare_vm_state.yaml):
-#   resolved_winrm_username = SE-Admin or Administrator (from universal probe)
-#   All WinRM tasks use resolved_winrm_username as primary, other account as fallback.
-#
 # Steps:
-#   1. prepare_vm_state  — probe WinRM, set resolved_winrm_username, read VM state
-#   2. Disjoin           — WMI UnjoinDomainOrWorkgroup → az vm restart → wait WinRM
-#   3. Rename            — Rename-Computer → az vm restart → wait WinRM → verify
+#   1. prepare_vm_state  — enable WinRM, test credentials, read VM state
+#   2. Disjoin           — WMI UnjoinDomainOrWorkgroup (fallback: Remove-Computer)
+#                          -> az vm restart -> wait WinRM
+#   3. Rename            — Rename-Computer via WinRM
+#                          -> az vm restart -> wait WinRM -> verify hostname
+#
+# Required vars (set by main.yaml loop):
+#   target_vm_name          Azure resource name and target OS hostname
+#   target_vm_host          Private IP
+#   se_admin_username       From manifest vm_winrm_username / vm_se_admin_username
+#   se_admin_password       From Delinea via GITHUB_ENV
+#   skip_rename             true = disjoin only
+#   azure_resource_group    Azure RG
+#   azure_vm_name           Azure resource name
+#   azure_subscription_id   Azure subscription ID
 
 # ------------------------------------------------------------------------------
-# Step 1: Probe + resolve WinRM user + read VM state
+# Step 1: Enable WinRM, test credentials, read VM state
 # ------------------------------------------------------------------------------
 
-- name: "Step 1 - Enable WinRM + sync credentials"
+- name: "Step 1 - Enable WinRM + read VM state"
   ansible.builtin.include_tasks: prepare_vm_state.yaml
 
 - name: "Assert target_vm_name is set"
@@ -26,7 +34,7 @@
       - target_vm_name | length > 0
     fail_msg: "target_vm_name is missing — check manifest vms[].target_vm_name."
 
-- name: "Display disjoin plan for {{ item.name }}"
+- name: "Display plan for {{ item.name }}"
   ansible.builtin.debug:
     msg: |
       +=============================================================+
@@ -37,7 +45,6 @@
       |   OS hostname now : {{ current_hostname_info.old_name | default('unknown') }}
       |   Domain now      : {{ current_domain_status.domain | default('WORKGROUP') }}
       |   Part of domain  : {{ current_domain_status.part_of_domain | default(false) }}
-      |   WinRM user      : .\{{ resolved_winrm_username | default(resolved_se_admin_username) }}
       {% if not (skip_rename | default(false) | bool) %}
       |   Target hostname : {{ target_vm_name }}
       |   Rename needed   : {{ (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper) }}
@@ -50,7 +57,6 @@
 
 # ------------------------------------------------------------------------------
 # Step 2: Disjoin from domain
-# Primary: resolved_winrm_username. Fallback: the other account.
 # ------------------------------------------------------------------------------
 
 - name: "[CREDENTIALS] Step 2 - Disjoin"
@@ -58,9 +64,13 @@
     msg: |
       +-------------------------------------------------------------+
       |  STEP 2 - DISJOIN
-      |   WinRM user  : .\{{ resolved_winrm_username | default(resolved_se_admin_username) }}
-      |   Secret len  : {{ resolved_se_admin_password | string | length }} chars
-      |   Connect IP  : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
+      |   Method           : PowerShell WMI UnjoinDomainOrWorkgroup
+      |   WinRM user       : {{ hostvars['localhost']['_effective_winrm_user'] | default('.\\' ~ se_admin_username) }}
+      |   Domain admin     : NOT REQUIRED (local disjoin only)
+      |   AD object        : Will remain (manual cleanup needed)
+      |   Password src     : Delinea
+      |   Password len     : {{ se_admin_password | string | length }} chars
+      |   Connect IP       : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
       +-------------------------------------------------------------+
   when:
     - not (dry_run | default(false) | bool)
@@ -73,10 +83,11 @@
     - not (dry_run | default(false) | bool)
     - not (current_domain_status.part_of_domain | default(false) | bool)
 
-- name: "Step 2 - Disjoin via WinRM (primary: resolved_winrm_username)"
+- name: "Step 2 - Disjoin from domain via WMI"
   ansible.windows.win_shell: |
     $ErrorActionPreference = 'Stop'
     $methods = @()
+
     try {
       $cs = Get-WmiObject Win32_ComputerSystem
       $rv = $cs.UnjoinDomainOrWorkgroup($null, $null, 0)
@@ -86,101 +97,45 @@
       }
       $methods += "WMI: ReturnValue=$($rv.ReturnValue)"
     }
-    catch { $methods += "WMI: $($_.Exception.Message)" }
+    catch {
+      $methods += "WMI: $($_.Exception.Message)"
+    }
+
     try {
       Remove-Computer -WorkgroupName 'WORKGROUP' -Force -ErrorAction Stop
       Write-Output 'DISJOIN_OK:Remove-Computer'
       exit 0
     }
-    catch { $methods += "Remove-Computer: $($_.Exception.Message)" }
+    catch {
+      $methods += "Remove-Computer: $($_.Exception.Message)"
+    }
+
     Write-Error "All disjoin methods failed: $($methods -join ' | ')"
     exit 1
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
-    ansible_winrm_transport: ntlm
+    ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
     ansible_winrm_port: "{{ winrm_port | default(5985) }}"
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
-  register: _disjoin_primary
-  failed_when: false
-  ignore_unreachable: true
-  no_log: true
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+  register: disjoin_result
+  # no_log: true
   when:
     - not (dry_run | default(false) | bool)
     - current_domain_status.part_of_domain | default(false) | bool
 
-- name: "Step 2 - Disjoin via WinRM (fallback: other account)"
-  ansible.windows.win_shell: |
-    $ErrorActionPreference = 'Stop'
-    $methods = @()
-    try {
-      $cs = Get-WmiObject Win32_ComputerSystem
-      $rv = $cs.UnjoinDomainOrWorkgroup($null, $null, 0)
-      if ($rv.ReturnValue -eq 0) {
-        Write-Output 'DISJOIN_OK:WMI'
-        exit 0
-      }
-      $methods += "WMI: ReturnValue=$($rv.ReturnValue)"
-    }
-    catch { $methods += "WMI: $($_.Exception.Message)" }
-    try {
-      Remove-Computer -WorkgroupName 'WORKGROUP' -Force -ErrorAction Stop
-      Write-Output 'DISJOIN_OK:Remove-Computer'
-      exit 0
-    }
-    catch { $methods += "Remove-Computer: $($_.Exception.Message)" }
-    Write-Error "All disjoin methods failed: $($methods -join ' | ')"
-    exit 1
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 60
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] if (hostvars['localhost']['resolved_winrm_username'] | default('') == 'Administrator') else 'Administrator' }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
-  register: _disjoin_fallback
-  failed_when: false
-  ignore_unreachable: true
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - current_domain_status.part_of_domain | default(false) | bool
-    - _disjoin_primary is defined
-    - (_disjoin_primary is failed or _disjoin_primary is unreachable)
-
-- name: "Step 2 - Set disjoin result from whichever connection succeeded"
-  ansible.builtin.set_fact:
-    _disjoin_result: "{{ _disjoin_primary if (_disjoin_primary is not unreachable and _disjoin_primary is not failed) else _disjoin_fallback }}"
-  when:
-    - not (dry_run | default(false) | bool)
-    - current_domain_status.part_of_domain | default(false) | bool
-    - _disjoin_primary is defined
-
-- name: "Fail if both disjoin attempts were unreachable"
+- name: "Fail if disjoin failed"
   ansible.builtin.fail:
-    msg: "Disjoin failed for {{ target_vm_name }} — both WinRM accounts were rejected."
+    msg: "Disjoin failed for {{ target_vm_name }}. rc={{ disjoin_result.rc | default('N/A') }}"
   when:
     - not (dry_run | default(false) | bool)
-    - current_domain_status.part_of_domain | default(false) | bool
-    - _disjoin_primary is defined
-    - (_disjoin_primary is unreachable or _disjoin_primary is failed)
-    - (_disjoin_fallback is not defined or _disjoin_fallback is unreachable or _disjoin_fallback is failed)
-
-- name: "Fail if disjoin command failed"
-  ansible.builtin.fail:
-    msg: "Disjoin failed for {{ target_vm_name }}. rc={{ _disjoin_result.rc | default('N/A') }}"
-  when:
-    - not (dry_run | default(false) | bool)
-    - _disjoin_result is defined
-    - not (_disjoin_result.skipped | default(false) | bool)
-    - _disjoin_result.rc | default(1) | int != 0
+    - disjoin_result is defined
+    - not (disjoin_result.skipped | default(false) | bool)
+    - disjoin_result.rc | default(1) | int != 0
 
 - name: "Step 2 - Reboot after disjoin"
   ansible.builtin.shell: >-
@@ -193,16 +148,16 @@
   failed_when: _az_disjoin_reboot.rc | default(0) | int != 0
   when:
     - not (dry_run | default(false) | bool)
-    - _disjoin_result is defined
-    - not (_disjoin_result.skipped | default(false) | bool)
-    - _disjoin_result.rc | default(1) | int == 0
+    - disjoin_result is defined
+    - not (disjoin_result.skipped | default(false) | bool)
+    - disjoin_result.rc | default(1) | int == 0
 
-- name: "Step 2 - Wait for WinRM port after disjoin reboot"
+- name: "Step 2 - Wait for WinRM after disjoin reboot"
   ansible.builtin.wait_for:
     host: "{{ target_vm_host }}"
     port: "{{ winrm_port | default(5985) }}"
     delay: 30
-    timeout: 3600
+    timeout: 600
     state: started
   when:
     - not (dry_run | default(false) | bool)
@@ -218,15 +173,115 @@
       workgroup_name: "WORKGROUP"
   when:
     - not (dry_run | default(false) | bool)
-    - _disjoin_result is defined
-    - not (_disjoin_result.skipped | default(false) | bool)
-    - _disjoin_result.rc | default(1) | int == 0
+    - disjoin_result is defined
+    - not (disjoin_result.skipped | default(false) | bool)
+    - disjoin_result.rc | default(1) | int == 0
+
+# ==============================================================================
+# Step 2.5: Test both SE-Admin and Administrator credentials in WORKGROUP
+# Purpose: Validate which credentials work after disjoin
+# Note: Test SE-Admin FIRST to ensure workflow continues even if Administrator fails
+# ==============================================================================
+
+- name: "Step 2.5 - Test SE-Admin credentials (expected to SUCCEED)"
+  ansible.windows.win_shell: |
+    $hostname = $env:COMPUTERNAME
+    $domain = (Get-WmiObject Win32_ComputerSystem).Domain
+    Write-Output "TEST_OK:{{ se_admin_username }}:${hostname}:${domain}"
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+  register: seadmin_test_result
+  failed_when: false
+  # no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - not (current_domain_status.part_of_domain | default(false) | bool)
+
+- name: "Step 2.5 - Test .\\Administrator credentials (expected to FAIL in WORKGROUP)"
+  ansible.windows.win_shell: |
+    $hostname = $env:COMPUTERNAME
+    $domain = (Get-WmiObject Win32_ComputerSystem).Domain
+    Write-Output "TEST_OK:Administrator:${hostname}:${domain}"
+  delegate_to: "{{ target_vm_host }}"
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+    ansible_winrm_scheme: http
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_connection_timeout: 60
+    ansible_winrm_read_timeout: 70
+    ansible_user: ".\\Administrator"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+  register: admin_test_result
+  failed_when: false
+  ignore_unreachable: true
+  no_log: true
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - not (current_domain_status.part_of_domain | default(false) | bool)
+
+- name: "Step 2.5 - Display credential test results in WORKGROUP"
+  ansible.builtin.debug:
+    msg: |
+      +=============================================================+
+      |  WORKGROUP CREDENTIAL TEST RESULTS
+      +=============================================================+
+      |  VM               : {{ target_vm_name }}
+      |  IP               : {{ target_vm_host }}
+      |  Domain Status    : {{ current_domain_status.domain | default('WORKGROUP') }}
+      +-------------------------------------------------------------+
+      |  Test 1: SE-Admin (user len: {{ se_admin_username | string | length }} chars) + SE-Admin password
+      |    Result        : {{ 'PASSED' if (seadmin_test_result.rc | default(1) == 0) else 'FAILED' }}
+      |    RC            : {{ seadmin_test_result.rc | default('N/A') }}
+      |    Output        : {{ seadmin_test_result.stdout | default('N/A') | trim }}
+      +-------------------------------------------------------------+
+      |  Test 2: .\Administrator + SE-Admin password
+      |    Result        : {{ 'FAILED' if (admin_test_result.rc | default(1) != 0) else 'PASSED' }}
+      |    RC            : {{ admin_test_result.rc | default('N/A') }}
+      |    Output        : {{ admin_test_result.stdout | default('N/A') | trim }}
+      |    Error         : {{ 'credential rejected' if (admin_test_result.rc | default(1) != 0) else 'none' }}
+      +-------------------------------------------------------------+
+      |  CONCLUSION: Use SE-Admin account for all operations
+      +=============================================================+
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - not (current_domain_status.part_of_domain | default(false) | bool)
+    - admin_test_result is defined or seadmin_test_result is defined
+
+- name: "Step 2.5 - Fail if SE-Admin credentials don't work in WORKGROUP"
+  ansible.builtin.fail:
+    msg: |
+      CRITICAL: SE-Admin credentials failed in WORKGROUP!
+
+      VM: {{ target_vm_name }} ({{ target_vm_host }})
+      Expected: SE-Admin should work with Delinea password
+      Result: {{ seadmin_test_result.stdout | default('unknown') }}
+      Error: {{ seadmin_test_result.stderr | default('unknown') }}
+
+      Cannot proceed with rename/join operations.
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - not (current_domain_status.part_of_domain | default(false) | bool)
+    - seadmin_test_result is defined
+    - seadmin_test_result.rc | default(1) != 0
 
 # ------------------------------------------------------------------------------
 # Step 3: Rename hostname
-# Primary: resolved_winrm_username. Fallback: the other account.
 # ------------------------------------------------------------------------------
-
 - name: "Step 3 - Rename hostname"
   when: not (skip_rename | default(false) | bool)
   block:
@@ -235,8 +290,10 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 3 - RENAME
-          |   WinRM user  : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
-          |   Secret len  : {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
+          |   Method      : WinRM + Rename-Computer
+          |   WinRM user  : {{ hostvars['localhost']['_effective_winrm_user'] | default('.\\' ~ se_admin_username) }}
+          |   Password src : Delinea SE-Admin password (same fetch, reused)
+          |   Password len : {{ se_admin_password | string | length }} chars
           |   Connect IP  : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
           |   New name    : {{ target_vm_name }}
           +-------------------------------------------------------------+
@@ -246,7 +303,7 @@
         msg: "Rename skipped — {{ current_hostname_info.old_name }} already matches {{ target_vm_name }}."
       when: (current_hostname_info.old_name | default('') | upper) == (target_vm_name | upper)
 
-    - name: "Step 3 - Rename via WinRM (primary: resolved_winrm_username)"
+    - name: "Step 3 - Rename via WinRM"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
         if ($env:COMPUTERNAME -ieq "{{ target_vm_name }}") {
@@ -267,65 +324,18 @@
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: ntlm
+        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
-      register: _rename_primary
-      failed_when: false
-      ignore_unreachable: true
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+      register: _rename_result
       no_log: true
       when:
         - not (dry_run | default(false) | bool)
         - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
-
-    - name: "Step 3 - Rename via WinRM (fallback: other account)"
-      ansible.windows.win_shell: |
-        $ErrorActionPreference = "Stop"
-        if ($env:COMPUTERNAME -ieq "{{ target_vm_name }}") {
-          Write-Output "RENAME_ALREADY_CORRECT:$env:COMPUTERNAME"
-          exit 0
-        }
-        try {
-          Rename-Computer -NewName "{{ target_vm_name }}" -Force -ErrorAction Stop
-          $pending = (Get-ItemProperty `
-            -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName' `
-            -Name ComputerName).ComputerName
-          Write-Output "RENAME_CONFIRMED:pending=$pending"
-        }
-        catch {
-          Write-Output "RENAME_FAILED:$($_.Exception.Message)"
-          exit 1
-        }
-      delegate_to: "{{ target_vm_host }}"
-      vars:
-        ansible_connection: winrm
-        ansible_winrm_transport: ntlm
-        ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-        ansible_winrm_scheme: http
-        ansible_winrm_server_cert_validation: ignore
-        ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] if (hostvars['localhost']['resolved_winrm_username'] | default('') == 'Administrator') else 'Administrator' }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
-      register: _rename_fallback
-      failed_when: false
-      ignore_unreachable: true
-      no_log: true
-      when:
-        - not (dry_run | default(false) | bool)
-        - (current_hostname_info.old_name | default('') | upper) != (target_vm_name | upper)
-        - _rename_primary is defined
-        - (_rename_primary is failed or _rename_primary is unreachable)
-
-    - name: "Step 3 - Set rename result from whichever connection succeeded"
-      ansible.builtin.set_fact:
-        _rename_result: "{{ _rename_primary if (_rename_primary is not unreachable and _rename_primary is not failed) else _rename_fallback }}"
-      when:
-        - not (dry_run | default(false) | bool)
-        - _rename_primary is defined
 
     - name: "Fail if rename failed"
       ansible.builtin.fail:
@@ -362,7 +372,7 @@
         host: "{{ target_vm_host }}"
         port: "{{ winrm_port | default(5985) }}"
         delay: 30
-        timeout: 3600
+        timeout: 600
         state: started
       when:
         - not (dry_run | default(false) | bool)
@@ -370,66 +380,25 @@
         - not (_az_rename_reboot.skipped | default(false) | bool)
         - _az_rename_reboot.rc | default(0) | int == 0
 
-    - name: "Step 3 - Verify hostname via WinRM (primary)"
+    - name: "Step 3 - Verify hostname via WinRM after reboot"
       ansible.windows.win_shell: $env:COMPUTERNAME
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: ntlm
+        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
         ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
-      register: _hostname_verify_primary
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+      register: _hostname_verify
       retries: 5
       delay: 20
-      until: _hostname_verify_primary is succeeded
-      failed_when: false
-      ignore_unreachable: true
+      until: _hostname_verify is succeeded
       no_log: true
       when:
         - not (dry_run | default(false) | bool)
         - _az_rename_reboot is defined
         - not (_az_rename_reboot.skipped | default(false) | bool)
         - _az_rename_reboot.rc | default(0) | int == 0
-
-    - name: "Step 3 - Verify hostname via WinRM (fallback)"
-      ansible.windows.win_shell: $env:COMPUTERNAME
-      delegate_to: "{{ target_vm_host }}"
-      vars:
-        ansible_connection: winrm
-        ansible_winrm_transport: ntlm
-        ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-        ansible_winrm_scheme: http
-        ansible_winrm_server_cert_validation: ignore
-        ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] if (hostvars['localhost']['resolved_winrm_username'] | default('') == 'Administrator') else 'Administrator' }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
-      register: _hostname_verify_fallback
-      retries: 3
-      delay: 20
-      until: _hostname_verify_fallback is succeeded
-      no_log: true
-      when:
-        - not (dry_run | default(false) | bool)
-        - _az_rename_reboot is defined
-        - not (_az_rename_reboot.skipped | default(false) | bool)
-        - _az_rename_reboot.rc | default(0) | int == 0
-        - _hostname_verify_primary is defined
-        - (_hostname_verify_primary is failed or _hostname_verify_primary is unreachable)
-
-    - name: "Step 3 - Display hostname verification"
-      ansible.builtin.debug:
-        msg: |
-          +=============================================================+
-          |  RENAME VERIFIED
-          |   Azure resource : {{ target_vm_name }}
-          |   OS hostname    : {{ (_hostname_verify_primary if (_hostname_verify_primary is succeeded) else _hostname_verify_fallback).stdout | default('unknown') | trim }}
-          |   WinRM user     : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
-          +=============================================================+
-      when:
-        - not (dry_run | default(false) | bool)
-        - (_hostname_verify_primary is defined and _hostname_verify_primary is succeeded)
-          or (_hostname_verify_fallback is defined and _hostname_verify_fallback is succeeded)
