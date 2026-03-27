@@ -70,7 +70,7 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
-          |   WinRM user    : {{ hostvars['localhost']['_effective_winrm_user'] | default('.\\' ~ hostvars['localhost']['resolved_se_admin_username']) }}
+          |   WinRM user    : {{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ hostvars['localhost']['resolved_se_admin_username']) }}
           |   WinRM pass src: Delinea SE-Admin password (single fetch, reused)
           |   WinRM pass len: {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
           |   Connect IP    : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
@@ -114,7 +114,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
+        ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ (hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']))) }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
@@ -178,7 +178,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
+        ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ (hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']))) }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: _verify_result
       retries: 3
