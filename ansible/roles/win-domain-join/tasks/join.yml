@@ -4,15 +4,18 @@
 # Per-VM domain join orchestrator — all operations via WinRM.
 #
 # Steps:
-#   1. prepare_vm_state  — sync password, resolve WinRM user (SE-Admin or Administrator)
-#   2. Domain join       — Add-Computer via WinRM
+#   1. prepare_vm_state  — sync secret, resolve WinRM user (SE-Admin or Administrator)
+#   2. Domain join       — Add-Computer via WinRM (.\Administrator or .\SE-Admin)
 #                          -> az vm restart -> wait WinRM
-#   3. Verify            — WinRM confirms PartOfDomain=true
+#   3. Verify            — WinRM as DOMAIN\SE-Admin confirms PartOfDomain=true
 #
 # Credential routing (set by prepare_vm_state.yaml):
-#   force_rejoin=true                        → .\SE-Admin (domain account active)
-#   force_rejoin=false + sync_password=true  → .\Administrator (synced from Delinea)
-#   force_rejoin=false + sync_password=false → .\SE-Admin with fallback to .\Administrator
+#   force_rejoin=true                       → .\SE-Admin (domain account active)
+#   force_rejoin=false + sync_secret=true   → .\Administrator (synced from Delinea)
+#   force_rejoin=false + sync_secret=false  → .\SE-Admin with fallback to .\Administrator
+#
+# Step 3 always uses DOMAIN\SE-Admin — after join + reboot the domain account
+# is restored and .\Administrator may be restricted by domain policy.
 #
 # Required vars (set by main.yaml loop):
 #   target_vm_name, target_vm_host, se_admin_username, se_admin_password
@@ -20,7 +23,7 @@
 #   azure_resource_group, azure_vm_name, azure_subscription_id, sync_password
 
 # ------------------------------------------------------------------------------
-# Step 1: Sync password + resolve WinRM user
+# Step 1: Sync secret + resolve WinRM user
 # ------------------------------------------------------------------------------
 
 - name: "Step 1 - Enable WinRM + resolve credentials"
@@ -47,7 +50,7 @@
       |  Target hostname  : {{ target_vm_name }}
       |  Target domain    : {{ domain_name }}
       |  Force rejoin     : {{ force_rejoin | default(false) }}
-      |  Sync password    : {{ sync_password | default(true) }}
+      |  Sync secret      : {{ sync_password | default(true) }}
       |  WinRM user       : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
       +-------------------------------------------------------------+
       |  Needs join       : {{ _needs_join | bool }}
@@ -65,6 +68,7 @@
 
 # ------------------------------------------------------------------------------
 # Step 2: Domain join
+# Uses resolved_winrm_username (Administrator or SE-Admin depending on VM state)
 # ------------------------------------------------------------------------------
 
 - name: "Step 2 - Domain join block"
@@ -78,10 +82,10 @@
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
           |   WinRM user     : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
-          |   WinRM pass len : {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
+          |   WinRM secret   : {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
           |   Connect IP     : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
-          |   Join creds     : {{ domain_admin_username }}
-          |   Join pass src  : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
+          |   Join account   : {{ domain_admin_username }}
+          |   Join secret    : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
           |   Target domain  : {{ domain_name }}
           |   Target OU      : {{ domain_ou_path | default('(default)') }}
           +-------------------------------------------------------------+
@@ -135,7 +139,7 @@
         msg: >-
           Domain join failed for {{ target_vm_name }}.
           Output: {{ _join_result.stdout | default('') | trim }}
-          Check DC connectivity, OU path, and domain admin credentials (DOMAIN_ADMIN_PASSWORD).
+          Check DC connectivity, OU path, and join account configuration.
       when: >-
         (_join_result.rc | default(0) | int != 0)
         or ('JOIN_FAILED:' in (_join_result.stdout | default('')))
@@ -161,8 +165,9 @@
 
 # ------------------------------------------------------------------------------
 # Step 3: Verify domain membership
-# After domain join + reboot, SE-Admin is restored as a domain account.
-# Use SE-Admin for verification regardless of which user was used for the join.
+# After join + reboot the VM is domain-joined.
+# .\Administrator is often restricted by domain policy on domain members.
+# Use DOMAIN\SE-Admin (domain account, restored after join) for verification.
 # ------------------------------------------------------------------------------
 
 - name: "Step 3 - Verify domain membership"
@@ -170,7 +175,7 @@
     - not (dry_run | default(false) | bool)
     - _needs_join | bool
   block:
-    - name: "Step 3 - Read domain status via WinRM"
+    - name: "Step 3 - Read domain status via WinRM (DOMAIN\\SE-Admin)"
       ansible.windows.win_shell: |
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
                 -Property Name, Domain, PartOfDomain
@@ -187,11 +192,11 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
+        ansible_user: "{{ hostvars['localhost']['_domain_netbios'] }}\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: _verify_result
-      retries: 3
-      delay: 20
+      retries: 5
+      delay: 30
       until: _verify_result is succeeded
       no_log: true
 
@@ -202,7 +207,7 @@
           |  FINAL STATE: {{ target_vm_name }}
           +=============================================================+
           |  {{ _verify_result.stdout | default('(no output)') | trim }}
-          |  WinRM user : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
+          |  WinRM user : {{ hostvars['localhost']['_domain_netbios'] }}\{{ hostvars['localhost']['resolved_se_admin_username'] }}
           +=============================================================+
 
     - name: "Step 3 - Fail if VM not in target domain"
@@ -210,7 +215,7 @@
         msg: |
           VM {{ target_vm_name }} is NOT in domain '{{ domain_name }}' after join + reboot.
           WinRM verify output: {{ _verify_result.stdout | default('') | trim }}
-          Check DC connectivity, OU path, and domain admin credentials.
+          Check DC connectivity, OU path, and join account configuration.
       when:
         - _verify_result is defined
         - _verify_result is succeeded
