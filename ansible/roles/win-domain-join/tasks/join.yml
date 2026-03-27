@@ -5,17 +5,16 @@
 #
 # Steps:
 #   1. prepare_vm_state  — sync secret, resolve WinRM user (SE-Admin or Administrator)
-#   2. Domain join       — Add-Computer via WinRM (.\Administrator or .\SE-Admin)
+#   2. Domain join       — Add-Computer via WinRM
 #                          -> az vm restart -> wait WinRM
-#   3. Verify            — WinRM as DOMAIN\SE-Admin confirms PartOfDomain=true
+#   3. Verify            — WinRM as .\SE-Admin confirms PartOfDomain=true
 #
 # Credential routing (set by prepare_vm_state.yaml):
 #   force_rejoin=true                       → .\SE-Admin (domain account active)
 #   force_rejoin=false + sync_secret=true   → .\Administrator (synced from Delinea)
 #   force_rejoin=false + sync_secret=false  → .\SE-Admin with fallback to .\Administrator
 #
-# Step 3 always uses DOMAIN\SE-Admin — after join + reboot the domain account
-# is restored and .\Administrator may be restricted by domain policy.
+# Step 3 always uses .\SE-Admin — after join + reboot SE-Admin is restored.
 #
 # Required vars (set by main.yaml loop):
 #   target_vm_name, target_vm_host, se_admin_username, se_admin_password
@@ -51,7 +50,7 @@
       |  Target domain    : {{ domain_name }}
       |  Force rejoin     : {{ force_rejoin | default(false) }}
       |  Sync secret      : {{ sync_password | default(true) }}
-      |  WinRM user       : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
+      |  WinRM user       : .\{{ resolved_winrm_username | default(resolved_se_admin_username) }}
       +-------------------------------------------------------------+
       |  Needs join       : {{ _needs_join | bool }}
       {% if dry_run | default(false) | bool %}
@@ -68,7 +67,6 @@
 
 # ------------------------------------------------------------------------------
 # Step 2: Domain join
-# Uses resolved_winrm_username (Administrator or SE-Admin depending on VM state)
 # ------------------------------------------------------------------------------
 
 - name: "Step 2 - Domain join block"
@@ -81,8 +79,8 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
-          |   WinRM user     : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
-          |   WinRM secret   : {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
+          |   WinRM user     : .\{{ resolved_winrm_username | default(resolved_se_admin_username) }}
+          |   Secret len     : {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
           |   Connect IP     : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
           |   Join account   : {{ domain_admin_username }}
           |   Join secret    : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
@@ -124,8 +122,8 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
         DOMAIN_USER: "{{ domain_admin_username }}"
@@ -165,9 +163,8 @@
 
 # ------------------------------------------------------------------------------
 # Step 3: Verify domain membership
-# After join + reboot the VM is domain-joined.
-# .\Administrator is often restricted by domain policy on domain members.
-# Use DOMAIN\SE-Admin (domain account, restored after join) for verification.
+# After join + reboot SE-Admin is restored. Try .\SE-Admin first.
+# Fall back to .\Administrator if SE-Admin is not yet available.
 # ------------------------------------------------------------------------------
 
 - name: "Step 3 - Verify domain membership"
@@ -175,7 +172,7 @@
     - not (dry_run | default(false) | bool)
     - _needs_join | bool
   block:
-    - name: "Step 3 - Read domain status via WinRM (DOMAIN\\SE-Admin)"
+    - name: "Step 3 - Try SE-Admin WinRM connection (expected to succeed after domain join)"
       ansible.windows.win_shell: |
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
                 -Property Name, Domain, PartOfDomain
@@ -192,13 +189,57 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: "{{ hostvars['localhost']['_domain_netbios'] }}\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-      register: _verify_result
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
+      register: _verify_seadmin
       retries: 5
       delay: 30
-      until: _verify_result is succeeded
+      until: _verify_seadmin is succeeded
+      failed_when: false
+      ignore_unreachable: true
       no_log: true
+
+    - name: "Step 3 - Fallback: Read domain status via .\\Administrator (if SE-Admin failed)"
+      ansible.windows.win_shell: |
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
+                -Property Name, Domain, PartOfDomain
+        $domain = if ($cs.PartOfDomain) {
+          try   { [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().Name }
+          catch { $cs.Domain }
+        } else { 'WORKGROUP' }
+        Write-Output "hostname=$($cs.Name);domain=$domain;joined=$($cs.PartOfDomain)"
+      delegate_to: "{{ target_vm_host }}"
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: ntlm
+        ansible_winrm_port: "{{ winrm_port | default(5985) }}"
+        ansible_winrm_scheme: http
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_connection_timeout: 60
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+        ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"  # pragma: allowlist secret
+      register: _verify_admin
+      retries: 3
+      delay: 20
+      until: _verify_admin is succeeded
+      no_log: true
+      when:
+        - _verify_seadmin is defined
+        - (_verify_seadmin is failed or _verify_seadmin is unreachable)
+
+    - name: "Step 3 - Set verify result from whichever connection succeeded"
+      ansible.builtin.set_fact:
+        _verify_result: "{{ _verify_seadmin if (_verify_seadmin is succeeded) else _verify_admin }}"
+
+    - name: "Step 3 - Fail if neither SE-Admin nor Administrator could connect"
+      ansible.builtin.fail:
+        msg: >-
+          Step 3 verify failed for {{ target_vm_name }} ({{ target_vm_host }}).
+          Both .\SE-Admin and .\Administrator WinRM connections were rejected after domain join.
+          Check WinRM listener state and account access on the domain-joined VM.
+      when:
+        - _verify_result is defined
+        - _verify_result is failed or _verify_result is unreachable
 
     - name: "Step 3 - Display final VM state"
       ansible.builtin.debug:
@@ -207,7 +248,7 @@
           |  FINAL STATE: {{ target_vm_name }}
           +=============================================================+
           |  {{ _verify_result.stdout | default('(no output)') | trim }}
-          |  WinRM user : {{ hostvars['localhost']['_domain_netbios'] }}\{{ hostvars['localhost']['resolved_se_admin_username'] }}
+          |  WinRM user : .\{{ hostvars['localhost']['resolved_se_admin_username'] if (_verify_seadmin is succeeded) else 'Administrator' }}
           +=============================================================+
 
     - name: "Step 3 - Fail if VM not in target domain"
