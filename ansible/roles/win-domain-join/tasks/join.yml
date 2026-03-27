@@ -4,10 +4,15 @@
 # Per-VM domain join orchestrator — all operations via WinRM.
 #
 # Steps:
-#   1. prepare_vm_state  — sync password, inject workgroup facts, skip WinRM probe
-#   2. Domain join       — Add-Computer via WinRM (cpoe-automation + DOMAIN_ADMIN_PASSWORD)
+#   1. prepare_vm_state  — sync password, resolve WinRM user (SE-Admin or Administrator)
+#   2. Domain join       — Add-Computer via WinRM
 #                          -> az vm restart -> wait WinRM
 #   3. Verify            — WinRM confirms PartOfDomain=true
+#
+# Credential routing (set by prepare_vm_state.yaml):
+#   force_rejoin=true                        → .\SE-Admin (domain account active)
+#   force_rejoin=false + sync_password=true  → .\Administrator (synced from Delinea)
+#   force_rejoin=false + sync_password=false → .\SE-Admin with fallback to .\Administrator
 #
 # Required vars (set by main.yaml loop):
 #   target_vm_name, target_vm_host, se_admin_username, se_admin_password
@@ -15,10 +20,10 @@
 #   azure_resource_group, azure_vm_name, azure_subscription_id, sync_password
 
 # ------------------------------------------------------------------------------
-# Step 1: Sync password + inject state facts
+# Step 1: Sync password + resolve WinRM user
 # ------------------------------------------------------------------------------
 
-- name: "Step 1 - Enable WinRM + read VM state"
+- name: "Step 1 - Enable WinRM + resolve credentials"
   ansible.builtin.include_tasks: prepare_vm_state.yaml
 
 - name: "Compute join conditions"
@@ -43,6 +48,7 @@
       |  Target domain    : {{ domain_name }}
       |  Force rejoin     : {{ force_rejoin | default(false) }}
       |  Sync password    : {{ sync_password | default(true) }}
+      |  WinRM user       : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
       +-------------------------------------------------------------+
       |  Needs join       : {{ _needs_join | bool }}
       {% if dry_run | default(false) | bool %}
@@ -71,7 +77,7 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
-          |   WinRM user     : .\{{ hostvars['localhost']['resolved_se_admin_username'] }}
+          |   WinRM user     : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
           |   WinRM pass len : {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
           |   Connect IP     : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
           |   Join creds     : {{ domain_admin_username }}
@@ -80,7 +86,7 @@
           |   Target OU      : {{ domain_ou_path | default('(default)') }}
           +-------------------------------------------------------------+
 
-    - name: "Step 2 - Join domain via WinRM (SE-Admin)"
+    - name: "Step 2 - Join domain via WinRM"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
         $cs = Get-CimInstance -ClassName Win32_ComputerSystem -Property Domain, PartOfDomain
@@ -114,7 +120,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       environment:
         DOMAIN_NAME: "{{ domain_name }}"
@@ -128,6 +134,7 @@
       ansible.builtin.fail:
         msg: >-
           Domain join failed for {{ target_vm_name }}.
+          Output: {{ _join_result.stdout | default('') | trim }}
           Check DC connectivity, OU path, and domain admin credentials (DOMAIN_ADMIN_PASSWORD).
       when: >-
         (_join_result.rc | default(0) | int != 0)
@@ -154,6 +161,8 @@
 
 # ------------------------------------------------------------------------------
 # Step 3: Verify domain membership
+# After domain join + reboot, SE-Admin is restored as a domain account.
+# Use SE-Admin for verification regardless of which user was used for the join.
 # ------------------------------------------------------------------------------
 
 - name: "Step 3 - Verify domain membership"
@@ -178,7 +187,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: _verify_result
       retries: 3
@@ -193,6 +202,7 @@
           |  FINAL STATE: {{ target_vm_name }}
           +=============================================================+
           |  {{ _verify_result.stdout | default('(no output)') | trim }}
+          |  WinRM user : .\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}
           +=============================================================+
 
     - name: "Step 3 - Fail if VM not in target domain"
