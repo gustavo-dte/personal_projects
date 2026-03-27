@@ -230,8 +230,8 @@
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 30
-    ansible_user: ".\\{{ resolved_se_admin_username }}"
-    ansible_password: "{{ resolved_se_admin_password }}"
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: _b_seadmin_probe
   failed_when: false
   ignore_unreachable: true
@@ -368,8 +368,8 @@
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 30
-    ansible_user: ".\\{{ resolved_se_admin_username }}"
-    ansible_password: "{{ resolved_se_admin_password }}"
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
+    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: _seadmin_probe
   failed_when: false
   ignore_unreachable: true
