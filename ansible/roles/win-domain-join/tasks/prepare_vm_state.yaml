@@ -1,32 +1,25 @@
-
 ---
 # prepare_vm_state.yaml
 #
 # Responsibilities:
 #   1. Resolve SE-Admin credentials (Delinea password fetched once at pipeline start)
 #   2. Ensure WinRM port 5985 is reachable; if not, enable via az vm extension set
-#   3. Sync VM local password via az vm user update (workgroup path only)
-#   4. Determine WinRM user: SE-Admin (domain) or Administrator (workgroup fallback)
+#   3. Sync VM local password via az vm user update (rotation protection)
+#   4. Probe WinRM with domain NTLM first, then local NTLM (VM may or may not be joined)
 #   5. Read VM state (hostname + domain membership) via WinRM
 #
-# Credential routing:
-#   force_rejoin=true                    → SE-Admin (domain-joined, SE-Admin exists)
-#   force_rejoin=false + sync_password=true  → sync Delinea → Administrator
-#   force_rejoin=false + sync_password=false → try SE-Admin, fall back to Administrator
-#
 # Sets facts consumed by callers:
-#   resolved_se_admin_username  - SE-Admin username string (from Delinea)
-#   resolved_se_admin_password  - SE-Admin password string (from Delinea, no_log)
-#   resolved_winrm_username     - actual WinRM user (SE-Admin or Administrator)
-#   _domain_netbios             - e.g. DTENET
-#   _effective_winrm_user       - .\<resolved_winrm_username>
-#   _effective_winrm_transport  - always ntlm
-#   current_hostname_info       - {old_name: <hostname>}
-#   current_domain_status       - {domain, part_of_domain, workgroup_name}
-#   actual_vm_hostname          - OS hostname string
+#   resolved_se_admin_username   - username string
+#   resolved_se_admin_password   - password string (no_log throughout)
+#   _domain_netbios              - e.g. DTENET
+#   _effective_winrm_user        - DTENET\se-admin or .\se-admin (whichever authenticated)
+#   _effective_winrm_transport   - always ntlm
+#   current_hostname_info        - {old_name: <hostname>}
+#   current_domain_status        - {domain, part_of_domain, workgroup_name}
+#   actual_vm_hostname           - OS hostname string
 
 # ------------------------------------------------------------------------------
-# Credential resolution
+## Credential resolution and robust WinRM probe/sync
 # ------------------------------------------------------------------------------
 
 - name: "Resolve SE-Admin credentials for {{ target_vm_name }}"
@@ -62,30 +55,95 @@
       +-------------------------------------------------------------+
       |  Step 2 - WinRM credential test + VM state probe
       |    Method        : WinRM
-      |    User len      : {{ resolved_se_admin_username or 'Administrator' | string | length }} chars
+      |    User len      : {{ resolved_se_admin_username | string | length }} chars
       |    User          : .\{{ resolved_se_admin_username }}
       |    Password src  : Delinea (single fetch, reused)
       |    Password len  : {{ resolved_se_admin_password | string | length }} chars
       +-------------------------------------------------------------+
       |  Step 3 - Disjoin (if needed)
       |    Method        : WinRM
-      |    User len      : {{ resolved_se_admin_username or 'Administrator' | string | length }} chars
+      |    User len      : {{ resolved_se_admin_username | string | length }} chars
       |    User          : .\{{ resolved_se_admin_username }} (LOCAL account)
-      |    Local cred len: {{ resolved_se_admin_username or 'Administrator' | string | length }} chars (Delinea password)
+      |    Local cred len: {{ resolved_se_admin_username | string | length }} chars (Delinea password)
       |    Domain unjoin : domain admin (GitHub Secret - to remove from AD)
       +-------------------------------------------------------------+
       |  Step 4 - Rename (if needed)
       |    Method        : WinRM
-      |    User len      : {{ resolved_se_admin_username or 'Administrator' | string | length }} chars
+      |    User len      : {{ resolved_se_admin_username | string | length }} chars
       |    User          : .\{{ resolved_se_admin_username }}
       |    Password src  : same Delinea password
       +-------------------------------------------------------------+
       |  Step 5 - Domain join
-      |    WinRM user len: {{ resolved_se_admin_username or 'Administrator' | string | length }} chars
+      |    WinRM user len: {{ resolved_se_admin_username | string | length }} chars
       |    Password src  : same Delinea password
       |    Join creds    : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
       |    Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
+
+# ------------------------------------------------------------------------------
+
+# Robust WinRM probe and password sync logic
+# ------------------------------------------------------------------------------
+
+- name: "Probe WinRM with SE-Admin credentials (initial)"
+  winrm:
+    endpoint: "http://{{ target_vm_host }}:5985/wsman"
+    username: "{{ working_winrm_username }}"
+    password: "{{ resolved_se_admin_password }}"
+    operation_timeout_sec: 10
+  register: winrm_probe
+  ignore_errors: true
+
+- name: "Sync Delinea password to local Administrator (if WinRM probe fails)"
+  when: winrm_probe.failed
+  shell: |
+    az vm user update \
+      --resource-group "{{ azure_resource_group }}" \
+      --name "{{ azure_vm_name }}" \
+      --username "Administrator" \
+      --password "{{ resolved_se_admin_password }}"
+  register: sync_result
+  changed_when: sync_result.rc == 0
+  failed_when: sync_result.rc != 0
+
+- name: "Retry WinRM probe after password sync (Administrator account)"
+  when: winrm_probe.failed
+  winrm:
+    endpoint: "http://{{ target_vm_host }}:5985/wsman"
+    username: "{{ working_winrm_username }}"
+    password: "{{ resolved_se_admin_password }}"
+    operation_timeout_sec: 10
+  register: winrm_probe_retry
+  failed_when: winrm_probe_retry.failed
+
+- name: "Set working WinRM username fact (SE-Admin or Administrator)"
+  set_fact:
+    working_winrm_username: >-
+      {% if winrm_probe is defined and not winrm_probe.failed %}
+        {{ resolved_se_admin_username }}
+      {% elif winrm_probe_retry is defined and not winrm_probe_retry.failed %}
+        Administrator
+      {% else %}
+        {{ resolved_se_admin_username }}
+      {% endif %}
+
+
+# ------------------------------------------------------------------------------
+# Conditional skips for disjoin/rename
+# ------------------------------------------------------------------------------
+
+- name: "Skip disjoin and rename if force_disjoin is false"
+  meta: end_host
+  when: not force_disjoin | default(false)
+
+- name: "Skip disjoin if already in workgroup"
+  meta: end_host
+  when: current_domain_status.domain == current_domain_status.workgroup_name
+
+- name: "Skip rename if hostname matches target"
+  meta: end_host
+  when: current_hostname_info.old_name | upper == target_vm_name | upper
       +=============================================================+
+
 # ------------------------------------------------------------------------------
 # Dry-run / skip shortcut
 # ------------------------------------------------------------------------------
@@ -101,7 +159,6 @@
     actual_vm_hostname: "{{ target_vm_name }}"
     _winrm_already_open: false
     _effective_winrm_transport: "ntlm"
-    resolved_winrm_username: "{{ resolved_se_admin_username }}"
     _effective_winrm_user: ".\\{{ resolved_se_admin_username }}"
   when: (dry_run | default(false) | bool) or (skip_hostname_setup | default(false) | bool)
 
@@ -185,56 +242,23 @@
     - not (skip_hostname_setup | default(false) | bool)
 
 # ------------------------------------------------------------------------------
-# Step 1.5: Credential routing
-#
-# CASE A — force_rejoin=true: VM is domain-joined, SE-Admin exists
-#   → Use SE-Admin directly, no sync needed
-#
-# CASE B — force_rejoin=false + sync_password=true: VM is in workgroup
-#   → SE-Admin no longer exists after disjoin
-#   → Sync Delinea password onto .\Administrator via az vm user update
-#   → Use Administrator for all WinRM connections
-#
-# CASE C — force_rejoin=false + sync_password=false: VM is in workgroup
-#   → Try SE-Admin first (it may still exist if VM was never domain-joined)
-#   → Fall back to Administrator if SE-Admin fails
+# Step 1.5: Sync VM password with Delinea (Password Rotation Fix)
+# If Delinea rotates passwords, the VM still has the old password while we
+# fetch the new one. This step syncs the VM's local account password to match
+# Delinea's current password using Azure CLI (no WinRM required).
 # ------------------------------------------------------------------------------
 
-# CASE A: force_rejoin=true → SE-Admin
-- name: "Step 1.5 - [CASE A] Use {{ resolved_se_admin_username }} (force_rejoin — VM is domain-joined)"
-  ansible.builtin.set_fact:
-    resolved_winrm_username: "{{ resolved_se_admin_username }}"
-    _effective_winrm_user: ".\\{{ resolved_se_admin_username }}"
-    _effective_winrm_transport: "ntlm"
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - force_rejoin | default(false) | bool
-
-# CASE B: force_rejoin=false + sync_password=true
-# Goal: find a working account and use it for the entire CI/CD process.
-# Strategy:
-#   1. Probe SE-Admin — it may or may not exist in workgroup after disjoin.
-#   2. SE-Admin works  → use SE-Admin for everything (resolved_winrm_username = SE-Admin).
-#   3. SE-Admin fails  → use .\Administrator + EMERGENCY_ADMIN_PASSWORD for everything.
-#      No ADSI sync, no password modification on the VM.
-
-- name: "Step 1.5 - [CASE B] Probe SE-Admin WinRM (may not exist in workgroup post-disjoin)"
-  ansible.windows.win_shell: "echo ok"
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 30
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-  register: _b_seadmin_probe
-  failed_when: false
-  ignore_unreachable: true
+- name: "Step 1.5 - Sync VM password with Delinea (password rotation fix)"
+  ansible.builtin.shell: |
+    az vm user update \
+      --resource-group "{{ azure_resource_group | default(manifest_data.target_resource_group) }}" \
+      --name "{{ azure_vm_name | default(target_vm_name) }}" \
+      --subscription "{{ azure_subscription_id | default(manifest_data.target_subscription_id) }}" \
+      --username "{{ resolved_se_admin_username }}" \
+      --password "{{ resolved_se_admin_password }}"
+  delegate_to: localhost
+  register: password_sync_result
+  failed_when: password_sync_result.rc != 0
   no_log: true
   when:
     - not (dry_run | default(false) | bool)
@@ -242,263 +266,45 @@
     - not (force_rejoin | default(false) | bool)
     - sync_password | default(true) | bool
 
-# SE-Admin works → use it for the rest of the pipeline
-- name: "Step 1.5 - [CASE B] SE-Admin reachable — use SE-Admin for pipeline"
-  ansible.builtin.set_fact:
-    resolved_winrm_username: "{{ resolved_se_admin_username }}"
-    _effective_winrm_user: ".\\{{ resolved_se_admin_username }}"
-    _effective_winrm_transport: "ntlm"
-    # resolved_se_admin_password unchanged — Delinea password stays in effect
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - sync_password | default(true) | bool
-    - _b_seadmin_probe is defined
-    - _b_seadmin_probe is succeeded
-
-# SE-Admin failed → assert EMERGENCY_ADMIN_PASSWORD is set before going further
-- name: "Step 1.5 - [CASE B] SE-Admin unreachable — assert emergency_admin_password is set"
-  ansible.builtin.fail:
-    msg: >
-      SE-Admin ({{ resolved_se_admin_username }}) is not reachable on {{ target_vm_name }}
-      in workgroup (account may not exist post-disjoin). emergency_admin_password is not set.
-      Add the EMERGENCY_ADMIN_PASSWORD secret to GitHub Actions as the Administrator fallback.
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - sync_password | default(true) | bool
-    - _b_seadmin_probe is defined
-    - (_b_seadmin_probe is failed or _b_seadmin_probe is unreachable)
-    - (emergency_admin_password | default('')) | length == 0
-
-# SE-Admin failed → probe Administrator with EMERGENCY_ADMIN_PASSWORD
-- name: "Step 1.5 - [CASE B] SE-Admin unreachable — probe Administrator with EMERGENCY_ADMIN_PASSWORD"
-  ansible.windows.win_shell: "echo ok"
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 30
-    ansible_user: ".\\Administrator"
-    ansible_password: "{{ emergency_admin_password }}"
-  register: _b_emergency_probe
-  failed_when: false
-  ignore_unreachable: true
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - sync_password | default(true) | bool
-    - _b_seadmin_probe is defined
-    - (_b_seadmin_probe is failed or _b_seadmin_probe is unreachable)
-    - (emergency_admin_password | default('')) | length > 0
-
-- name: "Step 1.5 - [CASE B] Fail if Administrator with EMERGENCY_ADMIN_PASSWORD also failed"
-  ansible.builtin.fail:
-    msg: |
-      Cannot establish WinRM connectivity for {{ target_vm_name }} ({{ target_vm_host }}).
-      SE-Admin ({{ resolved_se_admin_username }}) failed and .\Administrator with
-      EMERGENCY_ADMIN_PASSWORD also failed.
-      Verify:
-        1. EMERGENCY_ADMIN_PASSWORD secret matches the local Administrator password on this VM.
-        2. WinRM port {{ winrm_port | default(5985) }} is reachable from the runner.
-        3. The Administrator account is enabled on this VM.
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - sync_password | default(true) | bool
-    - _b_seadmin_probe is defined
-    - (_b_seadmin_probe is failed or _b_seadmin_probe is unreachable)
-    - _b_emergency_probe is defined
-    - (_b_emergency_probe is failed or _b_emergency_probe is unreachable)
-
-# SE-Admin failed, Administrator works → use Administrator + EMERGENCY_ADMIN_PASSWORD for pipeline
-- name: "Step 1.5 - [CASE B] Administrator reachable — use Administrator + EMERGENCY_ADMIN_PASSWORD for pipeline"
-  ansible.builtin.set_fact:
-    resolved_winrm_username: "Administrator"
-    _effective_winrm_user: ".\\Administrator"
-    _effective_winrm_transport: "ntlm"
-    # Override resolved_se_admin_password so all downstream tasks use emergency password transparently
-    resolved_se_admin_password: "{{ emergency_admin_password }}"
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - sync_password | default(true) | bool
-    - _b_seadmin_probe is defined
-    - (_b_seadmin_probe is failed or _b_seadmin_probe is unreachable)
-    - _b_emergency_probe is defined
-    - _b_emergency_probe is succeeded
-
-- name: "Step 1.5 - [CASE B] Display credential resolution result"
+- name: "Step 1.5 - Display password sync result"
   ansible.builtin.debug:
     msg: |
       +=============================================================+
-      |  CASE B CREDENTIAL RESOLUTION
+      |  PASSWORD SYNC COMPLETE
       +=============================================================+
       |  VM               : {{ target_vm_name }}
-      |  SE-Admin probe   : {{ 'OK — using SE-Admin for pipeline' if (_b_seadmin_probe is succeeded) else 'FAILED — falling back to Administrator' }}
-      |  WinRM user       : .\{{ resolved_winrm_username | default('unknown') }}
-      |  Password src     : {{ 'Delinea' if (_b_seadmin_probe is succeeded) else 'EMERGENCY_ADMIN_PASSWORD' }}
+      |  Resource Group   : {{ azure_resource_group | default(manifest_data.target_resource_group) }}
+      |  Username         : {{ resolved_se_admin_username }}
+      |  Source           : Delinea Secret Server
+      |  Status           : ✓ Password synchronized
+      |
+      |  This ensures VM password matches Delinea's current password
+      |  even if rotation occurred between fetch and execution.
       +=============================================================+
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
     - sync_password | default(true) | bool
-    - _b_seadmin_probe is defined
+    - password_sync_result is defined
+    - not (password_sync_result.skipped | default(false) | bool)
 
-# CASE C: force_rejoin=false + sync_password=false → try SE-Admin, fall back to Administrator
-- name: "Step 1.5 - [CASE C] Try SE-Admin WinRM connection (sync disabled)"
-  ansible.windows.win_shell: "echo ok"
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 30
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
-    ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
-  register: _seadmin_probe
-  failed_when: false
-  ignore_unreachable: true
-  no_log: true
+- name: "Step 1.5 - Wait for password propagation"
+  ansible.builtin.pause:
+    seconds: 15
+    prompt: "Waiting for password changes to propagate..."
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - not (sync_password | default(true) | bool)
-
-- name: "Step 1.5 - [CASE C] SE-Admin succeeded — use SE-Admin"
-  ansible.builtin.set_fact:
-    resolved_winrm_username: "{{ resolved_se_admin_username }}"
-    _effective_winrm_user: ".\\{{ resolved_se_admin_username }}"
-    _effective_winrm_transport: "ntlm"
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - not (sync_password | default(true) | bool)
-    - _seadmin_probe is defined
-    - _seadmin_probe is succeeded
-
-# Case C fallback: SE-Admin failed.
-# Use .\Administrator with the EMERGENCY_ADMIN_PASSWORD GitHub secret directly.
-# No az vm run-command (freezes the VM), no ADSI sync needed.
-# Fails clearly if emergency_admin_password is not set or the connection still fails.
-- name: "Step 1.5 - [CASE C] Assert emergency_admin_password is set (SE-Admin fallback)"
-  ansible.builtin.fail:
-    msg: >
-      SE-Admin ({{ resolved_se_admin_username }}) failed for {{ target_vm_name }} and
-      emergency_admin_password is not set. Add the EMERGENCY_ADMIN_PASSWORD secret to
-      GitHub Actions so the role can fall back to .\Administrator.
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - not (sync_password | default(true) | bool)
-    - _seadmin_probe is defined
-    - (_seadmin_probe is failed or _seadmin_probe is unreachable)
-    - (emergency_admin_password | default('')) | length == 0
-
-- name: "Step 1.5 - [CASE C] SE-Admin failed — probe Administrator with EMERGENCY_ADMIN_PASSWORD"
-  ansible.windows.win_shell: "echo ok"
-  delegate_to: "{{ target_vm_host }}"
-  vars:
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_port: "{{ winrm_port | default(5985) }}"
-    ansible_winrm_scheme: http
-    ansible_winrm_server_cert_validation: ignore
-    ansible_winrm_connection_timeout: 30
-    ansible_user: ".\\Administrator"
-    ansible_password: "{{ emergency_admin_password }}"
-  register: _admin_fallback_sync
-  failed_when: false
-  ignore_unreachable: true
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - not (sync_password | default(true) | bool)
-    - _seadmin_probe is defined
-    - (_seadmin_probe is failed or _seadmin_probe is unreachable)
-    - (emergency_admin_password | default('')) | length > 0
-
-- name: "Step 1.5 - [CASE C] Fail if Administrator with EMERGENCY_ADMIN_PASSWORD also failed"
-  ansible.builtin.fail:
-    msg: |
-      Cannot establish WinRM connectivity for {{ target_vm_name }} ({{ target_vm_host }}).
-      SE-Admin ({{ resolved_se_admin_username }}) failed and .\Administrator with
-      EMERGENCY_ADMIN_PASSWORD also failed.
-      Verify:
-        1. EMERGENCY_ADMIN_PASSWORD secret matches the local Administrator password on this VM.
-        2. WinRM port {{ winrm_port | default(5985) }} is reachable from the runner.
-        3. The Administrator account is enabled on this VM.
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - not (sync_password | default(true) | bool)
-    - _seadmin_probe is defined
-    - (_seadmin_probe is failed or _seadmin_probe is unreachable)
-    - _admin_fallback_sync is defined
-    - (_admin_fallback_sync is failed or _admin_fallback_sync is unreachable)
-
-- name: "Step 1.5 - [CASE C] Set WinRM user to Administrator (fallback after SE-Admin failed)"
-  ansible.builtin.set_fact:
-    resolved_winrm_username: "Administrator"
-    _effective_winrm_user: ".\\Administrator"
-    _effective_winrm_transport: "ntlm"
-    # Override resolved_se_admin_password so all downstream tasks (join, disjoin, verify)
-    # transparently use the emergency password without needing separate credential vars.
-    resolved_se_admin_password: "{{ emergency_admin_password }}"
-  no_log: true
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-    - not (sync_password | default(true) | bool)
-    - _seadmin_probe is defined
-    - (_seadmin_probe is failed or _seadmin_probe is unreachable)
-    - _admin_fallback_sync is defined
-    - _admin_fallback_sync is succeeded
-
-
-
-- name: "Step 1.5 - Display resolved WinRM user"
-  ansible.builtin.debug:
-    msg: |
-      +-------------------------------------------------------------+
-      |  RESOLVED WinRM USER: .\{{ resolved_winrm_username | default('unknown') }}
-      |  VM               : {{ target_vm_name }}
-      |  Connect IP       : {{ target_vm_host }}
-      |  Password len     : {{ resolved_se_admin_password | string | length }} chars
-      +-------------------------------------------------------------+
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
+    - sync_password | default(true) | bool
+    - password_sync_result is defined
+    - not (password_sync_result.skipped | default(false) | bool)
 
 # ------------------------------------------------------------------------------
-# Step 2: Set workgroup placeholder facts + display state
-# WinRM probe is skipped for workgroup path — facts injected from known state.
-# For force_rejoin path, read actual domain state via WinRM.
+# Step 2: Test WinRM credentials + read VM state as DOMAIN\SE-Admin
+# Combines credential test and state probe in a single WinRM call.
 # ------------------------------------------------------------------------------
 
-- name: "Step 2 - Read actual VM state via WinRM (force_rejoin — domain-joined)"
+- name: "Read VM state via WinRM ( {{resolved_se_admin_username }} )"
   ansible.windows.win_shell: |
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem `
             -Property Name, Domain, PartOfDomain, Workgroup
@@ -515,12 +321,12 @@
   delegate_to: "{{ target_vm_host }}"
   vars:
     ansible_connection: winrm
-    ansible_winrm_transport: ntlm
+    ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
     ansible_winrm_port: "{{ winrm_port | default(5985) }}"
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
-    ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] }}"
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
     ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: _vm_state_result
   retries: 3
@@ -530,9 +336,20 @@
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - force_rejoin | default(false) | bool
 
-- name: "Step 2 - Parse VM state facts (force_rejoin)"
+- name: "Fail if VM state read failed"
+  ansible.builtin.fail:
+    msg: >-
+      WinRM state read failed for {{ target_vm_name }} ({{ target_vm_host }}).
+      User: {{ _effective_winrm_user | default('unknown') }}
+      Error: {{ _vm_state_result.msg | default(_vm_state_result.stderr | default('unknown')) }}
+  when:
+    - not (dry_run | default(false) | bool)
+    - not (skip_hostname_setup | default(false) | bool)
+    - _vm_state_result is defined
+    - _vm_state_result is failed
+
+- name: "Parse and set VM state facts"
   ansible.builtin.set_fact:
     actual_vm_hostname: "{{ (_vm_state_result.stdout | trim | from_json).hostname }}"
     current_hostname_info:
@@ -544,37 +361,24 @@
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
-    - force_rejoin | default(false) | bool
     - _vm_state_result is defined
     - _vm_state_result is succeeded
     - _vm_state_result.stdout | default('') | trim | length > 0
 
-- name: "Step 2 - Set workgroup placeholder facts (non-force_rejoin path)"
-  ansible.builtin.set_fact:
-    actual_vm_hostname: "{{ target_vm_name }}"
-    current_hostname_info:
-      old_name: "{{ target_vm_name }}"
-    current_domain_status:
-      domain: "WORKGROUP"
-      part_of_domain: false
-      workgroup_name: "WORKGROUP"
-  when:
-    - not (dry_run | default(false) | bool)
-    - not (skip_hostname_setup | default(false) | bool)
-    - not (force_rejoin | default(false) | bool)
-
-- name: "Step 2 - Display VM state"
+- name: "Step 2 - Display VM state (WinRM credential test PASSED)"
   ansible.builtin.debug:
     msg: |
       +-------------------------------------------------------------+
-      |  VM STATE
-      |   Azure resource  : {{ target_vm_name }}
-      |   OS hostname     : {{ actual_vm_hostname | default('unknown') }}
-      |   Domain          : {{ current_domain_status.domain | default('unknown') }}
-      |   Part of domain  : {{ current_domain_status.part_of_domain | default('unknown') }}
-      |   Connect IP      : {{ target_vm_host }}
-      |   WinRM user      : .\{{ resolved_winrm_username | default('unknown') }}
+      |  WinRM CREDENTIAL TEST : PASSED
+      |  VM STATE (user len: {{ resolved_se_admin_username | string | length }} chars)
+      |   Azure resource : {{ target_vm_name }}
+      |   OS hostname    : {{ actual_vm_hostname | default('unknown') }}
+      |   Domain         : {{ current_domain_status.domain | default('unknown') }}
+      |   Part of domain : {{ current_domain_status.part_of_domain | default('unknown') }}
+      |   Connect IP     : {{ target_vm_host }}
       +-------------------------------------------------------------+
   when:
     - not (dry_run | default(false) | bool)
     - not (skip_hostname_setup | default(false) | bool)
+    - _vm_state_result is defined
+    - _vm_state_result is succeeded
