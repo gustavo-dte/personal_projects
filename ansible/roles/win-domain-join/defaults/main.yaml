@@ -12,7 +12,9 @@ rename_winrm_username: "Administrator"
 # Domain configuration
 domain_name: ""
 domain_admin_username: ""
-domain_admin_value: ""  # Should be passed via GitHub Actions secret  # pragma: allowlist secret
+domain_admin_value: ""            # Passed via GitHub Actions secret DOMAIN_ADMIN_PASSWORD  # pragma: allowlist secret
+emergency_admin_password: ""      # Passed via GitHub Actions secret EMERGENCY_ADMIN_PASSWORD  # pragma: allowlist secret
+                                   # Used as .\Administrator fallback when SE-Admin is unreachable (Case C)
 # Required for pre-create flow: OU where new AD computer object is created (DN format).
 # Example for dtenet.com/Servers/DCA/Azure: "OU=Azure,OU=DCA,OU=Servers,DC=dtenet,DC=com"
 domain_ou_path: ""

@@ -1,12 +1,12 @@
-## Manifest for Power BI Dev Environment Migration
+## Manifest for RightFax Dev Environment Migration
 
-# Global configuration
+# Global defaults
 app_name: Power BI
 environment: dev
 target_gh_repo: dteenergy/cloud-platform-isolation-zone-subscription-corpapps
-azure_migrate_project_name: azure-migrate-automation
-azure_migrate_project_resource_group: cloud-platform-prod-cu-azure-migrate-rg
-azure_migrate_subscription_id: 00d26f19-0dc3-4c90-9c6b-2e9ce8b14f5a
+azure_migrate_project_name: azure-migrate-automation-private
+azure_migrate_project_resource_group: DTE-CU-PROD-VMMIGRATESR-RG
+azure_migrate_subscription_id: 002b1877-7a58-4845-bc1f-37a6588bb95d
 target_subscription_id: 6796a2fb-2928-4ec6-96da-962d3b0001b7
 target_resource_group: rg-cu-vmware-PowerBI-Dev
 os_disk_scsi_id: scsi0:0
@@ -45,11 +45,18 @@ vmss_config:
     grace_period: PT10M
     repair_action: Restart
 
+
+  # Domain join configuration (for win-domain-join role)
+domainNameSetup:
+  domain: "dtenet.com"
+  domain_admin_username: "cpoe-automation@dtenet.com"
+  domain_ou_path: "OU=Servers,DC=dtenet,DC=com"  # Supplied via DOMAIN_OU_PATH secret at runtime (DN format for computer account placement)
+
 # Network configuration
 
-target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-vmware-vnet
+target_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-vmware-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-vmware-vnet
 target_subnet_name: powerbi-app
-test_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-CorpApps-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-vmware-vnet
+test_network_id: /subscriptions/6796a2fb-2928-4ec6-96da-962d3b0001b7/resourceGroups/rg-cu-vmware-Network-Dev/providers/Microsoft.Network/virtualNetworks/cloud-platform-dev-cu-vmware-vnet
 
 # !! NO DEFAULT VM SIZE - Each VM specifies its own size from CSV !!
 # target_vm_size: <REMOVED - use per-VM size below>
@@ -74,21 +81,63 @@ uninstall_tools_list:
   - VMware Tools
   - EMC PowerPath
   - HP Insight Management Agents
+  - EMC Avamar
 
 # List of VMs to replicate
 vms:
+  # - name: dca-tst5470
+  #   sync_password: true
+  #   target_vm_name: vmcuwinpgwt01
+  #   vm_winrm_port: 5985                       # WinRM HTTP port (Windows Firewall configured via Azure Run Command)
+  #   vm_winrm_username: SE-Admin
+  #   vm_winrm_connect_hostname: dca-tst5470.dtenet.com  # Current FQDN on dtenet.com — used for Delinea secret lookup (SE-Admin\VMCUWINWEBD13.dtenet.com)
+  #   description: "Power BI Dev - vmcuwinpowbit01"
+  #   target_vm_size: Standard_D2s_v5    # From CSV (NO default)
+  #   target_license_type: WindowsServer
+  #   target_disk_type: Standard_LRS
+  #   target_resource_group: rg-cu-vmware-PowerBI-Dev
+  #   portfolio: CorpApps
+  #   tier: 4
+  #   env: dev
+  #   app_name: e
 
-  - name: dca-tst5470
-    target_vm_name: vmcuwinpowbit01
-    description: "Power BI Dev - vmcuwinpowbit01"
-    target_vm_size: Standard_D4as_v5    # From CSV (NO default)
+  #   nsg_rules:
+  #     allow-rdp:
+  #       priority: 1000
+  #       direction: Inbound
+  #       access: Allow
+  #       protocol: Tcp
+  #       destination_port_range: "3389"
+  #       source_address_prefixes: ["10.0.0.0/8"]
+
+  #   backup:
+  #     enable_backup: true
+  #     backup_vault_name: backup-vault-cu-dev-powerbi
+  #     backup_vault_resource_group_name: rg-cu-vmware-PowerBi-Dev
+  #     backup_vault_policy_name: daily-powerbi-vm-backup-policy
+
+  #   tags:
+  #     Environment: "Dev"
+  #     Portfolio: "CorpApps"
+  #     DataClassification: "Internal"
+  #     Application: "Power BI"
+  #     Project: "Storm Resiliency"
+
+  - name: dca-tst7027
+    target_vm_name: vmcuwinpgwt02
+    sync_password: true
+    vm_winrm_port: 5985                       # WinRM HTTP port (Windows Firewall configured via Azure Run Command)
+    vm_winrm_username: SE-Admin
+    vm_winrm_connect_hostname: dca-tst7027.dtenet.com  # Current FQDN on dtenet.com — used for Delinea secret lookup (SE-Admin\VMCUWINWEBD13.dtenet.com)
+    description: "Power BI Dev - vmcuwinpowbit02"
+    target_vm_size: Standard_D2s_v5    # From CSV (NO default)
     target_license_type: WindowsServer
     target_disk_type: Standard_LRS
-    target_resource_group: rg-cu-corpapps-Powerbi-dev
+    target_resource_group: rg-cu-vmware-PowerBI-Dev
     portfolio: CorpApps
     tier: 4
     env: dev
-    app_name: Power BI
+    app_name: e
 
     nsg_rules:
       allow-rdp:
@@ -102,42 +151,8 @@ vms:
     backup:
       enable_backup: true
       backup_vault_name: backup-vault-cu-dev-powerbi
-      backup_vault_resource_group_name: rg-cu-vmware-PowerBi-Devs
+      backup_vault_resource_group_name: rg-cu-vmware-PowerBi-Dev
       backup_vault_policy_name: daily-powerbi-vm-backup-policy
-
-    tags:
-      Environment: "Dev"
-      Portfolio: "CorpApps"
-      DataClassification: "Internal"
-      Application: "Power BI"
-      Project: "Storm Resiliency"
-
-  - name: dca-tst7027
-    target_vm_name: vmcuwinpowbit02
-    description: "Power BI Dev - vmcuwinpowbit02"
-    target_vm_size: Standard_D4as_v5    # From CSV (NO default)
-    target_license_type: WindowsServer
-    target_disk_type: Standard_LRS
-    target_resource_group: rg-cu-corpapps-Powerbi-dev
-    portfolio: CorpApps
-    tier: 4
-    env: dev
-    app_name: Power BI
-
-    nsg_rules:
-      allow-rdp:
-        priority: 1000
-        direction: Inbound
-        access: Allow
-        protocol: Tcp
-        destination_port_range: "3389"
-        source_address_prefixes: ["10.0.0.0/8"]
-
-    backup:
-      enable_backup: true
-      backup_vault_name: backup-vault-cu-dev-migration-test
-      backup_vault_resource_group_name: rg-cu-CorpApps-MigrationTest-Dev
-      backup_vault_policy_name: daily-migration-test-vm-backup-policy
 
     tags:
       Environment: "Dev"

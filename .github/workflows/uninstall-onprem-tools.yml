@@ -166,23 +166,6 @@ jobs:
         shell: bash
 
       # ------------------------------------------------------------------
-      # Open RDP and WinRM on the VM Windows Firewall via Azure Run Command
-      # ------------------------------------------------------------------
-
-      - name: Verify script version
-        run: |
-          echo "=== Script Version Check ==="
-          head -n 6 ansible/roles/python_scripts/configure_winrm_firewall.py \
-            | grep -i version || echo "[WARN] Version line not found"
-          echo "Script checksum: $(sha256sum ansible/roles/python_scripts/configure_winrm_firewall.py | awk '{print $1}')"
-        shell: bash
-
-      - name: Configure VM Windows Firewall (RDP 3389 and WinRM 5985)
-        if: ${{ !inputs.dry_run }}
-        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/configure_winrm_firewall.py
-        shell: bash
-
-      # ------------------------------------------------------------------
       # Extract VM hostname for Delinea lookup
       # Uses target_vm_name from manifest as the Delinea machine filter
       # ------------------------------------------------------------------

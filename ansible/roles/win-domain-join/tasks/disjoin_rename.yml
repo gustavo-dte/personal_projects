@@ -65,7 +65,7 @@
       +-------------------------------------------------------------+
       |  STEP 2 - DISJOIN
       |   Method           : PowerShell WMI UnjoinDomainOrWorkgroup
-      |   WinRM user       : {{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ se_admin_username) }}
+      |   WinRM user       : {{ hostvars['localhost']['_effective_winrm_user'] | default('.\\' ~ se_admin_username) }}
       |   Domain admin     : NOT REQUIRED (local disjoin only)
       |   AD object        : Will remain (manual cleanup needed)
       |   Password src     : Delinea
@@ -120,7 +120,7 @@
     ansible_winrm_scheme: http
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
-    ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ (hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']))) }}"
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
     ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: disjoin_result
   # no_log: true
@@ -197,7 +197,7 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ hostvars['localhost']['resolved_se_admin_username']) }}"
+    ansible_user: ".\\{{ hostvars['localhost']['resolved_se_admin_username'] }}"
     ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: seadmin_test_result
   failed_when: false
@@ -221,7 +221,7 @@
     ansible_winrm_server_cert_validation: ignore
     ansible_winrm_connection_timeout: 60
     ansible_winrm_read_timeout: 70
-    ansible_user: "{{ (hostvars['localhost']['_winrm_account_prefix'] | default(current_hostname_info.old_name | default(target_vm_name))) }}\\Administrator"
+    ansible_user: ".\\Administrator"
     ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
   register: admin_test_result
   failed_when: false
@@ -291,7 +291,7 @@
           +-------------------------------------------------------------+
           |  STEP 3 - RENAME
           |   Method      : WinRM + Rename-Computer
-          |   WinRM user  : {{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ se_admin_username) }}
+          |   WinRM user  : {{ hostvars['localhost']['_effective_winrm_user'] | default('.\\' ~ se_admin_username) }}
           |   Password src : Delinea SE-Admin password (same fetch, reused)
           |   Password len : {{ se_admin_password | string | length }} chars
           |   Connect IP  : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
@@ -329,7 +329,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ (hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']))) }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: _rename_result
       no_log: true
@@ -380,16 +380,6 @@
         - not (_az_rename_reboot.skipped | default(false) | bool)
         - _az_rename_reboot.rc | default(0) | int == 0
 
-    - name: "Step 3 - Refresh WinRM account prefix after rename"
-      ansible.builtin.set_fact:
-        _winrm_account_prefix: "{{ target_vm_name | string | trim | split('.') | first }}"
-        _effective_winrm_user: "{{ (target_vm_name | string | trim | split('.') | first) }}\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
-      when:
-        - not (dry_run | default(false) | bool)
-        - _az_rename_reboot is defined
-        - not (_az_rename_reboot.skipped | default(false) | bool)
-        - _az_rename_reboot.rc | default(0) | int == 0
-
     - name: "Step 3 - Verify hostname via WinRM after reboot"
       ansible.windows.win_shell: $env:COMPUTERNAME
       delegate_to: "{{ target_vm_host }}"
@@ -400,7 +390,7 @@
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_connection_timeout: 60
-        ansible_user: "{{ hostvars['localhost']['_effective_winrm_user'] | default((hostvars['localhost']['_winrm_account_prefix'] | default(target_vm_name)) ~ '\\' ~ (hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']))) }}"
+        ansible_user: ".\\{{ hostvars['localhost']['resolved_winrm_username'] | default(hostvars['localhost']['resolved_se_admin_username']) }}"
         ansible_password: "{{ hostvars['localhost']['resolved_se_admin_password'] }}"
       register: _hostname_verify
       retries: 5

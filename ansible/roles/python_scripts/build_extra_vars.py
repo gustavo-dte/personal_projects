@@ -5,11 +5,13 @@ build_extra_vars.py
 Builds ansible_extra_vars.json from environment variables for the domain join workflow.
 
 Environment variables read:
-  MANIFEST_INPUT            Manifest directory name (required)
-  DRY_RUN_INPUT             'true' / '1' / 'yes' → True (required)
-  FORCE_REJOIN_INPUT        'true' / '1' / 'yes' → True (required)
-  DOMAIN_ADMIN_VALUE_INPUT  Domain admin password (required, never logged)
-  DOMAIN_OU_PATH_INPUT      Domain OU path (optional)
+  MANIFEST_INPUT                    Manifest directory name (required)
+  DRY_RUN_INPUT                     'true' / '1' / 'yes' → True (required)
+  FORCE_REJOIN_INPUT                'true' / '1' / 'yes' → True (required)
+  DOMAIN_ADMIN_VALUE_INPUT          Domain admin password (required, never logged)
+  DOMAIN_OU_PATH_INPUT              Domain OU path (optional)
+  EMERGENCY_ADMIN_PASSWORD_INPUT    Emergency local Administrator password (optional, never logged)
+                                    Used as fallback WinRM credential when SE-Admin is unreachable.
 
 Output:
   ansible_extra_vars.json   Written to cwd with mode 0o600.
@@ -32,6 +34,10 @@ REQUIRED_VARS = (
     "DRY_RUN_INPUT",
     "FORCE_REJOIN_INPUT",
     "DOMAIN_ADMIN_VALUE_INPUT",
+)
+OPTIONAL_VARS = (
+    "DOMAIN_OU_PATH_INPUT",
+    "EMERGENCY_ADMIN_PASSWORD_INPUT",
 )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -58,8 +64,9 @@ def _build() -> dict[str, Any]:
         "manifest": _env("MANIFEST_INPUT"),
         "dry_run": _to_bool(_env("DRY_RUN_INPUT")),
         "force_rejoin": _to_bool(_env("FORCE_REJOIN_INPUT")),
-        "domain_admin_value": _env("DOMAIN_ADMIN_VALUE_INPUT"),  # written to file, never logged
+        "domain_admin_value": _env("DOMAIN_ADMIN_VALUE_INPUT"),        # never logged
         "domain_ou_path": _env("DOMAIN_OU_PATH_INPUT"),
+        "emergency_admin_password": _env("EMERGENCY_ADMIN_PASSWORD_INPUT"),  # never logged
     }
 
 

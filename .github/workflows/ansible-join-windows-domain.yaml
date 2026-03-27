@@ -37,10 +37,10 @@ jobs:
     env:
       ANSIBLE_ROLES_PATH: ansible/roles
       ANSIBLE_CONFIG: ansible/ansible.cfg
-      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
+      DELINEA_BASE_URL: ${{ vars.DELINEA_BASE_URL != '' && vars.DELINEA_BASE_URL || 'https://dte.secretservercloud.com' }}
       DELINEA_USERNAME: ${{ secrets.DELINEA_USERNAME }}
       DELINEA_PASSWORD: ${{ secrets.DELINEA_PASSWORD }}
-      DELINEA_ACCOUNT: SE-Admin
+      DELINEA_ACCOUNT: ${{ vars.DELINEA_ACCOUNT != '' && vars.DELINEA_ACCOUNT || 'SE-Admin' }}
 
     steps:
       - name: Checkout repository
@@ -50,8 +50,21 @@ jobs:
         run: pip install -r requirements.txt
         shell: bash
 
-      - name: Install Ansible collections
-        run: ansible-galaxy collection install -r ansible/requirements.yml
+      - name: Install Ansible collections from requirements.yml
+        run: |
+          echo "=== Installing/Upgrading Ansible collections ==="
+          ansible-galaxy collection install -r ansible/requirements.yml --upgrade
+          echo ""
+          echo "=== Installed Azure collection version ==="
+          ansible-galaxy collection list | grep azure.azcollection || echo "Azure collection not found"
+        shell: bash
+
+      - name: Install Delinea Platform Secret Server Ansible Collection
+        run: ansible-galaxy collection install delinea.platform_secretserver
+        shell: bash
+
+      - name: Verify Delinea lookup plugin is installed
+        run: ansible-doc -t lookup -l | grep tss
         shell: bash
 
       - name: Validate manifest
@@ -59,15 +72,79 @@ jobs:
         with:
           manifest: ${{ inputs.manifest }}
 
-      - name: Azure login
+      - name: Read target subscription ID from manifest
+        id: read_subscription
+        run: |
+          SUB_ID=$(MANIFEST="${{ inputs.manifest }}" MANIFEST_KEY="target_subscription_id" \
+            python3 ansible/roles/python_scripts/read_manifest_value.py)
+          echo "subscription_id=${SUB_ID}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] Target subscription: ${SUB_ID}"
+        shell: bash
+
+      - name: Azure login with user-assigned managed identity
         if: ${{ !inputs.dry_run }}
         uses: azure/login@v2
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.CLIENT_ID_VM_MIGRATE_DEV_CU_MI }}
-          allow-no-subscriptions: true
+          subscription-id: ${{ steps.read_subscription.outputs.subscription_id }}
+          allow-no-subscriptions: false
           enable-AzPSSession: true
+
+      - name: Verify Azure CLI authentication
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== Current Authentication ==="
+          az account show --output table
+          echo ""
+          echo "=== Subscription Context ==="
+          CURRENT_SUB=$(az account show --query id -o tsv)
+          EXPECTED_SUB="${{ steps.read_subscription.outputs.subscription_id }}"
+          echo "Current subscription:  ${CURRENT_SUB}"
+          echo "Expected subscription: ${EXPECTED_SUB}"
+          if [ "${CURRENT_SUB}" != "${EXPECTED_SUB}" ]; then
+            echo "[ERROR] Subscription mismatch!"
+            exit 1
+          fi
+          echo "[OK] Subscription context is correct"
+          echo ""
+          echo "=== Verifying compute API ==="
+          az provider show \
+            --namespace Microsoft.Compute \
+            --query "resourceTypes[?resourceType=='virtualMachines'].apiVersions[0]" \
+            -o tsv || echo "[WARN] Unable to verify compute API"
+        shell: bash
+
+      - name: Ensure Azure NSG allows WinRM from GitHub runner
+        if: ${{ !inputs.dry_run }}
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/ensure_nsg_winrm_rule.py
+        shell: bash
+
+      - name: Extract VM hostname for Delinea lookup
+        run: |
+          MANIFEST_FILE="ansible/vars/${{ inputs.manifest }}/manifest.yml" \
+            python3 ansible/roles/python_scripts/extract_vm_hostname.py
+        shell: bash
+
+      - name: Resolve SE-Admin WinRM password from Delinea
+        id: delinea_fetch
+        run: MANIFEST="${{ inputs.manifest }}" python3 ansible/roles/python_scripts/resolve_delinea_secret_id.py
+        shell: bash
+
+      - name: Display configuration
+        run: |
+          echo "[INFO] Manifest:      ${{ inputs.manifest }}"
+          echo "[INFO] Dry run:       ${{ inputs.dry_run }}"
+          echo "[INFO] Force rejoin:  ${{ inputs.force_rejoin }}"
+          echo "[INFO] Subscription:  ${{ steps.read_subscription.outputs.subscription_id }}"
+          echo "[INFO] Domain admin:  cpoe-automation (from DOMAIN_ADMIN_PASSWORD secret)"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "[INFO] Running in DRY RUN mode - no actual changes will be made"
+          else
+            echo "[INFO] Running LIVE - changes will be applied to the VM"
+          fi
+        shell: bash
 
       - name: Resolve Delinea SE-Admin passwords
         shell: bash
@@ -106,6 +183,7 @@ jobs:
           FORCE_REJOIN_INPUT: ${{ inputs.force_rejoin }}
           DOMAIN_ADMIN_VALUE_INPUT: ${{ secrets.DOMAIN_ADMIN_PASSWORD }}
           DOMAIN_OU_PATH_INPUT: ${{ secrets.DOMAIN_OU_PATH }}
+          EMERGENCY_ADMIN_PASSWORD_INPUT: ${{ secrets.EMERGENCY_ADMIN_PASSWORD }}
 
       - name: Run Ansible playbook
         shell: bash
