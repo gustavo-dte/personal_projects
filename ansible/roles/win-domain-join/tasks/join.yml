@@ -4,7 +4,7 @@
 # Per-VM domain join orchestrator — all operations via WinRM.
 #
 # Steps:
-#   1. prepare_vm_state  — enable WinRM, test credentials, read VM state
+#   1. prepare_vm_state  — sync password, inject workgroup facts, skip WinRM probe
 #   2. Domain join       — Add-Computer via WinRM (cpoe-automation + DOMAIN_ADMIN_PASSWORD)
 #                          -> az vm restart -> wait WinRM
 #   3. Verify            — WinRM confirms PartOfDomain=true
@@ -12,10 +12,10 @@
 # Required vars (set by main.yaml loop):
 #   target_vm_name, target_vm_host, se_admin_username, se_admin_password
 #   domain_name, domain_admin_username, domain_admin_value, domain_ou_path
-#   azure_resource_group, azure_vm_name, azure_subscription_id
+#   azure_resource_group, azure_vm_name, azure_subscription_id, sync_password
 
 # ------------------------------------------------------------------------------
-# Step 1: Enable WinRM, test credentials, read VM state
+# Step 1: Sync password + inject state facts
 # ------------------------------------------------------------------------------
 
 - name: "Step 1 - Enable WinRM + read VM state"
@@ -42,8 +42,9 @@
       |  Target hostname  : {{ target_vm_name }}
       |  Target domain    : {{ domain_name }}
       |  Force rejoin     : {{ force_rejoin | default(false) }}
+      |  Sync password    : {{ sync_password | default(true) }}
       +-------------------------------------------------------------+
-      |  Step 2 join      : {{ _needs_join | bool }}
+      |  Needs join       : {{ _needs_join | bool }}
       {% if dry_run | default(false) | bool %}
       |  *** DRY RUN - no changes will be made ***
       {% endif %}
@@ -70,14 +71,13 @@
         msg: |
           +-------------------------------------------------------------+
           |  STEP 2 - DOMAIN JOIN
-          |   WinRM user len: {{ hostvars['localhost']['resolved_se_admin_username'] | string | length }} chars
-          |   WinRM pass src: Delinea SE-Admin password (single fetch, reused)
-          |   WinRM pass len: {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
-          |   Connect IP    : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
-          |   Join creds    : {{ domain_admin_username }}
-          |   Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
-          |   Target domain : {{ domain_name }}
-          |   Target OU     : {{ domain_ou_path | default('(default)') }}
+          |   WinRM user     : .\{{ hostvars['localhost']['resolved_se_admin_username'] }}
+          |   WinRM pass len : {{ hostvars['localhost']['resolved_se_admin_password'] | string | length }} chars
+          |   Connect IP     : {{ target_vm_host }}:{{ winrm_port | default(5985) }}
+          |   Join creds     : {{ domain_admin_username }}
+          |   Join pass src  : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
+          |   Target domain  : {{ domain_name }}
+          |   Target OU      : {{ domain_ou_path | default('(default)') }}
           +-------------------------------------------------------------+
 
     - name: "Step 2 - Join domain via WinRM (SE-Admin)"
@@ -109,7 +109,7 @@
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
+        ansible_winrm_transport: ntlm
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
@@ -148,7 +148,7 @@
         host: "{{ target_vm_host }}"
         port: "{{ winrm_port | default(5985) }}"
         delay: 30
-        timeout: 900
+        timeout: 3600
         state: started
       when: _az_join_reboot.rc | default(0) | int == 0
 
@@ -173,7 +173,7 @@
       delegate_to: "{{ target_vm_host }}"
       vars:
         ansible_connection: winrm
-        ansible_winrm_transport: "{{ _effective_winrm_transport | default('ntlm') }}"
+        ansible_winrm_transport: ntlm
         ansible_winrm_port: "{{ winrm_port | default(5985) }}"
         ansible_winrm_scheme: http
         ansible_winrm_server_cert_validation: ignore
