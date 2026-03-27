@@ -49,35 +49,37 @@
 - name: "[CREDENTIALS] Credential plan for {{ target_vm_name }}"
   ansible.builtin.debug:
     msg: |
+- name: "[CREDENTIALS] Credential plan for {{ target_vm_name }}"
+  ansible.builtin.debug:
+    msg: |
       +=============================================================+
       |  CREDENTIAL PLAN: {{ target_vm_name }}
       +=============================================================+
       |  Connect IP      : {{ target_vm_host }}
       |  Delinea fetch   : ONCE at pipeline start - reused below
       |  Force rejoin    : {{ force_rejoin | default(false) }}
-      |  Sync password   : {{ sync_password | default(true) }}
+      |  Sync secret     : {{ sync_password | default(true) }}
       +-------------------------------------------------------------+
       |  Step 1 - WinRM port probe
       |    Method        : wait_for port {{ winrm_port | default(5985) }} (no creds)
       |    If closed     : az vm extension set CustomScriptExtension (async)
       +-------------------------------------------------------------+
-      |  Step 1.5 - Credential routing
+      |  Step 1.5 - Auth routing
       |    force_rejoin=true  → SE-Admin (domain account still active)
-      |    force_rejoin=false + sync_password=true  → sync → .\Administrator
-      |    force_rejoin=false + sync_password=false → try SE-Admin, fallback .\Administrator
+      |    force_rejoin=false + sync_secret=true  → sync → .\Administrator
+      |    force_rejoin=false + sync_secret=false → try SE-Admin, fallback .\Administrator
       +-------------------------------------------------------------+
-      |  Step 2 - WinRM credential test + VM state probe
+      |  Step 2 - WinRM auth test + VM state probe
       |    Method        : WinRM
-      |    SE-Admin user : {{ resolved_se_admin_username }} ({{ resolved_se_admin_username | string | length }} chars)
-      |    Password src  : Delinea (single fetch, reused)
-      |    Password len  : {{ resolved_se_admin_password | string | length }} chars
+      |    SE-Admin user : {{ resolved_se_admin_username | string | length }} chars
+      |    Secret src    : Delinea (single fetch, reused)
+      |    Secret len    : {{ resolved_se_admin_password | string | length }} chars
       +-------------------------------------------------------------+
       |  Domain join
       |    WinRM user    : resolved at runtime (SE-Admin or Administrator)
-      |    Join creds    : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
-      |    Join pass src : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
+      |    Join account  : {{ manifest_data.domainNameSetup.domain_admin_username | default('cpoe-automation@dtenet.com') }}
+      |    Join secret   : DOMAIN_ADMIN_PASSWORD (GitHub Secret)
       +=============================================================+
-
 # ------------------------------------------------------------------------------
 # Dry-run / skip shortcut
 # ------------------------------------------------------------------------------
